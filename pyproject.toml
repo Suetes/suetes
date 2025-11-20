@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "atmos_jax"
+version = "0.1.0"
+description = "Differentiable Atmospheric Solver (JAX)"
+dependencies = [
+    "numpy",
+    "matplotlib",
+    "scipy",
+    "jax",
+    "jaxlib"
+]
+
+[tool.setuptools]
+packages = ["atmos_jax"]

@@ -1,0 +1,9 @@
+Metadata-Version: 2.4
+Name: atmos_jax
+Version: 0.1.0
+Summary: Differentiable Atmospheric Solver (JAX)
+Requires-Dist: numpy
+Requires-Dist: matplotlib
+Requires-Dist: scipy
+Requires-Dist: jax
+Requires-Dist: jaxlib
