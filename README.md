@@ -20,7 +20,7 @@ It implements the fully compressible Euler equations (Equation Set 1: Exner-Thet
 
 1.  Clone the repository:
     ```bash
-    git clone [https://github.com/yourusername/atmos_jax.git](https://github.com/yourusername/atmos_jax.git)
+    git clone https://github.com/abihlo/atmos_jax.git
     cd atmos_jax
     ```
 

@@ -1,12 +1,19 @@
 import jax.numpy as jnp
+from .transforms import GalChenSigma
 
 class StaggeredGrid:
-    def __init__(self, nx, nz, Lx, Lz, h_func):
+    def __init__(self, nx, nz, Lx, Lz, h_func, transform=None):
         self.nx, self.nz = nx, nz
         self.Lx, self.Lz = Lx, Lz
         self.dx = Lx / nx
         self.dz = Lz / nz
         self.h_func = h_func
+
+        # 0. Setup vertical transform 
+        if transform is None:
+            self.transform_op = GalChenSigma()
+        else:
+            self.transform_op = transform
         
         # 1. Master Grid (Corners) - Pure JAX
         xi_c = jnp.linspace(0, Lx, nx+1)
@@ -14,7 +21,7 @@ class StaggeredGrid:
         Xi_c, Zeta_c = jnp.meshgrid(xi_c, zeta_c, indexing='ij')
         
         self.X_corner = Xi_c
-        self.Z_corner = self._transform(Xi_c, Zeta_c)
+        self.Z_corner = self._apply_transform(Xi_c, Zeta_c)
         
         # 2. Derived Grids (Averaging)
         self.X_u = 0.5 * (self.X_corner[:, :-1] + self.X_corner[:, 1:])
@@ -32,9 +39,9 @@ class StaggeredGrid:
         self.metrics['u'] = self._compute_metrics(self.Z_u, self.dx, self.dz)
         self.metrics['w'] = self._compute_metrics(self.Z_w, self.dx, self.dz)
 
-    def _transform(self, xi, zeta):
+    def _apply_transform(self, xi, zeta):
         h = self.h_func(xi)
-        return h + zeta * (self.Lz - h) / self.Lz
+        return self.transform_op(xi, zeta, h, self.Lz)
 
     def _compute_metrics(self, Z, dx, dz):
         # Centered differences with padding to maintain shape
