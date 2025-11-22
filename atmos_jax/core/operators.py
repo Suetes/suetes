@@ -36,13 +36,19 @@ class CGridOperator:
     # ===========================================================
     def diff_x_m_to_u(self, f):
         if self.periodic_x:
+            # 4th order periodic
             pad = jnp.pad(f, ((2, 2), (0, 0)), mode='wrap')
             grad = (27.0*(pad[2:-2]-pad[1:-3]) - (pad[3:-1]-pad[0:-4])) / (24.0 * self.dx)
+            
+            # FIX: Always concatenate for periodic to match U-grid size (nx+1)
+            # This ensures grad_p_x matches th_at_u
             return jnp.concatenate([grad, grad[:1, :]], axis=0)
+            
         return self._diff_centered_2nd_padded(f, 0)
 
     def diff_x_u_to_m(self, f):
         if self.periodic_x:
+            # Input f is U-grid (nx+1). We take first nx points.
             pad = jnp.pad(f[:-1], ((2, 2), (0, 0)), mode='wrap')
             return (27.0*(pad[3:-1]-pad[2:-2]) - (pad[4:]-pad[1:-3])) / (24.0 * self.dx)
         return (f[1:, :] - f[:-1, :]) / self.dx
@@ -55,6 +61,7 @@ class CGridOperator:
     # ===========================================================
     def avg_u_to_m(self, f):
         if self.periodic_x:
+            # u is (nx+1). Use first nx points.
             pad = jnp.pad(f[:-1], ((2, 2), (0, 0)), mode='wrap')
             return (9.0*(pad[2:-2]+pad[3:-1]) - (pad[1:-3]+pad[4:])) / 16.0
         return 0.5 * (f[1:, :] + f[:-1, :])
@@ -69,70 +76,62 @@ class CGridOperator:
 
     def avg_w_to_u(self, f): return self.avg_m_to_u(self.avg_w_to_m(f))
     def avg_u_to_w(self, f): return self.avg_m_to_w(self.avg_u_to_m(f))
+    
     def avg_w_to_m(self, f): return 0.5 * (f[:, 1:] + f[:, :-1])
     def avg_m_to_w(self, f):
         inner = 0.5 * (f[:, 1:] + f[:, :-1])
         return jnp.pad(inner, ((0, 0), (1, 1)), mode='edge')
 
     # ===========================================================
-    # ADVECTION & DIFFUSION
+    # ADVECTION & GRADIENTS
     # ===========================================================
-    
-    def advect_linear_x(self, f, u_val):
+    def grad_2d_curvilinear(self, f, metrics):
+        """
+        Computes physical gradients (df/dx, df/dz) using the chain rule.
+        """
+        # 1. Logical Gradient d/d_xi (at Mass points)
         if self.periodic_x:
-            pad = jnp.pad(f, ((2, 2), (0, 0)), mode='wrap')
-            df = (-pad[4:] + 8.0*pad[3:-1] - 8.0*pad[1:-3] + pad[0:-4]) / (12.0 * self.dx)
-            return -u_val * df
+            # Center diff on periodic domain (nx)
+            d_xi = (jnp.roll(f, -1, axis=0) - jnp.roll(f, 1, axis=0)) / (2 * self.dx)
         else:
-            inner = (f[2:, :] - f[:-2, :]) / (2*self.dx)
-            df = jnp.pad(inner, ((1, 1), (0, 0)), mode='edge')
-            return -u_val * df
+            d_xi = jnp.pad((f[2:] - f[:-2]) / (2*self.dx), ((1,1), (0,0)), mode='edge')
+
+        # 2. Logical Gradient d/d_zeta
+        f_pad = jnp.pad(f, ((0, 0), (1, 1)), mode='edge')
+        d_zeta = (f_pad[:, 2:] - f_pad[:, :-2]) / (2 * self.dz)
+
+        if metrics is None:
+            return d_xi, d_zeta
+
+        # 3. Chain Rule
+        z_xi = metrics['z_xi']
+        z_zeta = metrics['z_zeta']
+
+        grad_z = d_zeta / z_zeta
+        grad_x = d_xi - (z_xi * grad_z)
+
+        return grad_x, grad_z
 
     def advect_2d(self, f, u, w, loc, metrics=None):
         """
         Full 2D advection: -(u.grad)f
-        If metrics provided: Uses terrain-following chain rule.
         """
-        # 1. Interpolate velocities to 'loc'
         if loc == 'mass':
-            u_loc, w_loc = self.avg_u_to_m(u), self.avg_w_to_m(w)
+            u_loc = self.avg_u_to_m(u)
+            w_loc = self.avg_w_to_m(w)
         elif loc == 'u':
-            u_loc, w_loc = u, self.avg_w_to_u(w)
+            u_loc = u
+            w_loc = self.avg_m_to_u(self.avg_w_to_m(w)) 
         elif loc == 'w':
-            u_loc, w_loc = self.avg_u_to_w(u), w
+            u_loc = self.avg_m_to_w(self.avg_u_to_m(u))
+            w_loc = w
 
-        # 2. Compute Logical Gradients (d/d_xi, d/d_zeta)
-        if self.periodic_x:
-            f_val = f[:-1, :] if loc == 'u' else f
-            pad = jnp.pad(f_val, ((2, 2), (0, 0)), mode='wrap')
-            d_xi_inner = (-pad[4:] + 8.0*pad[3:-1] - 8.0*pad[1:-3] + pad[0:-4]) / (12.0 * self.dx)
-            d_xi = jnp.concatenate([d_xi_inner, d_xi_inner[:1, :]], axis=0) if loc == 'u' else d_xi_inner
-        else:
-            inner_x = (f[2:, :] - f[:-2, :]) / (2*self.dx)
-            d_xi = jnp.zeros_like(f)
-            if f.shape[0]>1: d_xi = jnp.pad(inner_x, ((1, 1), (0, 0)), mode='edge')
+        grad_x, grad_z = self.grad_2d_curvilinear(f, metrics)
+        return -(u_loc * grad_x + w_loc * grad_z)
 
-        # Z-Gradient
-        inner_z = (f[:, 2:] - f[:, :-2]) / (2*self.dz)
-        d_zeta = jnp.zeros_like(f)
-        if f.shape[1]>1: d_zeta = jnp.pad(inner_z, ((0, 0), (1, 1)), mode='edge')
-        
-        # 3. Apply Chain Rule if Metrics Exist
-        if metrics is not None:
-            # u * d/dx + w * d/dz
-            # = u * (d_xi - zx/zz * d_zeta) + w * (1/zz * d_zeta)
-            # = u * d_xi + (w - u * zx)/zz * d_zeta
-            
-            zx = metrics['z_xi']
-            zz = metrics['z_zeta']
-            
-            # Effective vertical velocity (Contravariant W)
-            w_eff = (w_loc - u_loc * zx) / zz
-            
-            return -(u_loc * d_xi + w_eff * d_zeta)
-            
-        return -(u_loc * d_xi + w_loc * d_zeta)
-
+    # ===========================================================
+    # DIFFUSION
+    # ===========================================================
     def hyper_diff_2d(self, f, nu4):
         if nu4 == 0: return 0.0
         d4x = jnp.zeros_like(f)
@@ -155,43 +154,25 @@ class CGridOperator:
 
     def laplacian_2d(self, f, nu):
         if nu == 0: return 0.0
-        # 1. X-Direction
         if self.periodic_x:
-             if f.shape[0] % 2 != 0: # U-point
+             if f.shape[0] % 2 != 0: # U-point?
                 f_valid = f[:-1, :]
                 inner = (jnp.roll(f_valid, -1, axis=0) - 2*f_valid + jnp.roll(f_valid, 1, axis=0)) / self.dx**2
                 d2x = jnp.concatenate([inner, inner[:1, :]], axis=0)
              else:
                 d2x = (jnp.roll(f, -1, axis=0) - 2*f + jnp.roll(f, 1, axis=0)) / self.dx**2
         else:
-            # Wall X: Free-Slip means symmetric padding for tangential velocity
-            # But 'f' could be U (normal to wall) or W (tangent to wall).
-            
-            # Heuristic: Check shape to guess if normal or tangent
-            # U shape: (nx+1, nz) -> Normal to X-wall -> Dirichlet (0)
-            # W shape: (nx, nz+1) -> Tangent to X-wall -> Neumann (Symmetric)
-            
-            if f.shape[0] > f.shape[1]: # Likely U (Normal)
-                 # Normal velocity is 0 at wall. Odd reflection? 
-                 # Simpler: Just compute interior Laplacian and pad with 0
+            if f.shape[0] > f.shape[1]: 
                  inner_x = (f[2:, :] - 2*f[1:-1, :] + f[:-2, :]) / (self.dx**2)
                  d2x = jnp.pad(inner_x, ((1, 1), (0, 0)), constant_values=0.0)
-            else: # Likely W (Tangent)
-                 # Tangent velocity has zero derivative. Symmetric padding.
-                 # pad ((1,1), (0,0)) mode='edge' repeats the boundary value
-                 # This effectively enforces df/dx = 0 at the wall
+            else:
                  padded_f = jnp.pad(f, ((1, 1), (0, 0)), mode='edge')
                  d2x = (padded_f[2:, :] - 2*padded_f[1:-1, :] + padded_f[:-2, :]) / (self.dx**2)
 
-        # 2. Z-Direction (Always Wall)
-        # W shape: (nx, nz+1) -> Normal to Z-wall -> Dirichlet (0)
-        # U shape: (nx+1, nz) -> Tangent to Z-wall -> Neumann (Symmetric)
-        
-        if f.shape[1] > f.shape[0]: # Likely W (Normal)
+        if f.shape[1] > f.shape[0]:
             inner_z = (f[:, 2:] - 2*f[:, 1:-1] + f[:, :-2]) / (self.dz**2)
             d2z = jnp.pad(inner_z, ((0, 0), (1, 1)), constant_values=0.0)
-        else: # Likely U (Tangent)
-            # Free slip at top/bottom
+        else:
             padded_f = jnp.pad(f, ((0, 0), (1, 1)), mode='edge')
             d2z = (padded_f[:, 2:] - 2*padded_f[:, 1:-1] + padded_f[:, :-2]) / (self.dz**2)
             

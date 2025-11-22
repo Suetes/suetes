@@ -86,7 +86,9 @@ def run_case7():
         acc = jnp.where(t < RAMP_PERIOD, U_FINAL * 2.0 * jnp.sin(k*t) * jnp.cos(k*t) * k, 0.0)
         return {'u_ref': u, 'u_acc': acc}
     
-    def bcs(s, u_tgt):
+    def bcs(s, forcing):
+        u_tgt = forcing['u_ref']
+
         # Inflow (Left)
         s['u'] = s['u'].at[0, :].set(u_tgt)
         

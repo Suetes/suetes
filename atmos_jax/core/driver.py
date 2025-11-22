@@ -10,13 +10,10 @@ class Simulation:
         self.stepper = stepper
         self.forcing_fn = forcing_fn
         self.bc_fn = bc_fn
-        self._compiled_step = None
 
     def run(self, state, t_start, t_end, dt, chunk_steps=500):
         """
         Runs the simulation from t_start to t_end.
-        chunk_steps: How many steps to run inside one JIT call (e.g., 500).
-                     Controls frequency of progress prints.
         """
         t_curr = t_start
         curr_state = state
@@ -50,30 +47,28 @@ class Simulation:
             curr_state = run_chunk(curr_state, t_curr)
             t_curr += chunk_dt
             
-            # Sync for timing/logging (pull scalar to CPU)
-            # Assuming 'w' exists, otherwise pick first key
-            key = list(curr_state.keys())[0]
-            if isinstance(curr_state[key], dict): key = 'u' # Handle nested dicts if necessary
+            # --- GENERIC SYNC ---
+            # Find the first array leaf in the state tree to block on
+            leaves = jax.tree_util.tree_leaves(curr_state)
+            if leaves:
+                leaves[0].block_until_ready()
             
-            # Perform a cheap blocking read to ensure GPU is done
-            _ = curr_state[key].block_until_ready()
-            
-            # Optional: Calculate max W for status
-            # (Pulling value to CPU takes a tiny bit of time, but useful for monitoring)
-            if 'w' in curr_state:
+            # --- GENERIC LOGGING ---
+            msg = f"    Progress: {t_curr:.1f}s / {t_end:.1f}s"
+            if isinstance(curr_state, dict) and 'w' in curr_state:
                 max_w = float(jnp.max(jnp.abs(curr_state['w'])))
-                print(f"    Progress: {t_curr:.1f}s / {t_end:.1f}s | Max W: {max_w:.4f} m/s")
-            else:
-                print(f"    Progress: {t_curr:.1f}s / {t_end:.1f}s")
+                msg += f" | Max W: {max_w:.4f} m/s"
+            
+            print(msg)
 
-        # 3. Remainder (if t_end is not multiple of chunk)
+        # 3. Remainder
         if remainder > 0:
             print(f"    Finishing remaining {remainder} steps...")
             curr_state = self.stepper.integrate(curr_state, t_curr, t_end, self.forcing_fn, self.bc_fn)
             t_curr = t_end
 
         total_time = time.time() - start_time
-        steps_per_sec = total_steps / total_time
+        steps_per_sec = total_steps / (total_time + 1e-9)
         print(f"[Simulation] Done in {total_time:.2f}s ({steps_per_sec:.1f} steps/s)\n")
         
         return curr_state
