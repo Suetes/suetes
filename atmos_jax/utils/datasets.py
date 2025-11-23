@@ -35,45 +35,47 @@ def get_complex_topo(x, h0s, as_, lams, xcs, scale_factor=1.0):
     
     return total_h * safety_scale * scale_factor
 
-def create_mixed_dataset(num_samples=30, lx=300000.0):
+def create_mixed_dataset(key, num_samples=30, lx=300000.0):
     """
-    Creates a balanced dataset of Smooth, Standard, and Jagged topographies.
-    Returns list of parameter tuples (h0s, as_, lams, xcs).
+    Generates a balanced dataset of Smooth, Standard, and Jagged topographies.
+    Returns a list of dictionaries containing parameters and type labels.
     """
-    key = jax.random.PRNGKey(123)
     dataset = []
-    n_per_type = num_samples // 3
+    n_per_type = int(jnp.ceil(num_samples / 3))
     
     for i in range(num_samples):
         key, k_n, k_h, k_a, k_l, k_x = jax.random.split(key, 6)
-        num_m = jax.random.randint(k_n, (), 1, 8) # 1 to 7 mountains
         
-        # Centers spread across domain
-        active_x = jax.random.uniform(k_x, (MAX_MOUNTAINS,), 
-                                      minval=lx*0.1, maxval=lx*0.9)
+        # 1 to 6 mountains per sample
+        num_m = jax.random.randint(k_n, (), 1, 7)
         
-        # Define Types
-        if i < n_per_type: # SMOOTH
-            active_h = jax.random.uniform(k_h, (MAX_MOUNTAINS,), minval=500.0, maxval=3000.0)
+        # Random centers spread across domain and random heights from 500m to 3000m
+        active_h = jax.random.uniform(k_h, (MAX_MOUNTAINS,), minval=500.0, maxval=3000.0)
+        active_x = jax.random.uniform(k_x, (MAX_MOUNTAINS,), minval=50000.0, maxval=250000.0)
+        
+        # Determine Type
+        if i < n_per_type: 
+            type_label = "Smooth"
             active_a = jax.random.uniform(k_a, (MAX_MOUNTAINS,), minval=40000.0, maxval=80000.0)
             active_l = jax.random.uniform(k_l, (MAX_MOUNTAINS,), minval=12000.0, maxval=25000.0)
-        elif i < 2 * n_per_type: # STANDARD
-            active_h = jax.random.uniform(k_h, (MAX_MOUNTAINS,), minval=500.0, maxval=4000.0)
+        elif i < 2 * n_per_type:
+            type_label = "Standard"
             active_a = jax.random.uniform(k_a, (MAX_MOUNTAINS,), minval=15000.0, maxval=40000.0)
             active_l = jax.random.uniform(k_l, (MAX_MOUNTAINS,), minval=8000.0, maxval=12000.0)
-        else: # JAGGED
-            active_h = jax.random.uniform(k_h, (MAX_MOUNTAINS,), minval=500.0, maxval=4000.0)
+        else:
+            type_label = "Jagged"
             active_a = jax.random.uniform(k_a, (MAX_MOUNTAINS,), minval=8000.0, maxval=20000.0)
             active_l = jax.random.uniform(k_l, (MAX_MOUNTAINS,), minval=5000.0, maxval=9000.0)
 
-        # Masking inactive mountains
+        # Mask inactive mountains (h0=0)
         mask = jnp.arange(MAX_MOUNTAINS) < num_m
         h0s = jnp.where(mask, active_h, 0.0)
         as_ = jnp.where(mask, active_a, 1.0)
         lams = jnp.where(mask, active_l, 1.0)
         xcs = jnp.where(mask, active_x, 0.0)
         
-        dataset.append((h0s, as_, lams, xcs))
+        # Return params as a tuple for easy unpacking
+        dataset.append({'params': (h0s, as_, lams, xcs), 'type': type_label})
         
     return dataset
 

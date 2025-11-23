@@ -131,7 +131,7 @@ def train():
     params = model.init(key, jnp.array([[0.5]]))
     
     # Cosine Decay Schedule
-    total_epochs = 1500
+    total_epochs = 5000
     scheduler = optax.cosine_decay_schedule(init_value=2e-3, decay_steps=total_epochs)
     
     optimizer = optax.chain(

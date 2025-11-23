@@ -208,7 +208,7 @@ def train():
     best_params = params
     
     # 200 Epochs
-    for epoch in range(201):
+    for epoch in range(1001):
         epoch_losses = []
         epoch_l2s = []
         crashes = 0
