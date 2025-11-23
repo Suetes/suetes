@@ -51,43 +51,41 @@ class Sleve(BaseTransform):
         # Standard SLEVE: z = zeta + h * (b_s)^n
         return zeta + h * (b_s**self.n)
 
-class NeuralTransform(BaseTransform):
+class IntegralNeuralTransform(BaseTransform):
     """
-    Neural Coordinate: The vertical decay function b(zeta) is learned.
-    z = zeta + h * b_NN(zeta/Lz)
-    
-    Enforces boundary conditions: b(0) = 1, b(Lz) = 0
+    Robust Neural Coordinate.
+    Predicts a positive 'density' field and integrates it to get the decay function b(zeta).
+    Guarantees z(0) = h and z(Lz) = Lz (Monotonic, No Crossing).
     """
     def __init__(self, nn_apply_fn, params):
         self.apply_fn = nn_apply_fn
         self.params = params
 
     def __call__(self, xi, zeta, h, Lz):
-        # 1. Normalized vertical coordinate Y in [0, 1]
-        Y = zeta / Lz
+        # 1. Define Integration Grid (Normalized 0->1)
+        # We use a fixed grid for integration stability
+        y_grid = jnp.linspace(0, 1.0, 101)[:, None]
+        dy = 1.0 / 100.0
         
-        # 2. Define scalar wrapper for the network
-        # The NN predicts N(y). We must normalize it to get b(y).
-        # b(y) = 1 - (N(y) - N(0)) / (N(1) - N(0))
-        def get_decay(y_val):
-            # Raw network output
-            N_y = self.apply_fn(self.params, y_val)
-            
-            # Reference points for BCs
-            N_0 = self.apply_fn(self.params, 0.0)
-            N_1 = self.apply_fn(self.params, 1.0)
-            
-            numerator = N_y - N_0
-            denominator = N_1 - N_0
-            
-            # Numerical safety for denominator
-            denominator = jnp.where(jnp.abs(denominator) < 1e-6, 1e-6, denominator)
-            
-            return 1.0 - (numerator / denominator)
-
-        # 3. Vectorize over the grid
-        # This applies the NN logic element-wise to the 2D grid arrays
-        b_vals = jnp.vectorize(get_decay)(Y)
+        # 2. Get Density from NN (Must be positive)
+        # Softplus + epsilon ensures strictly positive density -> strict monotonicity
+        raw_out = self.apply_fn(self.params, y_grid)
+        density = jax.nn.softplus(raw_out.squeeze()) + 0.05
         
-        # 4. Final Transform
+        # 3. Integrate to get Cumulative Distribution Function (CDF)
+        # CDF(0) = 0, CDF(1) = Integral(density)
+        cdf = jnp.concatenate([jnp.array([0.0]), jnp.cumsum(density) * dy])
+        
+        # 4. Normalize CDF to get shape function s(y) where s(0)=0, s(1)=1
+        cdf_norm = cdf / cdf[-1]
+        
+        # 5. Interpolate to actual vertical coordinate Y = zeta / Lz
+        Y_actual = zeta / Lz
+        s_values = jnp.interp(Y_actual, jnp.linspace(0, 1, 102), cdf_norm)
+        
+        # 6. Decay function b(y) = 1 - s(y)
+        # b(0) = 1, b(1) = 0
+        b_vals = 1.0 - s_values
+        
+        # 7. Transform: z = zeta + h * b(zeta)
         return zeta + h * b_vals

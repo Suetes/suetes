@@ -5,6 +5,7 @@ import matplotlib.pyplot as plt
 import jax
 import jax.numpy as jnp
 import optax
+from flax import linen as nn
 
 # Force CPU
 jax.config.update("jax_platform_name", "cpu")
@@ -13,40 +14,45 @@ jax.config.update("jax_enable_x64", True)
 from atmos_jax.core import StaggeredGrid
 from atmos_jax.dynamics.advection import SchaerAdvection
 from atmos_jax.core.neural import MonotonicMLP
-from atmos_jax.core.transforms import NeuralTransform
+from atmos_jax.core.transforms import BaseTransform
 
 # ==============================================================================
-# 1. Physics Configuration
+# 1. Configuration
 # ==============================================================================
-Lx = 300000.0
-Lz = 25000.0
-nx = 300
-nz = 50
-dt = 25.0
-t_end = 5000.0
+Lx, Lz = 300000.0, 25000.0
+nx, nz = 300, 50
+dt, t_end = 25.0, 5000.0
 u0 = 20.0
+MAX_MOUNTAINS = 10
 
-def get_h_topo(x, h0, a, lam):
-    x_c = x - Lx/2.0
-    h_star = jnp.where(jnp.abs(x_c) <= a, h0 * jnp.cos(jnp.pi * x_c / (2*a))**2, 0.0)
-    return h_star * jnp.cos(jnp.pi * x_c / lam)**2
+def get_complex_topo(x, h0s, as_, lams, xcs):
+    x_col = jnp.expand_dims(x, axis=-1)
+    x_diff = x_col - xcs
+    x_dist = jnp.abs(x_diff)
+    mask = x_dist <= as_
+    h_star = jnp.where(mask, h0s * jnp.cos(jnp.pi * x_diff / (2 * as_))**2, 0.0)
+    mountains = h_star * jnp.cos(jnp.pi * x_diff / lams)**2
+    total_h = jnp.sum(mountains, axis=-1)
+    max_h = jnp.max(total_h)
+    scale = jnp.where(max_h > 4000.0, 4000.0 / (max_h + 1e-6), 1.0)
+    return total_h * scale
 
 def get_u_profile(z):
     z1, z2 = 4000.0, 5000.0
-    val_2 = u0 * jnp.sin(jnp.pi * (z - z1) / (2.0 * (z2 - z1)))**2
+    val_2 = u0 * jnp.sin(jnp.pi * (z - z1) / (2 * (z2 - z1)))**2
     u = jnp.where(z <= z1, 0.0, 0.0)
     u = jnp.where((z > z1) & (z < z2), val_2, u)
     u = jnp.where(z >= z2, u0, u)
     return u
 
 def init_rho(grid):
-    x_blob = -50000.0 + Lx/2.0
+    x_blob = 100000.0
     z0, Ax, Az = 9000.0, 25000.0, 3000.0
     r = jnp.sqrt( ((grid.X_m - x_blob)/Ax)**2 + ((grid.Z_m - z0)/Az)**2 )
     return jnp.where(r <= 1.0, jnp.cos(jnp.pi * r / 2.0)**2, 0.0)
 
 def get_analytic_rho(grid):
-    x_blob = -50000.0 + Lx/2.0
+    x_blob = 100000.0
     z0, Ax, Az = 9000.0, 25000.0, 3000.0
     u_z = get_u_profile(grid.Z_m)
     X_back = jnp.mod(grid.X_m - u_z * t_end, Lx)
@@ -55,8 +61,56 @@ def get_analytic_rho(grid):
     r = jnp.sqrt( (dx/Ax)**2 + ((grid.Z_m - z0)/Az)**2 )
     return jnp.where(r <= 1.0, jnp.cos(jnp.pi * r / 2.0)**2, 0.0)
 
+def create_complex_dataset(num_samples=30):
+    key = jax.random.PRNGKey(999)
+    dataset = []
+    for _ in range(num_samples):
+        key, k_n, k_h, k_a, k_l, k_x = jax.random.split(key, 6)
+        num_m = jax.random.randint(k_n, (), 1, 8)
+        active_h = jax.random.uniform(k_h, (MAX_MOUNTAINS,), minval=500.0, maxval=3000.0)
+        active_a = jax.random.uniform(k_a, (MAX_MOUNTAINS,), minval=15000.0, maxval=50000.0)
+        active_l = jax.random.uniform(k_l, (MAX_MOUNTAINS,), minval=6000.0, maxval=15000.0)
+        active_x = jax.random.uniform(k_x, (MAX_MOUNTAINS,), minval=50000.0, maxval=250000.0)
+        mask = jnp.arange(MAX_MOUNTAINS) < num_m
+        h0s = jnp.where(mask, active_h, 0.0)
+        as_ = jnp.where(mask, active_a, 1.0)
+        lams = jnp.where(mask, active_l, 1.0)
+        xcs = jnp.where(mask, active_x, 0.0)
+        dataset.append((h0s, as_, lams, xcs))
+    return dataset
+
 # ==============================================================================
-# 2. Solvers
+# 2. Integral Transform (The Fix for Shape Error)
+# ==============================================================================
+class IntegralNeuralTransform(BaseTransform):
+    def __init__(self, nn_apply_fn, params):
+        self.apply_fn = nn_apply_fn
+        self.params = params
+
+    def __call__(self, xi, zeta, h, Lz):
+        # --- FIX: Reshape to (101, 1) for batch processing ---
+        y_grid = jnp.linspace(0, 1.0, 101)[:, None] 
+        dy = 1.0 / 100.0
+        
+        # Apply NN (returns (101, 1)), then squeeze to (101,)
+        density = jax.nn.softplus(self.apply_fn(self.params, y_grid).squeeze()) + 0.1
+        
+        # Integrate
+        cdf = jnp.cumsum(density) * dy
+        cdf = jnp.concatenate([jnp.array([0.0]), cdf])
+        
+        # Normalize
+        cdf_norm = cdf / cdf[-1]
+        
+        # Interpolate to grid
+        Y_actual = zeta / Lz
+        b_shape = jnp.interp(Y_actual, jnp.linspace(0, 1, 102), cdf_norm)
+        
+        b_vals = 1.0 - b_shape
+        return zeta + h * b_vals
+
+# ==============================================================================
+# 3. Solvers & Loss
 # ==============================================================================
 class TrainingGrid(StaggeredGrid):
     def _compute_analytic_metrics(self, Xi, Zeta):
@@ -82,111 +136,126 @@ def run_simulation_scan(grid):
     rho_final, _ = jax.lax.scan(rk3_step, rho_init, None, length=steps)
     return rho_final
 
-# ==============================================================================
-# 3. Robust Loss Function (Always Differentiable)
-# ==============================================================================
-def loss_fn(nn_params, model_apply, h0, a, lam):
-    def current_h(x): return get_h_topo(x, h0, a, lam)
+def loss_fn_single(nn_params, model_apply, topo_params):
+    h0s, as_, lams, xcs = topo_params
+    def current_h(x): return get_complex_topo(x, h0s, as_, lams, xcs)
     
-    transform = NeuralTransform(model_apply, nn_params)
+    transform = IntegralNeuralTransform(model_apply, nn_params)
     grid = TrainingGrid(nx, nz, Lx, Lz, current_h, transform=transform)
     
-    # --- 1. Geometric Loss (Calculated regardless of stability) ---
-    # Jacobian J = dz/d_zeta. Target ~1.0
-    # Penalize J < 0.1 (Collapse)
+    # Regularization (Minimal, just for conditioning)
     J = grid.metrics['m']['z_zeta']
+    is_stable = jnp.min(J) > 1e-5
+    reg_loss = 1e-7 * jnp.sum(jax.nn.relu(-J))
     
-    # "Soft Barrier": 1/J blows up smoothly as J->0. This provides a gradient 
-    # pointing AWAY from collapse, even if physics isn't running.
-    reg_loss = 0.001 * jnp.mean(1.0 / (jnp.abs(J) + 1e-6)) 
-    
-    # Add penalty for negative J (Inverted grid)
-    neg_penalty = 10.0 * jnp.sum(jax.nn.relu(-J))
-    
-    total_geo_loss = reg_loss + neg_penalty
-
-    # Stability Flag
-    is_stable = jnp.min(J) > 1e-4
-    
-    # --- 2. Physics Loss (Conditional) ---
-    def compute_physics_loss(_):
+    def physics_loss(_):
         rho_final = run_simulation_scan(grid)
         rho_true = get_analytic_rho(grid)
-        l2_err = jnp.sqrt(jnp.mean((rho_final - rho_true)**2))
-        return l2_err
+        return jnp.sqrt(jnp.mean((rho_final - rho_true)**2))
 
-    def return_penalty(_):
-        # Just return a large constant, but gradients will come from geo_loss
-        return 100.0 
+    def crash_loss(_): return 1.0
 
-    # Execute conditional physics
-    phys_loss = jax.lax.cond(is_stable, compute_physics_loss, return_penalty, operand=None)
-    
-    # NaN Safety for physics
-    phys_loss = jnp.where(jnp.isnan(phys_loss), 100.0, phys_loss)
-    
-    # --- 3. Total Loss ---
-    # Gradients flow through total_geo_loss even if phys_loss is constant
-    total_loss = phys_loss + total_geo_loss
-    
-    return total_loss, phys_loss
+    phys_l2 = jax.lax.cond(is_stable, physics_loss, crash_loss, None)
+    phys_l2 = jnp.where(jnp.isnan(phys_l2), 1.0, phys_l2)
+    return phys_l2 + reg_loss, phys_l2
 
 # ==============================================================================
 # 4. Training Loop
 # ==============================================================================
 def train():
-    print("Initializing General Neural Coordinate (Differentiable Failure Mode)...")
-    model = MonotonicMLP(width=32, depth=3)
-    key = jax.random.PRNGKey(2024)
+    print("Initializing Integral Network Training...")
     
-    # Cold Start
-    params = model.init(key, jnp.array([0.5]))
-    params = jax.tree_map(lambda x: x + 0.05 * jax.random.normal(key, x.shape), params)
+    # Standard MLP (Monotonicity via Integral Transform)
+    class StandardMLP(nn.Module):
+        width: int
+        depth: int
+        @nn.compact
+        def __call__(self, x):
+            for _ in range(self.depth - 1):
+                x = nn.Dense(self.width)(x)
+                x = nn.tanh(x)
+            x = nn.Dense(1)(x)
+            return x
+
+    model = StandardMLP(width=64, depth=3)
+    key = jax.random.PRNGKey(0)
+    # Correct Input Shape for init: (1, 1)
+    params = model.init(key, jnp.array([[0.5]]))
     
-    total_steps = 1000
+    dataset = create_complex_dataset(num_samples=30)
+    print(f"Dataset: {len(dataset)} mixed samples.")
+    
     optimizer = optax.chain(
         optax.zero_nans(),
         optax.clip_by_global_norm(1.0),
-        optax.adam(learning_rate=0.001)
+        optax.adam(learning_rate=2e-3)
     )
     opt_state = optimizer.init(params)
     
     @jax.jit
-    def update_step(params, opt_state, h0, a, lam):
-        (loss, l2), grads = jax.value_and_grad(loss_fn, has_aux=True)(
-            params, model.apply, h0, a, lam
+    def train_step(params, opt_state, topo_params):
+        (loss, l2), grads = jax.value_and_grad(loss_fn_single, has_aux=True)(
+            params, model.apply, topo_params
         )
-        g_norm = optax.global_norm(grads)
         updates, opt_state = optimizer.update(grads, opt_state)
         params = optax.apply_updates(params, updates)
-        return params, opt_state, loss, l2, g_norm
+        return params, opt_state, loss, l2
 
-    print(f"{'Step':<6} | {'Total Loss':<10} | {'Phys Error':<10} | {'Grad Norm':<10} | {'Topo (h0, ...)'}")
-    print("-" * 80)
+    print(f"{'Epoch':<6} | {'Avg Loss':<12} | {'Avg L2':<12} | {'Crashes':<8}")
+    print("-" * 50)
     
-    training_key = jax.random.PRNGKey(999)
+    best_l2 = 1e9
+    best_params = params
     
-    for i in range(total_steps + 1):
-        training_key, subkey = jax.random.split(training_key)
+    # 200 Epochs
+    for epoch in range(201):
+        epoch_losses = []
+        epoch_l2s = []
+        crashes = 0
         
-        # Curriculum: Ramp up difficulty
-        difficulty = min(1.0, i / 1000.0)
-        h_min = 100.0 + 1000.0 * difficulty
-        h_max = 500.0 + 3000.0 * difficulty # End at 3500m
+        for topo_params in dataset:
+            params, opt_state, loss_val, l2_val = train_step(params, opt_state, topo_params)
+            
+            if l2_val >= 0.9:
+                crashes += 1
+            else:
+                epoch_losses.append(loss_val)
+                epoch_l2s.append(l2_val)
         
-        h0 = jax.random.uniform(subkey, minval=h_min, maxval=h_max)
-        a = jax.random.uniform(subkey, minval=15000.0, maxval=40000.0)
-        lam = jax.random.uniform(subkey, minval=6000.0, maxval=10000.0)
+        avg_loss = np.mean(epoch_losses) if epoch_losses else 999.0
+        avg_l2 = np.mean(epoch_l2s) if epoch_l2s else 999.0
         
-        params, opt_state, loss, l2, g_norm = update_step(params, opt_state, h0, a, lam)
-        
-        if i % 50 == 0:
-            print(f"{i:<6} | {loss:<10.4f} | {l2:<10.4f} | {g_norm:<10.4f} | ({h0:.0f}, {a:.0f}, {lam:.0f})")
+        if crashes == 0 and avg_l2 < best_l2:
+            best_l2 = avg_l2
+            best_params = params
+            
+        if epoch % 10 == 0:
+            print(f"{epoch:<6} | {avg_loss:<12.6f} | {avg_l2:<12.6f} | {crashes:<8}")
 
-    print("Saving generalized parameters...")
-    with open("neural_general_params.pkl", "wb") as f:
-        pickle.dump(params, f)
-    print("Done.")
+    print(f"Best L2: {best_l2:.6e}")
+    print("Saving params...")
+    with open("neural_complex_params.pkl", "wb") as f:
+        pickle.dump(best_params, f)
+    
+    # --- Verification Plot ---
+    print("\nPlotting Verification...")
+    h0s, as_, lams, xcs = dataset[0]
+    def h_f(x): return get_complex_topo(x, h0s, as_, lams, xcs)
+    transform = IntegralNeuralTransform(model.apply, best_params)
+    grid = StaggeredGrid(nx, nz, Lx, Lz, h_f, transform=transform)
+    
+    fig, ax = plt.subplots(figsize=(10, 5))
+    shift = Lx / 2.0
+    X_c = grid.X_corner - shift
+    Z_c = grid.Z_corner
+    for k in range(0, nz+1, 2):
+        ax.plot(X_c[:, k]/1000.0, Z_c[:, k], 'k-', linewidth=0.5, alpha=0.6)
+    h_vals = h_f(grid.X_corner[:,0])
+    ax.fill_between(X_c[:,0]/1000.0, h_vals, 0, color='gray', alpha=0.5)
+    ax.set_title("Learned Integral Coordinate (Sample 0)")
+    ax.set_ylim(0, 15000)
+    plt.savefig("figures/integral_check.png")
+    print("Saved figures/integral_check.png")
 
 if __name__ == "__main__":
     train()

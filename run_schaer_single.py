@@ -5,20 +5,29 @@ import matplotlib.pyplot as plt
 import jax.numpy as jnp
 import jax
 
-# Respect user setting
-jax.config.update("jax_enable_x64", False) 
+# Force CPU
+jax.config.update("jax_platform_name", "cpu")
+jax.config.update("jax_enable_x64", False)
 
 from atmos_jax.core import StaggeredGrid, RK4, Simulation
-from atmos_jax.core.transforms import GalChenSigma, HybridSigma, NeuralTransform
-from atmos_jax.core.neural import MonotonicMLP
 from atmos_jax.dynamics.advection import SchaerAdvection
 
-def run_schaer_test():
+# --- CORRECT IMPORTS (No local definitions) ---
+# Import StandardMLP from the neural module
+from atmos_jax.core.neural import StandardMLP
+# Import transforms from the transforms module
+from atmos_jax.core.transforms import (
+    GalChenSigma, 
+    HybridSigma, 
+    Sleve, 
+    IntegralNeuralTransform
+)
+
+def run_schaer_single():
     Lx = 300000.0
     Lz = 25000.0
     nx = 300
     nz = 50
-    
     u0 = 20.0
     t_end = 5000.0
     dt = 25.0
@@ -26,150 +35,99 @@ def run_schaer_test():
     
     os.makedirs("figures", exist_ok=True)
 
-    # Topography
-    h0_val = 3000.0
-    a_val = 25000.0
-    lam_val = 8000.0
-
-    def h_schaer(x):
-        x_c = x - Lx/2.0
-        h_star = jnp.where(jnp.abs(x_c) <= a_val, 
-                           h0_val * jnp.cos(jnp.pi * x_c / (2*a_val))**2, 
-                           0.0)
-        return h_star * jnp.cos(jnp.pi * x_c / lam_val)**2
-
-    # --- Custom SLEVE Split ---
-    class SleveSplit:
-        def __init__(self, s1=15000.0, s2=2500.0):
-            self.s1, self.s2 = s1, s2
-        def __call__(self, xi, zeta, h, Lz):
-            x_c = xi - Lx/2.0
-            h_star = jnp.where(jnp.abs(x_c) <= a_val, 
-                               h0_val * jnp.cos(jnp.pi * x_c / (2*a_val))**2, 0.0)
-            h1 = 0.5 * h_star
-            h2 = h - h1
-            b1 = jnp.sinh((Lz - zeta)/self.s1) / jnp.sinh(Lz/self.s1)
-            b2 = jnp.sinh((Lz - zeta)/self.s2) / jnp.sinh(Lz/self.s2)
-            return zeta + h1 * b1 + h2 * b2
-
-    # --- Load Neural Coordinate ---
+    # --- Load Model ---
     try:
-        with open("neural_schaer_params.pkl", "rb") as f:
+        with open("neural_single_params.pkl", "rb") as f:
             nn_params = pickle.load(f)
         
-        # Reconstruct Model
-        model = MonotonicMLP(width=16, depth=3)
-        neural_transform = NeuralTransform(model.apply, nn_params)
-        has_neural = True
-        print("Loaded trained neural coordinate.")
+        # Use library class
+        model = StandardMLP(width=64, depth=3)
+        
+        # Use library transform
+        neural_transform = IntegralNeuralTransform(model.apply, nn_params)
+        print("Loaded trained neural model.")
     except FileNotFoundError:
-        print("Neural parameters not found. Skipping Neural case.")
-        has_neural = False
+        print("Error: neural_single_params.pkl not found. Run train_schaer_single.py first.")
+        return
 
-    # Wind Profile
+    # --- Physics Setup ---
+    def h_schaer(x):
+        x_c = x - Lx/2.0
+        h0, a, lam = 3000.0, 25000.0, 8000.0
+        h_star = jnp.where(jnp.abs(x_c) <= a, h0 * jnp.cos(jnp.pi * x_c / (2*a))**2, 0.0)
+        return h_star * jnp.cos(jnp.pi * x_c / lam)**2
+
     def get_u_profile(z):
-        z1, z2 = 4000.0, 5000.0
-        val_2 = u0 * jnp.sin(jnp.pi * (z - z1) / (2 * (z2 - z1)))**2
-        u = jnp.where(z <= z1, 0.0, 0.0)
-        u = jnp.where((z > z1) & (z < z2), val_2, u)
-        u = jnp.where(z >= z2, u0, u)
+        val_2 = u0 * jnp.sin(jnp.pi * (z - 4000.0) / 2000.0)**2
+        u = jnp.where(z <= 4000.0, 0.0, 0.0)
+        u = jnp.where((z > 4000.0) & (z < 5000.0), val_2, u)
+        u = jnp.where(z >= 5000.0, u0, u)
         return u
 
     def init_rho(grid):
-        z0 = 9000.0
-        Ax, Az = 25000.0, 3000.0
-        X, Z = grid.X_m, grid.Z_m
-        r = jnp.sqrt( ((X - x_start_blob)/Ax)**2 + ((Z - z0)/Az)**2 )
+        r = jnp.sqrt( ((grid.X_m - x_start_blob)/25000.0)**2 + ((grid.Z_m - 9000.0)/3000.0)**2 )
         return jnp.where(r <= 1.0, jnp.cos(jnp.pi * r / 2.0)**2, 0.0)
 
-    # ======================================================
-    # Simulation Setup
-    # ======================================================
+    def get_analytic_rho(grid):
+        u_z = get_u_profile(grid.Z_m)
+        X_back = jnp.mod(grid.X_m - u_z * t_end, Lx)
+        dx = jnp.abs(X_back - x_start_blob)
+        dx = jnp.minimum(dx, Lx - dx)
+        r = jnp.sqrt( (dx/25000.0)**2 + ((grid.Z_m - 9000.0)/3000.0)**2 )
+        return jnp.where(r <= 1.0, jnp.cos(jnp.pi * r / 2.0)**2, 0.0)
+
+    # --- Comparison Cases ---
     cases = [
         ('Sigma', GalChenSigma()),
         ('Hybrid', HybridSigma(scale_height=8000.0)),
-        ('SLEVE', SleveSplit(s1=15000.0, s2=2500.0)),
+        # Explicit SLEVE parameters to match Schaer paper optimum
+        ('SLEVE', Sleve(scale_s=2500.0, scale_l=15000.0, n=1.35)), 
+        ('Neural', neural_transform)
     ]
-    if has_neural:
-        cases.append(('Neural', neural_transform))
     
-    results = {}
-    
-    for name, transform in cases:
-        print(f"Running Case: {name}")
+    fig, axes = plt.subplots(4, 2, figsize=(12, 16), constrained_layout=True)
+    shift = Lx / 2.0
+
+    for i, (name, transform) in enumerate(cases):
+        print(f"Running {name}...")
         grid = StaggeredGrid(nx, nz, Lx, Lz, h_schaer, transform=transform)
         model = SchaerAdvection(grid, get_u_profile)
-        state = {'rho': init_rho(grid)} 
-        stepper = RK4(model, dt)
-        sim = Simulation(stepper, lambda t: None, lambda s, a: s)
+        state = {'rho': init_rho(grid)}
         
-        snapshots = [state['rho']]
-        times = [0.0, 2500.0, 5000.0]
+        sim = Simulation(RK4(model, dt), lambda t: None, lambda s, a: s)
+        final = sim.run(state, 0.0, t_end, dt, chunk_steps=200)
         
-        curr_state = sim.run(state, 0.0, times[1], dt, chunk_steps=100)
-        snapshots.append(curr_state['rho'])
+        rho_ana = get_analytic_rho(grid)
+        error = final['rho'] - rho_ana
+        l2 = np.sqrt(np.mean(error**2))
         
-        curr_state = sim.run(curr_state, times[1], times[2], dt, chunk_steps=100)
-        snapshots.append(curr_state['rho'])
+        X_plot = (grid.X_m - shift) / 1000.0
+        h_vals = h_schaer(grid.X_m[:,0])
         
-        results[name] = {'snapshots': snapshots, 'X': grid.X_m, 'Z': grid.Z_m}
-
-    # ======================================================
-    # Plotting
-    # ======================================================
-    num_rows = len(cases)
-    fig, axes = plt.subplots(num_rows, 2, figsize=(12, 4*num_rows), constrained_layout=True)
-    shift = Lx / 2.0
-    
-    def get_analytic(X, Z, t):
-        u = get_u_profile(Z)
-        X_back = jnp.mod(X - u * t, Lx)
-        dx = jnp.abs(X_back - x_start_blob)
-        dx = jnp.minimum(dx, Lx - dx)
-        z0 = 9000.0
-        Ax, Az = 25000.0, 3000.0
-        r = jnp.sqrt( (dx/Ax)**2 + ((Z - z0)/Az)**2 )
-        return jnp.where(r <= 1.0, jnp.cos(jnp.pi * r / 2.0)**2, 0.0)
-
-    for i, (name, _) in enumerate(cases):
-        res = results[name]
-        X, Z = res['X'], res['Z']
-        rho_final = res['snapshots'][-1]
-        
-        rho_ana = get_analytic(X, Z, 5000.0)
-        error = rho_final - rho_ana
-        l2_err = np.sqrt(np.mean(error**2))
-        
-        X_plot = (X - shift) / 1000.0 
-        Z_plot = Z / 1000.0 
-        
+        # LEFT: Solution + Grid
         ax_l = axes[i, 0]
-        levels = np.linspace(0.1, 1.0, 10)
-        styles = ['--', ':', '-']
-        for idx, snap in enumerate(res['snapshots']):
-            ax_l.contour(X_plot, Z_plot, snap, levels=levels, colors='k', linewidths=0.8, linestyles=styles[idx])
+        ax_l.contour(X_plot, grid.Z_m, final['rho'], levels=np.linspace(0.1, 1.0, 10), colors='k')
+        ax_l.fill_between(X_plot[:,0], h_vals, 0, color='gray', alpha=0.5)
         
-        h_vals = h_schaer(X[:,0]) / 1000.0
-        ax_l.plot(X_plot[:,0], h_vals, 'k-', lw=1)
-        ax_l.fill_between(X_plot[:,0], h_vals, 0, color='gray', alpha=0.3)
-        ax_l.set_title(f"{name} Solutions", loc='center')
-        ax_l.set_ylim(0, 15); ax_l.set_xlim(-75, 75); ax_l.set_ylabel("z [km]")
+        Z_c, X_c = grid.Z_corner, grid.X_corner - shift
+        for k in range(0, nz+1, 2):
+            ax_l.plot(X_c[:, k]/1000.0, Z_c[:, k], color='gray', alpha=0.5, linewidth=0.5)
+        for j in range(0, nx+1, 10):
+            ax_l.plot(X_c[j, :]/1000.0, Z_c[j, :], color='gray', alpha=0.3, linewidth=0.4)
+            
+        ax_l.set_title(f"{name} Solution")
+        ax_l.set_ylim(0, 15000); ax_l.set_xlim(-75, 75)
         
+        # RIGHT: Error
         ax_r = axes[i, 1]
-        v_max = 0.1
-        levels_err = np.linspace(-v_max, v_max, 50)
-        cf = ax_r.contourf(X_plot, Z_plot, error, levels=levels_err, cmap='RdBu_r', extend='both')
-        fig.colorbar(cf, ax=ax_r, label='Error')
-        ax_r.plot(X_plot[:,0], h_vals, 'k-', lw=1)
-        ax_r.fill_between(X_plot[:,0], h_vals, 0, color='gray', alpha=0.3)
-        ax_r.set_title(f"Error Field (L2: {l2_err:.2e})", loc='center')
-        ax_r.set_ylim(0, 15); ax_r.set_xlim(-75, 75)
-        
-        if i == num_rows - 1:
-            ax_l.set_xlabel("x [km]"); ax_r.set_xlabel("x [km]")
+        cf = ax_r.contourf(X_plot, grid.Z_m, error, levels=np.linspace(-0.1, 0.1, 50), cmap='RdBu_r')
+        ax_r.fill_between(X_plot[:,0], h_vals, 0, color='gray', alpha=0.5)
+        ax_r.set_title(f"Error (L2: {l2:.2e})")
+        ax_r.set_ylim(0, 15000); ax_r.set_xlim(-75, 75)
+        if i == 3: fig.colorbar(cf, ax=axes[:, 1], shrink=0.6, label='Error')
 
-    plt.savefig("figures/recreate_schaer_fig6.png")
-    print("Figure saved.")
+    plt.savefig("figures/schaer_single_comparison.png")
+    print("Saved figures/schaer_single_comparison.png")
 
 if __name__ == "__main__":
-    run_schaer_test()
+    run_schaer_single()
