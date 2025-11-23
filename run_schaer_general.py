@@ -28,7 +28,6 @@ def run_evaluation():
     nx, nz = 300, 50
     u0, dt = 20.0, 25.0
     t_end = 5000.0
-    os.makedirs("figures_eval", exist_ok=True)
 
     # --- Load Trained Model ---
     try:
