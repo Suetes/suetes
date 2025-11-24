@@ -30,12 +30,11 @@ class HybridSigma(BaseTransform):
         decay = (1.0 - zeta/Lz) * jnp.exp(-zeta / self.scale_height)
         return zeta + h * decay
 
-class Sleve(BaseTransform):
+class SleveSimple(BaseTransform):
     """
     SLEVE (Smooth LEvel VErtical) Coordinate (Schär et al., 2002).
     Applies Sinh-based decay with exponent 'n' to smooth small-scale features.
-    
-    For this general implementation, we apply the decay to the total 'h'.
+    This is a simplified version with just a single topography scale
     """
     def __init__(self, scale_s=4000.0, scale_l=15000.0, n=1.35):
         self.ss = scale_s
@@ -50,6 +49,42 @@ class Sleve(BaseTransform):
         # Apply decay with exponent n
         # Standard SLEVE: z = zeta + h * (b_s)^n
         return zeta + h * (b_s**self.n)
+
+class Sleve(BaseTransform):
+    """
+    General SLEVE Coordinate (Schär et al., 2002).
+    z(Z) = Z + h1 * b1(Z) + h2 * b2(Z)
+    """
+    def __init__(self, h1_func, s1=15000.0, s2=2500.0):
+        """
+        Args:
+            h1_func: Function taking (x) -> returns large-scale topo h1.
+            s1: Scale height for large-scale features (approx 15km).
+            s2: Scale height for small-scale features (approx 2.5km).
+        """
+        self.h1_func = h1_func
+        self.s1 = s1
+        self.s2 = s2
+
+    def _b_func(self, zeta, Lz, s):
+        # Eq (15): b(Z) = sinh((H-Z)/s) / sinh(H/s)
+        return jnp.sinh((Lz - zeta)/s) / jnp.sinh(Lz/s)
+
+    def __call__(self, xi, zeta, h, Lz):
+        # 1. Calculate h1 (Large Scale) at current x locations
+        # xi matches the shape of h, so we can pass it to the function
+        h1 = self.h1_func(xi)
+        
+        # 2. Derive h2 (Small Scale)
+        # Eq (13): h = h1 + h2  =>  h2 = h - h1
+        h2 = h - h1
+        
+        # 3. Calculate Decay Functions
+        b1 = self._b_func(zeta, Lz, self.s1)
+        b2 = self._b_func(zeta, Lz, self.s2)
+        
+        # 4. Eq (14): z = Z + h1*b1 + h2*b2
+        return zeta + h1 * b1 + h2 * b2
 
 class IntegralNeuralTransform(BaseTransform):
     """
