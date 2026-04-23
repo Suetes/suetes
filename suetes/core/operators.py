@@ -129,6 +129,62 @@ class CGridOperator:
         grad_x, grad_z = self.grad_2d_curvilinear(f, metrics)
         return -(u_loc * grad_x + w_loc * grad_z)
 
+    # Add to AVERAGING section in operators.py
+    def tvd_interp_m_to_u(self, f, u):
+        """2nd-order Van Leer TVD interpolation from Mass points to U-faces."""
+        if self.periodic_x:
+            f_pad = jnp.pad(f, ((2, 2), (0, 0)), mode='wrap')
+        else:
+            f_pad = jnp.pad(f, ((2, 2), (0, 0)), mode='edge')
+            
+        nx = f.shape[0]
+        f_LL = f_pad[0:nx+1]
+        f_L  = f_pad[1:nx+2]
+        f_R  = f_pad[2:nx+3]
+        f_RR = f_pad[3:nx+4]
+
+        dq_upwind_L = f_L - f_LL
+        dq_local_L  = f_R - f_L
+        dq_upwind_R = f_RR - f_R
+        dq_local_R  = f_R - f_L
+        
+        def van_leer(a, b):
+            return (a * jnp.abs(b) + jnp.abs(a) * b) / (jnp.abs(a) + jnp.abs(b) + 1e-15)
+
+        lim_L = van_leer(dq_upwind_L, dq_local_L)
+        lim_R = van_leer(dq_upwind_R, dq_local_R)
+
+        f_face_L = f_L + 0.5 * lim_L
+        f_face_R = f_R - 0.5 * lim_R
+
+        return jnp.where(u > 0, f_face_L, f_face_R)
+
+    def tvd_interp_m_to_w(self, f, w):
+        """2nd-order Van Leer TVD interpolation from Mass points to W-faces."""
+        f_pad = jnp.pad(f, ((0, 0), (2, 2)), mode='edge')
+        nz = f.shape[1]
+        
+        f_LL = f_pad[:, 0:nz+1]
+        f_L  = f_pad[:, 1:nz+2]
+        f_R  = f_pad[:, 2:nz+3]
+        f_RR = f_pad[:, 3:nz+4]
+
+        dq_upwind_L = f_L - f_LL
+        dq_local_L  = f_R - f_L
+        dq_upwind_R = f_RR - f_R
+        dq_local_R  = f_R - f_L
+        
+        def van_leer(a, b):
+            return (a * jnp.abs(b) + jnp.abs(a) * b) / (jnp.abs(a) + jnp.abs(b) + 1e-15)
+
+        lim_L = van_leer(dq_upwind_L, dq_local_L)
+        lim_R = van_leer(dq_upwind_R, dq_local_R)
+
+        f_face_L = f_L + 0.5 * lim_L
+        f_face_R = f_R - 0.5 * lim_R
+
+        return jnp.where(w > 0, f_face_L, f_face_R)
+
     # ===========================================================
     # DIFFUSION
     # ===========================================================
