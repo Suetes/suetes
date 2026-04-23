@@ -10,11 +10,11 @@ from flax import linen as nn
 jax.config.update("jax_platform_name", "cpu")
 jax.config.update("jax_enable_x64", False)
 
-from atmos_jax.core import StaggeredGrid, RK4, Simulation
-from atmos_jax.core import GalChenSigma, SleveSimple, Sleve, IntegralNeuralTransform
-from atmos_jax.core import StandardMLP
-from atmos_jax.dynamics import SchaerAdvection
-from atmos_jax.utils import get_complex_topo, get_filtered_topo_components, get_auto_sleve_params, create_mixed_dataset
+from suetes.core import StaggeredGrid, RK4, Simulation
+from suetes.core import GalChenSigma, SleveSimple, Sleve, IntegralNeuralTransform
+from suetes.core import StandardMLP
+from suetes.dynamics import SchaerAdvection
+from suetes.utils import get_complex_topo, get_filtered_topo_components, get_auto_sleve_params, create_mixed_dataset
 
 def run_evaluation():
 

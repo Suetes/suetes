@@ -9,11 +9,11 @@ import optax
 jax.config.update("jax_platform_name", "cpu")
 jax.config.update("jax_enable_x64", True)
 
-from atmos_jax.core import StaggeredGrid
-from atmos_jax.dynamics.advection import SchaerAdvection
-from atmos_jax.core.neural import StandardMLP
-from atmos_jax.core.transforms import IntegralNeuralTransform
-from atmos_jax.utils.datasets import get_complex_topo, create_mixed_dataset
+from suetes.core import StaggeredGrid
+from suetes.dynamics.advection import SchaerAdvection
+from suetes.core.neural import StandardMLP
+from suetes.core.transforms import IntegralNeuralTransform
+from suetes.utils.datasets import get_complex_topo, create_mixed_dataset
 
 # Configuration
 Lx, Lz = 300000.0, 25000.0

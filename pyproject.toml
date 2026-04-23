@@ -3,7 +3,7 @@ requires = ["setuptools", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "atmos_jax"
+name = "suetes"
 version = "0.1.0"
 description = "Differentiable Atmospheric Solver (JAX)"
 dependencies = [
@@ -15,4 +15,4 @@ dependencies = [
 ]
 
 [tool.setuptools]
-packages = ["atmos_jax"]
+packages = ["suetes"]

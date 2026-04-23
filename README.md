@@ -20,8 +20,8 @@ It implements the fully compressible Euler equations (Equation Set 1: Exner-Thet
 
 1.  Clone the repository:
     ```bash
-    git clone https://github.com/abihlo/atmos_jax.git
-    cd atmos_jax
+    git clone https://github.com/abihlo/suetes.git
+    cd suetes
     ```
 
 2.  Create a virtual environment (recommended):

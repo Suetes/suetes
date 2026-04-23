@@ -4,11 +4,11 @@ import matplotlib.pyplot as plt
 import jax.numpy as jnp
 
 USE_X64 = False
-from atmos_jax.utils import setup_jax
+from suetes.utils import setup_jax
 setup_jax(USE_X64)
 
-from atmos_jax.core import StaggeredGrid, SSPRK3, Simulation
-from atmos_jax.dynamics import EulerSet1
+from suetes.core import StaggeredGrid, SSPRK3, Simulation
+from suetes.dynamics import EulerSet1
 
 def run_case2():
     # 1. Config

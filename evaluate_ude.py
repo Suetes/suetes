@@ -8,9 +8,9 @@ import jax.numpy as jnp
 from flax import linen as nn
 import jax.tree_util # Ensure this is used for compatibility
 
-from atmos_jax.core import StaggeredGrid
-from atmos_jax.dynamics import EulerSet1
-from atmos_jax.core.transforms import BaseTransform, GalChenSigma, Sleve
+from suetes.core import StaggeredGrid
+from suetes.dynamics import EulerSet1
+from suetes.core.transforms import BaseTransform, GalChenSigma, Sleve
 
 # --- CLASSES ---
 class ResidualCorrectionMLP(nn.Module):

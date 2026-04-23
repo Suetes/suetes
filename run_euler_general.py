@@ -10,10 +10,10 @@ import jax.numpy as jnp
 jax.config.update("jax_platform_name", "cpu")
 jax.config.update("jax_enable_x64", False)
 
-from atmos_jax.core import StaggeredGrid
-from atmos_jax.dynamics import EulerSet1
-from atmos_jax.core.neural import StandardMLP
-from atmos_jax.core.transforms import IntegralNeuralTransform, GalChenSigma, Sleve
+from suetes.core import StaggeredGrid
+from suetes.dynamics import EulerSet1
+from suetes.core.neural import StandardMLP
+from suetes.core.transforms import IntegralNeuralTransform, GalChenSigma, Sleve
 
 # --- CONFIGURATION ---
 Lx, Lz = 50000.0, 21000.0

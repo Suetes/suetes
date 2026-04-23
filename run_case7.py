@@ -7,11 +7,11 @@ from numpy.lib.scimath import sqrt as csqrt
 import jax.numpy as jnp
 
 USE_X64 = False 
-from atmos_jax.utils import setup_jax
+from suetes.utils import setup_jax
 setup_jax(USE_X64)
 
-from atmos_jax.core import StaggeredGrid, RK4, Simulation
-from atmos_jax.dynamics import EulerSet1
+from suetes.core import StaggeredGrid, RK4, Simulation
+from suetes.dynamics import EulerSet1
 
 def run_case7():
     # ======================================================

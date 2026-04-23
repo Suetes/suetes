@@ -5,8 +5,8 @@ import jax
 import jax.numpy as jnp
 import optax
 from flax import linen as nn
-from atmos_jax.core import StaggeredGrid
-from atmos_jax.core.transforms import BaseTransform
+from suetes.core import StaggeredGrid
+from suetes.core.transforms import BaseTransform
 
 # --- 1. MODEL ---
 class TripleOutputMLP(nn.Module):

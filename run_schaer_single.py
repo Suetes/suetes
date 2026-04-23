@@ -8,10 +8,10 @@ import jax
 jax.config.update("jax_platform_name", "cpu")
 jax.config.update("jax_enable_x64", False)
 
-from atmos_jax.core import StaggeredGrid, RK4, Simulation
-from atmos_jax.core.transforms import GalChenSigma, HybridSigma, Sleve, IntegralNeuralTransform
-from atmos_jax.core.neural import StandardMLP
-from atmos_jax.dynamics.advection import SchaerAdvection
+from suetes.core import StaggeredGrid, RK4, Simulation
+from suetes.core.transforms import GalChenSigma, HybridSigma, Sleve, IntegralNeuralTransform
+from suetes.core.neural import StandardMLP
+from suetes.dynamics.advection import SchaerAdvection
 
 def run_schaer_single():
     Lx, Lz = 300000.0, 25000.0

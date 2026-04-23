@@ -4,9 +4,9 @@ import numpy as np
 import matplotlib.pyplot as plt
 import jax
 import jax.numpy as jnp
-from atmos_jax.core import StaggeredGrid
-from atmos_jax.core.neural import StandardMLP
-from atmos_jax.core.transforms import IntegralNeuralTransform
+from suetes.core import StaggeredGrid
+from suetes.core.neural import StandardMLP
+from suetes.core.transforms import IntegralNeuralTransform
 
 # --- CONFIGURATION ---
 Lx, Lz = 50000.0, 21000.0

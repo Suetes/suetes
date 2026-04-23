@@ -10,9 +10,9 @@ from flax import linen as nn
 jax.config.update("jax_platform_name", "cpu")
 jax.config.update("jax_enable_x64", True)
 
-from atmos_jax.core import StaggeredGrid
-from atmos_jax.dynamics.advection import SchaerAdvection
-from atmos_jax.core.transforms import BaseTransform
+from suetes.core import StaggeredGrid
+from suetes.dynamics.advection import SchaerAdvection
+from suetes.core.transforms import BaseTransform
 
 # ==============================================================================
 # 1. Configuration (Standard Schär Case)
