@@ -28,12 +28,14 @@ class Simulation:
         print(f"             Chunk Size:  {chunk_steps} steps")
         
         # 1. JIT Compile the chunk function
+        # 1. JIT Compile the chunk function
         print("[Simulation] Compiling kernel...")
         t0 = time.time()
         
         @jax.jit
         def run_chunk(s, t):
-            return self.stepper.integrate(s, t, t + chunk_dt, self.forcing_fn, self.bc_fn)
+            # chunk_steps is a static Python int captured from the outer scope
+            return self.stepper.integrate(s, t, chunk_steps, self.forcing_fn, self.bc_fn)
 
         # Warmup compilation
         _ = run_chunk(curr_state, t_curr)
@@ -48,7 +50,6 @@ class Simulation:
             t_curr += chunk_dt
             
             # --- GENERIC SYNC ---
-            # Find the first array leaf in the state tree to block on
             leaves = jax.tree_util.tree_leaves(curr_state)
             if leaves:
                 leaves[0].block_until_ready()
@@ -64,7 +65,13 @@ class Simulation:
         # 3. Remainder
         if remainder > 0:
             print(f"    Finishing remaining {remainder} steps...")
-            curr_state = self.stepper.integrate(curr_state, t_curr, t_end, self.forcing_fn, self.bc_fn)
+            
+            # JIT compile the remainder step since its length is different from chunk_steps
+            @jax.jit
+            def run_remainder(s, t):
+                return self.stepper.integrate(s, t, remainder, self.forcing_fn, self.bc_fn)
+                
+            curr_state = run_remainder(curr_state, t_curr)
             t_curr = t_end
 
         total_time = time.time() - start_time
