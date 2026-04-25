@@ -40,8 +40,7 @@ class CGridOperator:
             pad = jnp.pad(f, ((2, 2), (0, 0)), mode='wrap')
             grad = (27.0*(pad[2:-2]-pad[1:-3]) - (pad[3:-1]-pad[0:-4])) / (24.0 * self.dx)
             
-            # FIX: Always concatenate for periodic to match U-grid size (nx+1)
-            # This ensures grad_p_x matches th_at_u
+            # Always concatenate for periodic to match U-grid size (nx+1)
             return jnp.concatenate([grad, grad[:1, :]], axis=0)
             
         return self._diff_centered_2nd_padded(f, 0)

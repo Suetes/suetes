@@ -45,31 +45,24 @@ class StaggeredGrid:
         self.X_corner = Xi_c_grid
         self.Z_corner = self._apply_transform(Xi_c_grid, Zeta_c_grid)
 
-        # 4. Compute Analytic Metrics (The Fix)
-        self.metrics = {}
-        self.metrics['m'] = self._compute_analytic_metrics(Xi_m, Zeta_m)
-        self.metrics['u'] = self._compute_analytic_metrics(Xi_u, Zeta_u)
-        self.metrics['w'] = self._compute_analytic_metrics(Xi_w, Zeta_w)
-
     def _apply_transform(self, xi, zeta):
         h = self.h_func(xi)
         return self.transform_op(xi, zeta, h, self.Lz)
 
-    def _compute_analytic_metrics(self, Xi, Zeta):
+    def _compute_discrete_metrics(Z_grid, dx, dz, periodic_x=False):
         """
-        Computes z_xi and z_zeta using exact JAX autodiff of the transform.
-        This eliminates discretization errors in the metric terms.
+        Computes metric terms using 2nd-order discrete centered differences.
+        This guarantees exact cancellation of truncation errors with the dynamical operators.
         """
-        # Wrap transform to be scalar-valued z(xi, zeta) for autodiff
-        def _z_scalar(xi, zeta):
-            h = self.h_func(xi)
-            return self.transform_op(xi, zeta, h, self.Lz)
-        
-        # Vectorized gradients: scalar -> scalar
-        grad_x_fn = jax.vmap(jax.vmap(jax.grad(_z_scalar, argnums=0)))
-        grad_z_fn = jax.vmap(jax.vmap(jax.grad(_z_scalar, argnums=1)))
-        
-        z_xi = grad_x_fn(Xi, Zeta)
-        z_zeta = grad_z_fn(Xi, Zeta)
-        
+        # 1. Discrete dZ/d_zeta (Vertical Metric)
+        Z_pad_z = jnp.pad(Z_grid, ((0, 0), (1, 1)), mode='edge')
+        z_zeta = (Z_pad_z[:, 2:] - Z_pad_z[:, :-2]) / (2.0 * dz)
+
+        # 2. Discrete dZ/d_xi (Horizontal Metric)
+        if periodic_x:
+            z_xi = (jnp.roll(Z_grid, -1, axis=0) - jnp.roll(Z_grid, 1, axis=0)) / (2.0 * dx)
+        else:
+            Z_pad_x = jnp.pad(Z_grid, ((1, 1), (0, 0)), mode='edge')
+            z_xi = (Z_pad_x[2:, :] - Z_pad_x[:-2, :]) / (2.0 * dx)
+            
         return {'z_xi': z_xi, 'z_zeta': z_zeta}

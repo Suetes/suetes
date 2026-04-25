@@ -1,3 +1,6 @@
+import jax
+jax.config.update("jax_enable_x64", True)
+jax.config.update("jax_platform_name", "cpu")
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
 
@@ -5,45 +8,38 @@ from suetes.core.grids import StaggeredGrid
 from suetes.dynamics.euler import ICON2DSlice
 from suetes.core.steppers import SISLStepper
 from suetes.core.driver import Simulation
+from suetes.core.transforms import Sleve  # Import the Sleve transform
 
 # ====================================================================
 # 1. SETUP SLEVE GRID
 # ====================================================================
 nx, nz = 200, 60 
 Lx, Lz = 100000.0, 30000.0
-grid = StaggeredGrid(nx, nz, Lx, Lz, h_func=lambda x: 0.0)
-grid.periodic_x = True
-H_top = Lz
 
-def schaer_sleve_components(x):
+def schaer_h(x):
     hm = 250.0  
     a = 5000.0
     lam = 4000.0
     xc = x - 50000.0
     envelope = hm * jnp.exp(-(xc**2)/(a**2))
-    
-    h1 = 0.5 * envelope 
-    h2 = 0.5 * envelope * jnp.cos(2.0 * jnp.pi * xc / lam) 
-    return h1, h2
+    # True Schär topography
+    return envelope * (jnp.cos(jnp.pi * xc / lam)**2)
 
-def sleve_decay(zeta, s, H_top):
-    return jnp.sinh((H_top - zeta) / s) / jnp.sinh(H_top / s)
+def schaer_h1(x):
+    hm = 250.0  
+    a = 5000.0
+    xc = x - 50000.0
+    envelope = hm * jnp.exp(-(xc**2)/(a**2))
+    # Large scale component for SLEVE
+    return 0.5 * envelope
 
-def apply_sleve(Z_flat, X_flat):
-    h1, h2 = schaer_sleve_components(X_flat[:, 0])
-    h1, h2 = h1[:, None], h2[:, None]
-    s1, s2 = 15000.0, 2500.0  
-    
-    b1 = sleve_decay(Z_flat, s1, H_top)
-    b2 = sleve_decay(Z_flat, s2, H_top)
-    return Z_flat + h1 * b1 + h2 * b2
+# Pass the transform natively into the grid!
+sleve_transform = Sleve(h1_func=schaer_h1, s1=15000.0, s2=2500.0)
+grid = StaggeredGrid(nx, nz, Lx, Lz, h_func=schaer_h, transform=sleve_transform)
+grid.periodic_x = True
 
-grid.Z_m = apply_sleve(grid.Z_m, grid.X_m)
-grid.Z_u = apply_sleve(grid.Z_u, grid.X_u)
-grid.Z_w = apply_sleve(grid.Z_w, grid.X_w)
-
-hx_m = schaer_sleve_components(grid.X_m[:, 0])[0] + schaer_sleve_components(grid.X_m[:, 0])[1]
-hx_m = hx_m[:, None]
+# We still need hx_m for plotting the terrain fill
+hx_m = schaer_h(grid.X_m[:, 0])
 
 # ====================================================================
 # 2. INITIALIZE PHYSICS
@@ -60,6 +56,7 @@ u_0 = 10.0
 state = {
     'u': u_0 * jnp.ones_like(grid.X_u),
     'w': jnp.zeros_like(grid.X_w),
+    'eta_dot': jnp.zeros_like(grid.X_w),  # NEW: Track logical vertical motion
     'rho': physics.c['p0'] / (physics.c['Rd'] * physics.theta_bg) * (physics.pi_bg ** (physics.c['cvd'] / physics.c['Rd'])),
     'pi': physics.pi_bg,
     'th_v': physics.theta_bg
@@ -70,14 +67,16 @@ z_xi_w = physics._get_metrics('w')['z_xi']
 state['w'] = u_0 * z_xi_w
 
 def boundary_conditions(st, forcing):
-    # Kinematic bottom boundary condition
     dh_dx = physics._get_metrics('w')['z_xi'][:, 0]
-    
-    # Average 'u' from cell faces to the cell centers (w-faces) to match shapes
     u_at_w_face = physics.op.avg_u_to_m(st['u'])[:, 0]
     
     st['w'] = st['w'].at[:, 0].set(u_at_w_face * dh_dx)
     st['w'] = st['w'].at[:, -1].set(0.0)
+    
+    # NEW: Kinematic bounds for logical motion
+    if 'eta_dot' in st:
+        st['eta_dot'] = st['eta_dot'].at[:, 0].set(0.0)
+        st['eta_dot'] = st['eta_dot'].at[:, -1].set(0.0)
     return st
 
 print("Running Schaer Mountain Test (5 hours)...")
@@ -96,9 +95,9 @@ final_state = sim.run(state, t_start, t_end, dt, chunk_steps=100)
 
 # Plotting
 plt.figure(figsize=(10, 5))
-plt.contourf(grid.X_w / 1000.0, grid.Z_w / 1000.0, final_state['w'], levels=20, cmap='RdBu_r')
-plt.plot(grid.X_m[:, 0] / 1000.0, hx_m[:, 0] / 1000.0, color='black', linewidth=2)
-plt.fill_between(grid.X_m[:, 0] / 1000.0, 0, hx_m[:, 0] / 1000.0, color='gray')
+plt.contourf(grid.X_w / 1000.0, grid.Z_w / 1000.0, final_state['w'], levels=50, cmap='coolwarm')
+plt.plot(grid.X_m[:, 0] / 1000.0, hx_m / 1000.0, color='black', linewidth=2)
+plt.fill_between(grid.X_m[:, 0] / 1000.0, 0, hx_m / 1000.0, color='gray')
 plt.title("Schär Mountain Wave: Vertical Velocity (m/s)")
 plt.xlabel("x (km)")
 plt.ylabel("z (km)")
