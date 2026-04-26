@@ -12,27 +12,27 @@ from suetes.shared.transforms import Sleve  # Import the Sleve transform
 # ====================================================================
 # 1. SETUP SLEVE GRID
 # ====================================================================
-nx, nz = 200, 60 
-Lx, Lz = 100000.0, 30000.0
+# ====================================================================
+# 1. SETUP SLEVE GRID (Widened for 6-hour runs)
+# ====================================================================
+nx, nz = 600, 60  # Tripled nx to keep dx = 500m
+Lx, Lz = 300000.0, 30000.0
 
 def schaer_h(x):
     hm = 250.0  
     a = 5000.0
     lam = 4000.0
-    xc = x - 50000.0
+    xc = x - 100000.0 # Shift mountain to x = 100km
     envelope = hm * jnp.exp(-(xc**2)/(a**2))
-    # True Schär topography
     return envelope * (jnp.cos(jnp.pi * xc / lam)**2)
 
 def schaer_h1(x):
     hm = 250.0  
     a = 5000.0
-    xc = x - 50000.0
+    xc = x - 100000.0 # Shift mountain to x = 100km
     envelope = hm * jnp.exp(-(xc**2)/(a**2))
-    # Large scale component for SLEVE
     return 0.5 * envelope
 
-# Pass the transform natively into the grid!
 sleve_transform = Sleve(h1_func=schaer_h1, s1=15000.0, s2=2500.0)
 grid = StaggeredGrid(nx, nz, Lx, Lz, h_func=schaer_h, transform=sleve_transform)
 grid.periodic_x = True
@@ -102,6 +102,6 @@ plt.xlabel("x (km)")
 plt.ylabel("z (km)")
 plt.colorbar()
 plt.ylim(0, 15)
-plt.xlim(25, 75)
+plt.xlim(75, 175)
 plt.savefig('test_schaer_mountain_2d.png', dpi=150)
 print("Saved test_schaer_mountain_2d.png")
