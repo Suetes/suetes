@@ -45,7 +45,7 @@ def boundary_conditions(st, forcing):
 # ====================================================================
 def test_topographic_null_balance():
     print("\n" + "="*50)
-    print("TEST 1.5: Topographic Null Test (Resting over Mountain)")
+    print("TEST 1: Topographic Null Test (Resting over Mountain)")
     print("="*50)
     
     nx, nz = 200, 40

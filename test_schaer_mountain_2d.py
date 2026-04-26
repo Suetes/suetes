@@ -46,7 +46,7 @@ hx_m = schaer_h(grid.X_m[:, 0])
 constants = {'g': 9.81, 'cp': 1004.0, 'cvd': 717.0, 'Rd': 287.0, 'p0': 100000.0}
 physics = VerticalSlice(grid, constants, damp_height=22000.0, N_bv=0.01)
 dt = 10.0
-stepper = SISLStepper(physics, dt)
+stepper = SISLStepper(physics, dt, nu_ratio=0.04)
 
 # ====================================================================
 # INITIAL STATE
@@ -78,11 +78,11 @@ def boundary_conditions(st, forcing):
         st['eta_dot'] = st['eta_dot'].at[:, -1].set(0.0)
     return st
 
-print("Running Schaer Mountain Test (6 hours)...")
+print("Running Schaer Mountain Test (4 hours)...")
 
 # 6 hours of simulation time
 t_start = 0.0
-t_end = 6.0 * 3600.0  
+t_end = 4.0 * 3600.0  
 
 # Initialize the simulation driver
 sim = Simulation(stepper, forcing_fn=None, bc_fn=boundary_conditions)
@@ -103,5 +103,5 @@ plt.ylabel("z (km)")
 plt.colorbar()
 plt.ylim(0, 15)
 plt.xlim(25, 75)
-plt.savefig('schaer_test.png', dpi=150)
-print("Saved schaer_test.png")
+plt.savefig('test_schaer_mountain_2d.png', dpi=150)
+print("Saved test_schaer_mountain_2d.png")

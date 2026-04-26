@@ -160,15 +160,18 @@ class SemiImplicitSolver:
     def linear_operator(self, state_prime, bg, beta=0.65):
         tends = self.get_tendencies(state_prime, bg)
         
+        # Apply off-centering (beta) to damp acoustic resonance
         L_u = state_prime['u'] - beta * self.dt * tends['u']
         L_w = (1.0 + self.dt * self.physics.tau_damp) * state_prime['w'] - beta * self.dt * tends['w']
         L_pi = state_prime['pi'] - beta * self.dt * tends['pi']
         L_eta_dot = 0.5 * (bg['dz_w_full'] * state_prime['eta_dot'] - state_prime['w'])
 
+        # Bottom Boundary: w - u * dz/dx = 0
         u_avg_bottom = self.op.avg_u_to_m(state_prime['u'])[:, 0]
         L_w = L_w.at[:, 0].set(state_prime['w'][:, 0] - u_avg_bottom * bg['z_xi_w'][:, 0])
         L_eta_dot = L_eta_dot.at[:, 0].set(state_prime['eta_dot'][:, 0])
         
+        # Top Boundary: w = 0
         L_w = L_w.at[:, -1].set(state_prime['w'][:, -1])
         L_eta_dot = L_eta_dot.at[:, -1].set(state_prime['eta_dot'][:, -1])
         
@@ -194,9 +197,10 @@ class SemiImplicitSolver:
         }
 
 class SISLStepper:
-    def __init__(self, physics, dt):
+    def __init__(self, physics, dt, nu_ratio=0.0):  # Default to 0.0 (no artificial diffusion)
         self.physics = physics
         self.dt = dt
+        self.nu_ratio = nu_ratio
         self.advector = SemiLagrangianAdvector(physics.grid, physics, dt)
         self.implicit_solver = SemiImplicitSolver(physics.grid, physics, dt)
 
@@ -215,13 +219,14 @@ class SISLStepper:
         periodic_x = self.physics.grid.periodic_x
         nx, nz = self.physics.grid.nx, self.physics.grid.nz
         
-        # Off-centering parameter to damp high-frequency acoustics
-        beta = 0.65 
-        
+        beta = 0.65  # Acoustic off-centering
+
+        # 1. Compute departure points using eta_dot directly
         coords_u = self.advector.compute_departure_indices(u_n, eta_dot_n, loc='u')
         coords_w = self.advector.compute_departure_indices(u_n, eta_dot_n, loc='w')
         coords_m = self.advector.compute_departure_indices(u_n, eta_dot_n, loc='m')
 
+        # 2. --- EXPLICIT HALF (Time N) ---
         rho_bg = (self.physics.c['p0'] / (self.physics.c['Rd'] * self.physics.theta_bg)) * \
                  (self.physics.pi_bg ** (self.physics.c['cvd'] / self.physics.c['Rd']))
 
@@ -238,11 +243,14 @@ class SISLStepper:
         tends_n['w'] += buoyancy_n
 
         # Explicit diffusion filtering for numerical dispersion
-        nu4 = 1.0e8
+        min_dx = min(self.physics.grid.dx, self.physics.grid.dz)
+        nu4 = self.nu_ratio * (min_dx**4) / self.dt
+
         diff_u = self.physics.op.hyper_diff_2d(state['u'], nu4)
         diff_w = self.physics.op.hyper_diff_2d(state['w'], nu4)
         diff_th = self.physics.op.hyper_diff_2d(th_v_prime_n, nu4)
 
+        # Apply (1 - beta) weighting and inject hyper-diffusion
         u_adv_in = state['u'] + (1.0 - beta) * self.dt * tends_n['u'] + self.dt * diff_u
         w_adv_in = state['w'] + (1.0 - beta) * self.dt * tends_n['w'] + self.dt * diff_w
         pi_prime_adv_in = state_prime_n['pi'] + (1.0 - beta) * self.dt * tends_n['pi']
@@ -253,6 +261,7 @@ class SISLStepper:
         
         X_idx_A_full = jnp.broadcast_to(jnp.arange(nx)[:, None], (nx, nz + 1))
         Z_idx_A_full = jnp.broadcast_to(jnp.arange(nz + 1)[None, :], (nx, nz + 1))
+        
         coords_xD_etaA = jnp.stack([coords_w[0], Z_idx_A_full], axis=0)
         coords_xA_etaD = jnp.stack([X_idx_A_full, coords_w[1]], axis=0)
         
@@ -265,17 +274,18 @@ class SISLStepper:
         term3 = -0.5 / self.dt * (z_A_eta_D - z_D_eta_D)
         R_eta_dot = term1 + term2 + term3
 
+        # 3. --- ADVECTION ---
         rhs_u = vmap_bicubic_interp(u_adv_in, coords_u, periodic_x, true_nx=nx)
         rhs_w = vmap_bicubic_interp(w_adv_in, coords_w, periodic_x, true_nx=nx)
         rhs_pi_prime = vmap_bicubic_interp(pi_prime_adv_in, coords_m, periodic_x, true_nx=nx)
-        
         rho_next = vmap_bicubic_interp(state['rho'], coords_m, periodic_x, true_nx=nx)
         
-        # Apply temperature diffusion via the advected perturbation
-        th_v_prime_adv_in = th_v_prime_n + self.dt * diff_th
-        th_v_prime_next = vmap_bicubic_interp(th_v_prime_adv_in, coords_m, periodic_x, true_nx=nx)
-        th_v_next = self.physics.theta_bg + th_v_prime_next
+        # Diffuse the temperature perturbation prior to advection
+        th_v_adv_in = state['th_v'] + self.dt * diff_th
+        th_v_next = vmap_bicubic_interp(th_v_adv_in, coords_m, periodic_x, true_nx=nx)
 
+        # 4. --- IMPLICIT HALF (Time N+1) ---
+        th_v_prime_next = th_v_next - self.physics.theta_bg
         th_v_prime_w_next = self.physics.op.avg_m_to_w(th_v_prime_next)
         buoyancy_next = self.physics.c['g'] * (th_v_prime_w_next / th_v_bg_w)
         
@@ -287,7 +297,20 @@ class SISLStepper:
         R_eta_dot = R_eta_dot.at[:, -1].set(0.0)
 
         rhs_prime = {'u': rhs_u, 'w': rhs_w, 'pi': rhs_pi_prime, 'eta_dot': R_eta_dot}
-        state_prime_next = self.implicit_solver.solve(rhs_prime, bg_precomputed)
+
+        # Solve fully coupled implicit system
+        # Note: We must also update the solve call to explicitly pass the beta weight
+        def solve_with_beta(self, rhs_prime, bg_precomputed):
+            rhs_scaled = {'u': rhs_prime['u'], 'w': rhs_prime['w'], 'pi': rhs_prime['pi'] * self.pi_scale, 'eta_dot': rhs_prime['eta_dot']}
+            def A_fn(state_scaled):
+                state_prime = {'u': state_scaled['u'], 'w': state_scaled['w'], 'pi': state_scaled['pi'] / self.pi_scale, 'eta_dot': state_scaled['eta_dot']}
+                L_out = self.linear_operator(state_prime, bg_precomputed, beta=beta)
+                return {'u': L_out['u'], 'w': L_out['w'], 'pi': L_out['pi'] * self.pi_scale, 'eta_dot': L_out['eta_dot']}
+            x_sol_scaled, _ = gmres(A_fn, rhs_scaled, x0=rhs_scaled, tol=1e-5, maxiter=20, restart=10)
+            return {'u': x_sol_scaled['u'], 'w': x_sol_scaled['w'], 'pi': x_sol_scaled['pi'] / self.pi_scale, 'eta_dot': x_sol_scaled['eta_dot']}
+        
+        # Monkey patch the local solve function to pass beta
+        state_prime_next = solve_with_beta(self.implicit_solver, rhs_prime, bg_precomputed)
 
         pi_next = state_prime_next['pi'] + self.physics.pi_bg
         rho_next = (self.physics.c['p0'] / (self.physics.c['Rd'] * th_v_next)) * \
