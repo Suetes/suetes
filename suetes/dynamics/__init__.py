@@ -1,1 +1,0 @@
-from .euler import ICON2DSlice
