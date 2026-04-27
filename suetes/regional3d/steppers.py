@@ -1,6 +1,7 @@
 import jax
 import jax.numpy as jnp
 from jax.scipy.sparse.linalg import gmres
+import jax.scipy.ndimage as jnd
 from .operators import tensor_product_interp_3d
 
 class SemiLagrangianAdvector3D:
@@ -36,27 +37,46 @@ class SemiLagrangianAdvector3D:
         
         return u_idx_sec, v_idx_sec, w_idx_sec
 
-    def compute_departure_indices(self, state, loc='m', iterations=1):
+    def compute_departure_indices(self, state, loc='m', iterations=2):
         u_idx_sec, v_idx_sec, w_idx_sec = self._get_index_velocities(state['u'], state['v'], state['eta_dot'], loc)
         
         nx, ny, nz = self.grid.nx, self.grid.ny, self.grid.nz
-        
-        # In array index space, coordinates perfectly align with integers [0, 1, 2...]
         idx_x = jnp.arange(nx + (1 if loc == 'u' else 0), dtype=jnp.float64)
         idx_y = jnp.arange(ny + (1 if loc == 'v' else 0), dtype=jnp.float64)
         idx_z = jnp.arange(nz + (1 if loc == 'w' else 0), dtype=jnp.float64)
-        
         Xi_idx, Yi_idx, Zi_idx = jnp.meshgrid(idx_x, idx_y, idx_z, indexing='ij')
         
+        # Initial guess (Explicit Euler displacement)
+        alpha_x = self.dt * u_idx_sec
+        alpha_y = self.dt * v_idx_sec
+        alpha_z = self.dt * w_idx_sec
+        
         for _ in range(iterations):
-            Xi_dep = Xi_idx - self.dt * u_idx_sec
-            Yi_dep = Yi_idx - self.dt * v_idx_sec
-            Zi_dep = Zi_idx - self.dt * w_idx_sec
+            mid_coords = jnp.stack([
+                Xi_idx - 0.5 * alpha_x, 
+                Yi_idx - 0.5 * alpha_y, 
+                Zi_idx - 0.5 * alpha_z
+            ], axis=0)
+            
+            # Use the FAST linear advector for finding the departure points
+            u_mid = self.advect_linear(u_idx_sec, mid_coords)
+            v_mid = self.advect_linear(v_idx_sec, mid_coords)
+            w_mid = self.advect_linear(w_idx_sec, mid_coords)
+            
+            alpha_x = self.dt * u_mid
+            alpha_y = self.dt * v_mid
+            alpha_z = self.dt * w_mid
 
-        return jnp.stack([Xi_dep, Yi_dep, Zi_dep], axis=0)
+        return jnp.stack([Xi_idx - alpha_x, Yi_idx - alpha_y, Zi_idx - alpha_z], axis=0)
 
-    def advect(self, field, coords):
-        return tensor_product_interp_3d(field, coords)
+    def advect_linear(self, field, coords):
+        """Blazing fast native trilinear interpolation. No limiter needed."""
+        # Note: map_coordinates expects shape (ndim, ...), so coords must be stacked
+        return jnd.map_coordinates(field, coords, order=1, mode='nearest')
+
+    def advect_cubic(self, field, coords):
+        """Your custom tricubic function, used ONLY for final dynamics."""
+        return tensor_product_interp_3d(field, coords) # (Your original function, without the limiter!)
 
 
 class SemiImplicitSolver3D:
@@ -115,6 +135,9 @@ class SISLStepper3D:
         return final_state
 
     def step(self, state, t, forcing, bc_fn):
+
+        alpha = 0.55
+
         if 'eta_dot' not in state: state['eta_dot'] = jnp.zeros_like(state['w'])
             
         coords_u = self.advector.compute_departure_indices(state, loc='u')
@@ -140,10 +163,10 @@ class SISLStepper3D:
         th_v_prime_w_n = self.physics.op.avg(th_v_prime_n, axis=2, from_loc='m', to_loc='w')
         tends_n['w'] += self.physics.c['g'] * (th_v_prime_w_n / th_v_bg_w)
 
-        u_in = state['u'] + 0.5 * self.dt * tends_n['u']
-        v_in = state['v'] + 0.5 * self.dt * tends_n['v']
-        w_in = state['w'] + 0.5 * self.dt * tends_n['w']
-        pi_prime_in = state_prime_n['pi'] + 0.5 * self.dt * tends_n['pi']
+        u_in = state['u'] + (1.0 - alpha) * self.dt * tends_n['u']
+        v_in = state['v'] + (1.0 - alpha) * self.dt * tends_n['v']
+        w_in = state['w'] + (1.0 - alpha) * self.dt * tends_n['w']
+        pi_prime_in = state_prime_n['pi'] + (1.0 - alpha) * self.dt * tends_n['pi']
 
         # --- 3D KINEMATIC ADVECTION ---
         # Average u and v to the w-grid shape (nx, ny, nz+1)
@@ -162,24 +185,18 @@ class SISLStepper3D:
             state['w']
         )
         
-        R_eta_dot = -0.5 * self.advector.advect(residual_n, coords_w)
+        R_eta_dot = -(1.0 - alpha) * self.advector.advect_cubic(residual_n, coords_w)
 
-        rhs_u = self.advector.advect(u_in, coords_u)
-        rhs_v = self.advector.advect(v_in, coords_v)
-        rhs_w = self.advector.advect(w_in, coords_w)
-        rhs_pi_prime = self.advector.advect(pi_prime_in, coords_m)
-        rho_next = self.advector.advect(state['rho'], coords_m)
-        th_v_next = self.advector.advect(state['th_v'], coords_m)
+        rhs_u = self.advector.advect_cubic(u_in, coords_u)
+        rhs_v = self.advector.advect_cubic(v_in, coords_v)
+        rhs_w = self.advector.advect_cubic(w_in, coords_w)
+        rhs_pi_prime = self.advector.advect_cubic(pi_prime_in, coords_m)
+        rho_next = self.advector.advect_cubic(state['rho'], coords_m)
+        th_v_next = self.advector.advect_cubic(state['th_v'], coords_m)
 
         th_v_prime_next = th_v_next - self.physics.theta_bg
         th_v_prime_w_next = self.physics.op.avg(th_v_prime_next, axis=2, from_loc='m', to_loc='w')
         rhs_w += 0.5 * self.dt * (self.physics.c['g'] * (th_v_prime_w_next / th_v_bg_w))
-
-        # CRITICAL FIX: Zero boundaries before implicit solver to prevent acoustic bleed/imprinting
-        rhs_w = rhs_w.at[:, :, 0].set(0.0)
-        rhs_w = rhs_w.at[:, :, -1].set(0.0)
-        R_eta_dot = R_eta_dot.at[:, :, 0].set(0.0)
-        R_eta_dot = R_eta_dot.at[:, :, -1].set(0.0)
 
         rhs_prime = {'u': rhs_u, 'v': rhs_v, 'w': rhs_w, 'pi': rhs_pi_prime, 'eta_dot': R_eta_dot}
         state_prime_next = self.implicit_solver.solve(rhs_prime, bg_precomputed)
@@ -193,7 +210,7 @@ class SISLStepper3D:
         # Tracer advection
         for key in self.tracer_keys:
             if key in state:
-                state_next[key] = self.advector.advect(state[key], coords_m)
+                state_next[key] = self.advector.advect_linear(state[key], coords_m)
 
         # --- MASS FIXER ---
         if self.use_mass_fixer:

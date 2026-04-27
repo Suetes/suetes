@@ -1,4 +1,5 @@
 import jax.numpy as jnp
+import jax.scipy.ndimage as jnd
 
 class CGridOperator3D:
     def __init__(self, grid):
@@ -35,7 +36,7 @@ def cubic_weight(p0, p1, p2, p3, t):
            (p0 - 2.5*p1 + 2.0*p2 - 0.5*p3) * t**2 + \
            (-0.5*p0 + 0.5*p2) * t + p1
 
-def tensor_product_interp_3d(field, coords):
+def tensor_product_interp_3d(field, coords, use_limiter=False):
     nx, ny, nz = field.shape
     x, y, z = coords[0], coords[1], coords[2]
 
@@ -59,19 +60,20 @@ def tensor_product_interp_3d(field, coords):
     val0, val1, val2, val3 = interp_y(ix[0]), interp_y(ix[1]), interp_y(ix[2]), interp_y(ix[3])
     f_interp = cubic_weight(val0, val1, val2, val3, dx)
 
-    # --- 3D QUASI-MONOTONE LIMITER ---
-    x1 = jnp.minimum(x0 + 1, nx - 1)
-    y1 = jnp.minimum(y0 + 1, ny - 1)
-    z1 = jnp.minimum(z0 + 1, nz - 1)
+    if use_limiter:
+        x1 = jnp.minimum(x0 + 1, nx - 1)
+        y1 = jnp.minimum(y0 + 1, ny - 1)
+        z1 = jnp.minimum(z0 + 1, nz - 1)
 
-    neighbors = jnp.array([
-        field[x0, y0, z0], field[x1, y0, z0],
-        field[x0, y1, z0], field[x1, y1, z0],
-        field[x0, y0, z1], field[x1, y0, z1],
-        field[x0, y1, z1], field[x1, y1, z1]
-    ])
+        neighbors = jnp.array([
+            field[x0, y0, z0], field[x1, y0, z0],
+            field[x0, y1, z0], field[x1, y1, z0],
+            field[x0, y0, z1], field[x1, y0, z1],
+            field[x0, y1, z1], field[x1, y1, z1]
+        ])
 
-    f_min = jnp.min(neighbors, axis=0)
-    f_max = jnp.max(neighbors, axis=0)
+        f_min = jnp.min(neighbors, axis=0)
+        f_max = jnp.max(neighbors, axis=0)
+        return jnp.clip(f_interp, f_min, f_max)
 
-    return jnp.clip(f_interp, f_min, f_max)
+    return f_interp

@@ -9,6 +9,7 @@ from suetes.regional3d.geometry import RegionalGrid3D
 from suetes.regional3d.euler import Euler3D
 from suetes.regional3d.operators import CGridOperator3D
 from suetes.regional3d.steppers import SISLStepper3D
+from suetes.regional3d.boundaries import DaviesSponge
 from suetes.shared.driver import Simulation
 from suetes.shared.transforms import SleveSimple
 
@@ -88,18 +89,33 @@ def test_3d_advection():
     # Enable the mass fixer for our tracer!
     stepper = SISLStepper3D(physics, dt, use_mass_fixer=True, tracer_keys=['tracer'])
     
-    # Diagonal wind flow
-    state = get_base_state_3d(grid, physics, u_0=10.0, v_0=10.0)
+    # 1. Generate the static background state for the sponge to relax towards
+    base_state = get_base_state_3d(grid, physics, u_0=10.0, v_0=0.0)
+    # The external state needs a tracer key so the sponge loop doesn't throw a KeyError
+    base_state['tracer'] = jnp.zeros_like(grid.Z_m) 
     
-    # 3D Tracer Bubble
-    xc, yc, zc = -25000.0, -25000.0, 5000.0
+    # 2. Initialize the Davies Sponge (8 grid cells thick on all lateral edges)
+    sponge = DaviesSponge(grid, sponge_depth=8)
+    
+    # 3. Create the initial simulation state
+    state = dict(base_state) 
+    
+    xc, yc, zc = -25000.0, 0.0, 5000.0
     r_bubble = 8000.0
-    # Need broadcasting for 3D distance calc
     X_m, Y_m, Z_m = grid.x_m[:, None, None], grid.y_m[None, :, None], grid.Z_m
     r = jnp.sqrt((X_m - xc)**2 + (Y_m - yc)**2 + (Z_m - zc)**2)
     state['tracer'] = jnp.where(r < r_bubble, jnp.cos(0.5 * jnp.pi * r / r_bubble)**2, 0.0)
 
-    sim = Simulation(stepper, forcing_fn=None, bc_fn=lambda st, _: terrain_bc_3d(st, physics))
+    # 4. Combine the kinematic terrain condition AND the sponge layer
+    def full_bc(st, forcing):
+        # First, strictly enforce the flow parallel to the mountain
+        st = terrain_bc_3d(st, physics)
+        # Second, damp the outer 8 cells to absorb reflecting gravity waves
+        st = sponge.blend(st, base_state)
+        return st
+
+    # 5. Run the simulation with the new combined boundary condition
+    sim = Simulation(stepper, forcing_fn=None, bc_fn=full_bc)
     final_state = sim.run(state, 0.0, 3000.0, dt, chunk_steps=50)
     
     # Plotting a horizontal slice (xy) and a vertical slice (xz)
@@ -140,23 +156,26 @@ def test_3d_bubble():
     print("TEST 2: 3D Rising Thermal Bubble")
     print("="*50)
     
-    nx, ny, nz = 80, 10, 80 
-    dx, dy, dz = 250.0, 2500.0, 125.0
+    nx, ny, nz = 80, 5, 80 
+    dx, dy, dz = 250.0, 250.0, 125.0
     
     # Flat grid
     grid = RegionalGrid3D(nx, ny, nz, dx, dy, dz, lat_center=45.0, lon_center=-52.0)
     op = CGridOperator3D(grid)
     physics = Euler3D(grid, op, CONSTANTS, damp_height=grid.Lz, N_bv=0.0) # Neutral atmosphere
     
-    dt = 2.5
+    dt = 0.5
     stepper = SISLStepper3D(physics, dt)
     state = get_base_state_3d(grid, physics, u_0=0.0, v_0=0.0)
     
-    # 3D Thermal perturbation
-    xc, yc, zc = 0.0, 0.0, 2000.0
+    # 3D Thermal perturbation (Modeled as a 2D cylinder in Y)
+    xc, zc = 0.0, 2000.0
     r_bubble = 1500.0
-    X_m, Y_m, Z_m = grid.x_m[:, None, None], grid.y_m[None, :, None], grid.Z_m
-    r = jnp.sqrt((X_m - xc)**2 + (Y_m - yc)**2 + (Z_m - zc)**2)
+    
+    # Notice we drop Y_m entirely from the distance calculation!
+    X_m, Z_m = grid.x_m[:, None, None], grid.Z_m
+    r = jnp.sqrt((X_m - xc)**2 + (Z_m - zc)**2)
+    
     theta_prime = jnp.where(r < r_bubble, 2.0 * jnp.cos(0.5 * jnp.pi * r / r_bubble)**2, 0.0)
     
     state['th_v'] += theta_prime
