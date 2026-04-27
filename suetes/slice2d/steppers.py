@@ -2,11 +2,25 @@ import jax
 import jax.numpy as jnp
 from jax.scipy.sparse.linalg import gmres
 
-def vmap_bicubic_interp(field, coords, periodic_x=False, true_nx=None):
+import jax
+import jax.numpy as jnp
+
+def _cubic_1d(p0, p1, p2, p3, t):
+    """Standard 1D cubic interpolation."""
+    return (-0.5*p0 + 1.5*p1 - 1.5*p2 + 0.5*p3) * t**3 + \
+           (p0 - 2.5*p1 + 2.0*p2 - 0.5*p3) * t**2 + \
+           (-0.5*p0 + 0.5*p2) * t + p1
+
+def vmap_tensor_interp_2d(field, coords, periodic_x=False, true_nx=None):
+    """
+    Tensor-product cubic interpolation with a quasi-monotone limiter.
+    Easily extensible to 3D by adding a Y-dimension pass.
+    """
     nx_arr, nz = field.shape
     nx = true_nx if true_nx is not None else nx_arr  
     x, z = coords[0], coords[1]
 
+    # --- 1. Compute Indices and Fractional Distances ---
     z = jnp.clip(z, 0, nz - 1)
     z_idx = jnp.floor(z).astype(jnp.int32)
     dz = z - z_idx
@@ -30,17 +44,30 @@ def vmap_bicubic_interp(field, coords, periodic_x=False, true_nx=None):
         x1  = jnp.minimum(x_idx + 1, nx_arr - 1)
         x2  = jnp.minimum(x_idx + 2, nx_arr - 1)
 
-    def cubic(p0, p1, p2, p3, t):
-        return (-0.5*p0 + 1.5*p1 - 1.5*p2 + 0.5*p3) * t**3 + \
-               (p0 - 2.5*p1 + 2.0*p2 - 0.5*p3) * t**2 + \
-               (-0.5*p0 + 0.5*p2) * t + p1
+    # --- 2. Tensor Product Interpolation (Cascadic) ---
+    # Pass 1: Interpolate along X for the 4 relevant Z levels
+    val_zm1 = _cubic_1d(field[xm1, zm1], field[x0, zm1], field[x1, zm1], field[x2, zm1], dx)
+    val_z0  = _cubic_1d(field[xm1, z0],  field[x0, z0],  field[x1, z0],  field[x2, z0],  dx)
+    val_z1  = _cubic_1d(field[xm1, z1],  field[x0, z1],  field[x1, z1],  field[x2, z1],  dx)
+    val_z2  = _cubic_1d(field[xm1, z2],  field[x0, z2],  field[x1, z2],  field[x2, z2],  dx)
 
-    row_m1 = cubic(field[xm1, zm1], field[x0, zm1], field[x1, zm1], field[x2, zm1], dx)
-    row_0  = cubic(field[xm1, z0],  field[x0, z0],  field[x1, z0],  field[x2, z0],  dx)
-    row_1  = cubic(field[xm1, z1],  field[x0, z1],  field[x1, z1],  field[x2, z1],  dx)
-    row_2  = cubic(field[xm1, z2],  field[x0, z2],  field[x1, z2],  field[x2, z2],  dx)
+    # Pass 2: Interpolate along Z using the results from Pass 1
+    f_interp = _cubic_1d(val_zm1, val_z0, val_z1, val_z2, dz)
 
-    return cubic(row_m1, row_0, row_1, row_2, dz)
+    # --- 3. Quasi-Monotone Limiter ---
+    # Fetch the 4 immediate surrounding points of the departure cell
+    neighbors = jnp.array([
+        field[x0, z0], field[x1, z0],
+        field[x0, z1], field[x1, z1]
+    ])
+    
+    f_min = jnp.min(neighbors)
+    f_max = jnp.max(neighbors)
+    
+    # Clamp the cubic result to the bounds of the surrounding points
+    f_limited = jnp.clip(f_interp, f_min, f_max)
+
+    return f_limited
 
 class SemiLagrangianAdvector:
     def __init__(self, grid, physics, dt):
@@ -85,8 +112,8 @@ class SemiLagrangianAdvector:
             coords = jnp.stack([idx_x, idx_z], axis=0)
             
             # Use true_nx for correct staggered periodic wrapping
-            u_mid = vmap_bicubic_interp(u_log, coords, periodic_x=self.grid.periodic_x, true_nx=nx)
-            w_mid = vmap_bicubic_interp(w_log, coords, periodic_x=self.grid.periodic_x, true_nx=nx) 
+            u_mid = vmap_tensor_interp_2d(u_log, coords, periodic_x=self.grid.periodic_x, true_nx=nx)
+            w_mid = vmap_tensor_interp_2d(w_log, coords, periodic_x=self.grid.periodic_x, true_nx=nx) 
             
             Xi_dep = Xi_arr - self.dt * u_mid
             Zeta_dep = Zeta_arr - self.dt * w_mid
@@ -99,7 +126,7 @@ class SemiLagrangianAdvector:
 
     def advect(self, field, u_phys, w_phys, loc='m'):
         coords = self.compute_departure_indices(u_phys, w_phys, loc)
-        return vmap_bicubic_interp(field, coords, periodic_x=self.grid.periodic_x, true_nx=self.grid.nx)
+        return vmap_tensor_interp_2d(field, coords, periodic_x=self.grid.periodic_x, true_nx=self.grid.nx)
 
 class SemiImplicitSolver:
     def __init__(self, grid, physics, dt):
@@ -197,12 +224,46 @@ class SemiImplicitSolver:
         }
 
 class SISLStepper:
-    def __init__(self, physics, dt, nu_ratio=0.0):  # Default to 0.0 (no artificial diffusion)
+    def __init__(self, physics, dt, nu_ratio=0.0, use_mass_fixer=False, tracer_keys=None): 
         self.physics = physics
         self.dt = dt
         self.nu_ratio = nu_ratio
+        
+        # Toggles for mass fixer and tracer keys
+        self.use_mass_fixer = use_mass_fixer
+        self.tracer_keys = tracer_keys if tracer_keys is not None else []
+        
         self.advector = SemiLagrangianAdvector(physics.grid, physics, dt)
         self.implicit_solver = SemiImplicitSolver(physics.grid, physics, dt)
+
+    def _apply_mass_fixer(self, state_before, state_after):
+        """Applies a global multiplicative mass fixer to passive tracers."""
+        # Calculate grid cell volumes (dx * dz at the mass centers)
+        dz_m = self.physics.grid.Z_w[:, 1:] - self.physics.grid.Z_w[:, :-1]
+        cell_volumes = self.physics.grid.dx * dz_m
+        
+        rho_before = state_before['rho']
+        rho_after = state_after['rho']
+        
+        # Create a new dictionary so we don't mutate the original
+        fixed_state = dict(state_after)
+        
+        for key in self.tracer_keys:
+            if key in state_before and key in state_after:
+                tr_before = state_before[key]
+                tr_after = state_after[key]
+                
+                # Mass = Integral(tracer_concentration * air_density * volume)
+                mass_before = jnp.sum(tr_before * rho_before * cell_volumes)
+                mass_after = jnp.sum(tr_after * rho_after * cell_volumes)
+                
+                # Ratio of lost/gained mass
+                ratio = mass_before / (mass_after + 1e-15)
+                
+                # Scale the entire field to exactly restore total mass
+                fixed_state[key] = tr_after * ratio
+                
+        return fixed_state
 
     def integrate(self, state, t_start, num_steps, forcing, bc_fn):
         def scan_fn(curr_state, step_idx):
@@ -256,8 +317,9 @@ class SISLStepper:
         pi_prime_adv_in = state_prime_n['pi'] + (1.0 - beta) * self.dt * tends_n['pi']
 
         dz_w = bg_precomputed['dz_w_full']
-        residual_n = dz_w * eta_dot_n - w_n
-        term1 = -0.5 * vmap_bicubic_interp(residual_n, coords_w, periodic_x, true_nx=nx)
+        u_at_w = self.physics.op.avg_u_to_w(u_n)
+        residual_n = dz_w * eta_dot_n + u_at_w * bg_precomputed['z_xi_w'] - w_n
+        term1 = -0.5 * vmap_tensor_interp_2d(residual_n, coords_w, periodic_x, true_nx=nx)
         
         X_idx_A_full = jnp.broadcast_to(jnp.arange(nx)[:, None], (nx, nz + 1))
         Z_idx_A_full = jnp.broadcast_to(jnp.arange(nz + 1)[None, :], (nx, nz + 1))
@@ -266,23 +328,23 @@ class SISLStepper:
         coords_xA_etaD = jnp.stack([X_idx_A_full, coords_w[1]], axis=0)
         
         z_A_eta_A = self.physics.grid.Z_w
-        z_D_eta_A = vmap_bicubic_interp(self.physics.grid.Z_w, coords_xD_etaA, periodic_x, true_nx=nx)
-        z_A_eta_D = vmap_bicubic_interp(self.physics.grid.Z_w, coords_xA_etaD, periodic_x, true_nx=nx)
-        z_D_eta_D = vmap_bicubic_interp(self.physics.grid.Z_w, coords_w, periodic_x, true_nx=nx)
+        z_D_eta_A = vmap_tensor_interp_2d(self.physics.grid.Z_w, coords_xD_etaA, periodic_x, true_nx=nx)
+        z_A_eta_D = vmap_tensor_interp_2d(self.physics.grid.Z_w, coords_xA_etaD, periodic_x, true_nx=nx)
+        z_D_eta_D = vmap_tensor_interp_2d(self.physics.grid.Z_w, coords_w, periodic_x, true_nx=nx)
         
         term2 = -0.5 / self.dt * (z_A_eta_A - z_D_eta_A)
         term3 = -0.5 / self.dt * (z_A_eta_D - z_D_eta_D)
         R_eta_dot = term1 + term2 + term3
 
         # 3. --- ADVECTION ---
-        rhs_u = vmap_bicubic_interp(u_adv_in, coords_u, periodic_x, true_nx=nx)
-        rhs_w = vmap_bicubic_interp(w_adv_in, coords_w, periodic_x, true_nx=nx)
-        rhs_pi_prime = vmap_bicubic_interp(pi_prime_adv_in, coords_m, periodic_x, true_nx=nx)
-        rho_next = vmap_bicubic_interp(state['rho'], coords_m, periodic_x, true_nx=nx)
+        rhs_u = vmap_tensor_interp_2d(u_adv_in, coords_u, periodic_x, true_nx=nx)
+        rhs_w = vmap_tensor_interp_2d(w_adv_in, coords_w, periodic_x, true_nx=nx)
+        rhs_pi_prime = vmap_tensor_interp_2d(pi_prime_adv_in, coords_m, periodic_x, true_nx=nx)
+        rho_next = vmap_tensor_interp_2d(state['rho'], coords_m, periodic_x, true_nx=nx)
         
         # Diffuse the temperature perturbation prior to advection
         th_v_adv_in = state['th_v'] + self.dt * diff_th
-        th_v_next = vmap_bicubic_interp(th_v_adv_in, coords_m, periodic_x, true_nx=nx)
+        th_v_next = vmap_tensor_interp_2d(th_v_adv_in, coords_m, periodic_x, true_nx=nx)
 
         # 4. --- IMPLICIT HALF (Time N+1) ---
         th_v_prime_next = th_v_next - self.physics.theta_bg
@@ -320,5 +382,16 @@ class SISLStepper:
             'u': state_prime_next['u'], 'w': state_prime_next['w'], 'pi': pi_next,
             'rho': rho_next, 'th_v': th_v_next, 'eta_dot': state_prime_next['eta_dot']
         }
+        
+        # Tracer advection
+        for key in self.tracer_keys:
+            if key in state:
+                # Tracers are advected purely explicitly along the trajectories
+                tr_next = vmap_tensor_interp_2d(state[key], coords_m, periodic_x, true_nx=nx)
+                state_next[key] = tr_next
+
+        # Mass fixer
+        if self.use_mass_fixer:
+            state_next = self._apply_mass_fixer(state, state_next)
 
         return bc_fn(state_next, forcing)

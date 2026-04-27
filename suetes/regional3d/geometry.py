@@ -25,7 +25,7 @@ class ObliqueStereographic:
 
 
 class RegionalGrid3D:
-    def __init__(self, nx, ny, nz, dx, dy, dz, lat_center, lon_center):
+    def __init__(self, nx, ny, nz, dx, dy, dz, lat_center, lon_center, h_func=None, transform=None):
         self.shape = (nx, ny, nz)
         self.delta = (dx, dy, dz)
         self.nx, self.ny, self.nz = nx, ny, nz
@@ -42,25 +42,72 @@ class RegionalGrid3D:
         self.y_m = 0.5 * (self.y_c[:-1] + self.y_c[1:])
         self.z_m = 0.5 * (self.z_c[:-1] + self.z_c[1:])
         
-        Xi_m, Yi_m = jnp.meshgrid(self.x_m, self.y_m, indexing='ij')
-        Xi_u, Yi_u = jnp.meshgrid(self.x_c, self.y_m, indexing='ij')
-        Xi_v, Yi_v = jnp.meshgrid(self.x_m, self.y_c, indexing='ij')
-        Xi_w, Yi_w = Xi_m, Yi_m 
+        # --- MAP PROJECTIONS ---
+        Xi_m_2d, Yi_m_2d = jnp.meshgrid(self.x_m, self.y_m, indexing='ij')
+        Xi_u_2d, Yi_u_2d = jnp.meshgrid(self.x_c, self.y_m, indexing='ij')
+        Xi_v_2d, Yi_v_2d = jnp.meshgrid(self.x_m, self.y_c, indexing='ij')
+        Xi_w_2d, Yi_w_2d = Xi_m_2d, Yi_m_2d
 
         self.proj = ObliqueStereographic(lat_center, lon_center)
-        
         self.m_factors = {
-            'm': self.proj.get_map_factor(Xi_m, Yi_m),
-            'u': self.proj.get_map_factor(Xi_u, Yi_u),
-            'v': self.proj.get_map_factor(Xi_v, Yi_v),
-            'w': self.proj.get_map_factor(Xi_w, Yi_w)
+            'm': self.proj.get_map_factor(Xi_m_2d, Yi_m_2d),
+            'u': self.proj.get_map_factor(Xi_u_2d, Yi_u_2d),
+            'v': self.proj.get_map_factor(Xi_v_2d, Yi_v_2d),
+            'w': self.proj.get_map_factor(Xi_w_2d, Yi_w_2d)
         }
         
         Omega = 7.2921e-5
-        lat_m, _ = self.proj.get_lat_lon(Xi_m, Yi_m)
-        lat_u, _ = self.proj.get_lat_lon(Xi_u, Yi_u)
-        lat_v, _ = self.proj.get_lat_lon(Xi_v, Yi_v)
+        lat_m, _ = self.proj.get_lat_lon(Xi_m_2d, Yi_m_2d)
+        lat_u, _ = self.proj.get_lat_lon(Xi_u_2d, Yi_u_2d)
+        lat_v, _ = self.proj.get_lat_lon(Xi_v_2d, Yi_v_2d)
         
         self.f_m = 2.0 * Omega * jnp.sin(jnp.radians(lat_m))
         self.f_u = 2.0 * Omega * jnp.sin(jnp.radians(lat_u))
         self.f_v = 2.0 * Omega * jnp.sin(jnp.radians(lat_v))
+
+        # --- 3D TOPOGRAPHY AND TRANSFORMS ---
+        self.h_func = h_func if h_func is not None else lambda x, y: 0.0
+        
+        if transform is None:
+            from suetes.shared.transforms import GalChenSigma
+            self.transform_op = GalChenSigma()
+        else:
+            self.transform_op = transform
+
+        # Generate logical 3D coordinates (xi, eta, zeta)
+        Xi_m, Yi_m, Zeta_m = jnp.meshgrid(self.x_m, self.y_m, self.z_m, indexing='ij')
+        Xi_u, Yi_u, Zeta_u = jnp.meshgrid(self.x_c, self.y_m, self.z_m, indexing='ij')
+        Xi_v, Yi_v, Zeta_v = jnp.meshgrid(self.x_m, self.y_c, self.z_m, indexing='ij')
+        Xi_w, Yi_w, Zeta_w = jnp.meshgrid(self.x_m, self.y_m, self.z_c, indexing='ij')
+
+        def apply_transform(xi, eta, zeta):
+            h = self.h_func(xi, eta)
+            # We pass xi to the transform (compatible with 2D transforms)
+            return self.transform_op(xi, zeta, h, self.Lz)
+
+        self.Z_m = apply_transform(Xi_m, Yi_m, Zeta_m)
+        self.Z_u = apply_transform(Xi_u, Yi_u, Zeta_u)
+        self.Z_v = apply_transform(Xi_v, Yi_v, Zeta_v)
+        self.Z_w = apply_transform(Xi_w, Yi_w, Zeta_w)
+
+        # --- 3D METRIC TENSORS ---
+        # 1. Vertical Metrics (dz)
+        self.dz_m_full = self.Z_w[:, :, 1:] - self.Z_w[:, :, :-1]
+        
+        Z_m_pad = jnp.pad(self.Z_m, ((0, 0), (0, 0), (1, 1)), mode='edge')
+        self.dz_w_full = Z_m_pad[:, :, 1:] - Z_m_pad[:, :, :-1]
+
+        # 2. Horizontal Metrics at W-points for Kinematic Advection
+        Z_w_pad_x = jnp.pad(self.Z_w, ((1, 1), (0, 0), (0, 0)), mode='edge')
+        self.z_xi_w = (Z_w_pad_x[2:, :, :] - Z_w_pad_x[:-2, :, :]) / (2.0 * self.dx)
+
+        Z_w_pad_y = jnp.pad(self.Z_w, ((0, 0), (1, 1), (0, 0)), mode='edge')
+        self.z_eta_w = (Z_w_pad_y[:, 2:, :] - Z_w_pad_y[:, :-2, :]) / (2.0 * self.dy)
+
+        # --- DIAGNOSTIC CHECK ---
+        dz_min = float(jnp.min(self.dz_m_full))
+        if dz_min <= 0.0:
+            raise ValueError(
+                f"Grid Tangling Detected! Minimum dz is {dz_min:.2f} m.\n"
+                f"The 3D topography is too steep. Smooth the terrain or increase Lz."
+            )

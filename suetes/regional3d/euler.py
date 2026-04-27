@@ -38,8 +38,10 @@ class Euler3D:
             'rho_u':  self.op.avg(rho_bg, axis=0, from_loc='m', to_loc='u'),
             'rho_v':  self.op.avg(rho_bg, axis=1, from_loc='m', to_loc='v'),
             'rho_w':  self.op.avg(rho_bg, axis=2, from_loc='m', to_loc='w'),
-            'dz_m_full': self.grid.dz,
-            'dz_w_full': self.grid.dz, 
+            'dz_m_full': self.grid.dz_m_full,
+            'dz_w_full': self.grid.dz_w_full,
+            'dz_u': self.op.avg(self.grid.dz_m_full, axis=0, from_loc='m', to_loc='u'),
+            'dz_v': self.op.avg(self.grid.dz_m_full, axis=1, from_loc='m', to_loc='v'),
             'C_pi': (self.c['Rd'] / self.c['cvd']) * (pi_bg / (rho_bg * th_v_bg))
         }
 
@@ -65,9 +67,12 @@ class Euler3D:
 
         # Divergence
         m_u, m_v, m_m = self.grid.m_factors['u'][..., None], self.grid.m_factors['v'][..., None], self.grid.m_factors['m'][..., None]
-        flux_x = (u * bg['rho_u'] * bg['th_v_u'] * bg['dz_m_full']) / m_u
-        flux_y = (v * bg['rho_v'] * bg['th_v_v'] * bg['dz_m_full']) / m_v
         
+        # --- Make sure these two lines use dz_u and dz_v! ---
+        flux_x = (u * bg['rho_u'] * bg['th_v_u'] * bg['dz_u']) / m_u
+        flux_y = (v * bg['rho_v'] * bg['th_v_v'] * bg['dz_v']) / m_v
+        
+        # (It is correct to still use dz_m_full for the diff division below)
         div_x = self.op.diff(flux_x, axis=0, from_loc='u', to_loc='m') / bg['dz_m_full']
         div_y = self.op.diff(flux_y, axis=1, from_loc='v', to_loc='m') / bg['dz_m_full']
 

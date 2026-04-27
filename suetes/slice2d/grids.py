@@ -36,6 +36,14 @@ class StaggeredGrid:
         self.X_corner = Xi_c_grid
         self.Z_corner = self._apply_transform(Xi_c_grid, Zeta_c_grid)
 
+        dz_min = float(jnp.min(self.Z_w[:, 1:] - self.Z_w[:, :-1]))
+        if dz_min <= 0.0:
+            raise ValueError(
+                f"Grid Tangling Detected! Minimum dz is {dz_min:.2f} m.\n"
+                f"The topography is too steep for the current vertical resolution "
+                f"and coordinate transform. Please smooth the terrain or increase Lz."
+            )
+
     def _apply_transform(self, xi, zeta):
         h = self.h_func(xi)
         return self.transform_op(xi, zeta, h, self.Lz)

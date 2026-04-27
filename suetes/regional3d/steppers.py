@@ -1,3 +1,4 @@
+import jax
 import jax.numpy as jnp
 from jax.scipy.sparse.linalg import gmres
 from .operators import tensor_product_interp_3d
@@ -6,55 +7,53 @@ class SemiLagrangianAdvector3D:
     def __init__(self, grid, physics, dt):
         self.grid, self.physics, self.dt, self.op = grid, physics, dt, physics.op
 
-    def _get_logical_velocities(self, u_phys, v_phys, eta_dot, loc='m'):
-        # CRITICAL FIX: Convert eta_dot (1/s) to physical logical velocity (m/s)
-        eta_dot_m_s = eta_dot * self.grid.dz
-        
+    def _get_index_velocities(self, u_phys, v_phys, eta_dot, loc='m'):
+        """Returns velocities in units of [array indices / second]."""
         if loc == 'm':
             u_loc = self.op.avg(u_phys, axis=0, from_loc='u', to_loc='m')
             v_loc = self.op.avg(v_phys, axis=1, from_loc='v', to_loc='m')
-            w_loc = self.op.avg(eta_dot_m_s, axis=2, from_loc='w', to_loc='m')
-            m_factor = self.grid.m_factors['m']
+            w_loc = self.op.avg(eta_dot, axis=2, from_loc='w', to_loc='m')
+            m_factor = self.grid.m_factors['m'][..., None]
         elif loc == 'u':
             u_loc = u_phys
             v_loc = self.op.avg(self.op.avg(v_phys, axis=1, from_loc='v', to_loc='m'), axis=0, from_loc='m', to_loc='u')
-            w_loc = self.op.avg(self.op.avg(eta_dot_m_s, axis=2, from_loc='w', to_loc='m'), axis=0, from_loc='m', to_loc='u')
-            m_factor = self.grid.m_factors['u']
+            w_loc = self.op.avg(self.op.avg(eta_dot, axis=2, from_loc='w', to_loc='m'), axis=0, from_loc='m', to_loc='u')
+            m_factor = self.grid.m_factors['u'][..., None]
         elif loc == 'v':
             u_loc = self.op.avg(self.op.avg(u_phys, axis=0, from_loc='u', to_loc='m'), axis=1, from_loc='m', to_loc='v')
             v_loc = v_phys
-            w_loc = self.op.avg(self.op.avg(eta_dot_m_s, axis=2, from_loc='w', to_loc='m'), axis=1, from_loc='m', to_loc='v')
-            m_factor = self.grid.m_factors['v']
+            w_loc = self.op.avg(self.op.avg(eta_dot, axis=2, from_loc='w', to_loc='m'), axis=1, from_loc='m', to_loc='v')
+            m_factor = self.grid.m_factors['v'][..., None]
         elif loc == 'w':
             u_loc = self.op.avg(self.op.avg(u_phys, axis=0, from_loc='u', to_loc='m'), axis=2, from_loc='m', to_loc='w')
             v_loc = self.op.avg(self.op.avg(v_phys, axis=1, from_loc='v', to_loc='m'), axis=2, from_loc='m', to_loc='w')
-            w_loc = eta_dot_m_s
-            m_factor = self.grid.m_factors['w']
+            w_loc = eta_dot
+            m_factor = self.grid.m_factors['w'][..., None]
 
-        return u_loc * m_factor, v_loc * m_factor, w_loc
+        u_idx_sec = (u_loc * m_factor) / self.grid.dx
+        v_idx_sec = (v_loc * m_factor) / self.grid.dy
+        w_idx_sec = w_loc  # eta_dot is already the vertical index crossing rate
+        
+        return u_idx_sec, v_idx_sec, w_idx_sec
 
     def compute_departure_indices(self, state, loc='m', iterations=1):
-        u_log, v_log, w_log = self._get_logical_velocities(state['u'], state['v'], state['eta_dot'], loc)
+        u_idx_sec, v_idx_sec, w_idx_sec = self._get_index_velocities(state['u'], state['v'], state['eta_dot'], loc)
+        
         nx, ny, nz = self.grid.nx, self.grid.ny, self.grid.nz
         
-        idx_x = jnp.arange(nx + (1 if loc == 'u' else 0)) + (0.0 if loc == 'u' else 0.5)
-        idx_y = jnp.arange(ny + (1 if loc == 'v' else 0)) + (0.0 if loc == 'v' else 0.5)
-        idx_z = jnp.arange(nz + (1 if loc == 'w' else 0)) + (0.0 if loc == 'w' else 0.5)
-        Xi, Yi, Zi = jnp.meshgrid(idx_x * self.grid.dx, idx_y * self.grid.dy, idx_z * self.grid.dz, indexing='ij')
+        # In array index space, coordinates perfectly align with integers [0, 1, 2...]
+        idx_x = jnp.arange(nx + (1 if loc == 'u' else 0), dtype=jnp.float64)
+        idx_y = jnp.arange(ny + (1 if loc == 'v' else 0), dtype=jnp.float64)
+        idx_z = jnp.arange(nz + (1 if loc == 'w' else 0), dtype=jnp.float64)
+        
+        Xi_idx, Yi_idx, Zi_idx = jnp.meshgrid(idx_x, idx_y, idx_z, indexing='ij')
         
         for _ in range(iterations):
-            Xi_dep = Xi - self.dt * u_log
-            Yi_dep = Yi - self.dt * v_log
-            Zi_dep = Zi - self.dt * w_log
+            Xi_dep = Xi_idx - self.dt * u_idx_sec
+            Yi_dep = Yi_idx - self.dt * v_idx_sec
+            Zi_dep = Zi_idx - self.dt * w_idx_sec
 
-        offset_x = 0.0 if loc == 'u' else 0.5
-        offset_y = 0.0 if loc == 'v' else 0.5
-        offset_z = 0.0 if loc == 'w' else 0.5
-        
-        idx_x_dep = (Xi_dep / self.grid.dx) - offset_x
-        idx_y_dep = (Yi_dep / self.grid.dy) - offset_y
-        idx_z_dep = (Zi_dep / self.grid.dz) - offset_z
-        return jnp.stack([idx_x_dep, idx_y_dep, idx_z_dep], axis=0)
+        return jnp.stack([Xi_dep, Yi_dep, Zi_dep], axis=0)
 
     def advect(self, field, coords):
         return tensor_product_interp_3d(field, coords)
@@ -78,12 +77,44 @@ class SemiImplicitSolver3D:
 
 
 class SISLStepper3D:
-    def __init__(self, physics, dt):
+    def __init__(self, physics, dt, use_mass_fixer=False, tracer_keys=None):
         self.physics, self.dt = physics, dt
+        self.use_mass_fixer = use_mass_fixer
+        self.tracer_keys = tracer_keys if tracer_keys is not None else []
         self.advector = SemiLagrangianAdvector3D(physics.grid, physics, dt)
         self.implicit_solver = SemiImplicitSolver3D(physics, dt)
 
-    def step(self, state):
+    def _apply_mass_fixer(self, state_before, state_after):
+        """Applies a global multiplicative mass fixer to passive tracers in 3D."""
+        # 3D Cell volume incorporating the 2D map scale factor
+        m_sq = self.physics.grid.m_factors['m'][..., None] ** 2
+        cell_volumes = (self.physics.grid.dx * self.physics.grid.dy / m_sq) * self.physics.grid.dz
+        
+        rho_before = state_before['rho']
+        rho_after = state_after['rho']
+        fixed_state = dict(state_after)
+        
+        for key in self.tracer_keys:
+            if key in state_before and key in state_after:
+                tr_before, tr_after = state_before[key], state_after[key]
+                mass_before = jnp.sum(tr_before * rho_before * cell_volumes)
+                mass_after = jnp.sum(tr_after * rho_after * cell_volumes)
+                ratio = mass_before / (mass_after + 1e-15)
+                fixed_state[key] = tr_after * ratio
+                
+        return fixed_state
+
+    def integrate(self, state, t_start, num_steps, forcing, bc_fn):
+        """Wraps the step function in a JAX scan loop for fast execution."""
+        def scan_fn(curr_state, step_idx):
+            t_curr = t_start + step_idx * self.dt
+            next_state = self.step(curr_state, t_curr, forcing, bc_fn)
+            return next_state, None
+            
+        final_state, _ = jax.lax.scan(scan_fn, state, jnp.arange(num_steps))
+        return final_state
+
+    def step(self, state, t, forcing, bc_fn):
         if 'eta_dot' not in state: state['eta_dot'] = jnp.zeros_like(state['w'])
             
         coords_u = self.advector.compute_departure_indices(state, loc='u')
@@ -114,7 +145,23 @@ class SISLStepper3D:
         w_in = state['w'] + 0.5 * self.dt * tends_n['w']
         pi_prime_in = state_prime_n['pi'] + 0.5 * self.dt * tends_n['pi']
 
-        residual_n = bg_precomputed['dz_w_full'] * state['eta_dot'] - state['w']
+        # --- 3D KINEMATIC ADVECTION ---
+        # Average u and v to the w-grid shape (nx, ny, nz+1)
+        u_m = self.physics.op.avg(state['u'], axis=0, from_loc='u', to_loc='m')
+        u_w = self.physics.op.avg(u_m, axis=2, from_loc='m', to_loc='w')
+        
+        v_m = self.physics.op.avg(state['v'], axis=1, from_loc='v', to_loc='m')
+        v_w = self.physics.op.avg(v_m, axis=2, from_loc='m', to_loc='w')
+
+        # The full 3D kinematic constraint
+        # w = u(dz/dx) + v(dz/dy) + eta_dot(dz/dzeta)
+        residual_n = (
+            bg_precomputed['dz_w_full'] * state['eta_dot'] + 
+            u_w * self.physics.grid.z_xi_w + 
+            v_w * self.physics.grid.z_eta_w - 
+            state['w']
+        )
+        
         R_eta_dot = -0.5 * self.advector.advect(residual_n, coords_w)
 
         rhs_u = self.advector.advect(u_in, coords_u)
@@ -137,8 +184,20 @@ class SISLStepper3D:
         rhs_prime = {'u': rhs_u, 'v': rhs_v, 'w': rhs_w, 'pi': rhs_pi_prime, 'eta_dot': R_eta_dot}
         state_prime_next = self.implicit_solver.solve(rhs_prime, bg_precomputed)
         
-        return {
+        state_next = {
             'u': state_prime_next['u'], 'v': state_prime_next['v'], 'w': state_prime_next['w'], 
             'pi': state_prime_next['pi'] + self.physics.pi_bg,
             'rho': rho_next, 'th_v': th_v_next, 'eta_dot': state_prime_next['eta_dot']
         }
+
+        # Tracer advection
+        for key in self.tracer_keys:
+            if key in state:
+                state_next[key] = self.advector.advect(state[key], coords_m)
+
+        # --- MASS FIXER ---
+        if self.use_mass_fixer:
+            state_next = self._apply_mass_fixer(state, state_next)
+
+        # Wrap the final return in the boundary condition function
+        return bc_fn(state_next, forcing)

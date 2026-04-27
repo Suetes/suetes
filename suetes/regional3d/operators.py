@@ -12,7 +12,7 @@ class CGridOperator3D:
         pad_width = [(0, 0), (0, 0), (0, 0)]
         if from_loc == 'm' and to_loc in ['u', 'v', 'w']:
             pad_width[axis] = (1, 1)
-            return jnp.pad(f, pad_width, mode='constant', constant_values=0.0)
+            return jnp.pad(f, pad_width, mode='edge')
         return f
 
     def diff(self, f, axis, from_loc, to_loc):
@@ -57,4 +57,21 @@ def tensor_product_interp_3d(field, coords):
         return cubic_weight(p0, p1, p2, p3, dy)
 
     val0, val1, val2, val3 = interp_y(ix[0]), interp_y(ix[1]), interp_y(ix[2]), interp_y(ix[3])
-    return cubic_weight(val0, val1, val2, val3, dx)
+    f_interp = cubic_weight(val0, val1, val2, val3, dx)
+
+    # --- 3D QUASI-MONOTONE LIMITER ---
+    x1 = jnp.minimum(x0 + 1, nx - 1)
+    y1 = jnp.minimum(y0 + 1, ny - 1)
+    z1 = jnp.minimum(z0 + 1, nz - 1)
+
+    neighbors = jnp.array([
+        field[x0, y0, z0], field[x1, y0, z0],
+        field[x0, y1, z0], field[x1, y1, z0],
+        field[x0, y0, z1], field[x1, y0, z1],
+        field[x0, y1, z1], field[x1, y1, z1]
+    ])
+
+    f_min = jnp.min(neighbors, axis=0)
+    f_max = jnp.max(neighbors, axis=0)
+
+    return jnp.clip(f_interp, f_min, f_max)

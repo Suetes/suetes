@@ -44,7 +44,7 @@ hx_m = schaer_h(grid.X_m[:, 0])
 # 2. INITIALIZE PHYSICS
 # ====================================================================
 constants = {'g': 9.81, 'cp': 1004.0, 'cvd': 717.0, 'Rd': 287.0, 'p0': 100000.0}
-physics = VerticalSlice(grid, constants, damp_height=22000.0, N_bv=0.01)
+physics = VerticalSlice(grid, constants, damp_height=11000.0, N_bv=0.01)
 dt = 10.0
 stepper = SISLStepper(physics, dt, nu_ratio=0.04)
 
