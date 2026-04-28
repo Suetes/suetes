@@ -74,9 +74,9 @@ class SemiLagrangianAdvector3D:
         # Note: map_coordinates expects shape (ndim, ...), so coords must be stacked
         return jnd.map_coordinates(field, coords, order=1, mode='nearest')
 
-    def advect_cubic(self, field, coords):
+    def advect_cubic(self, field, coords, use_limiter=False):
         """Your custom tricubic function, used ONLY for final dynamics."""
-        return tensor_product_interp_3d(field, coords) # (Your original function, without the limiter!)
+        return tensor_product_interp_3d(field, coords, use_limiter=use_limiter)
 
 
 class SemiImplicitSolver3D:
@@ -92,7 +92,7 @@ class SemiImplicitSolver3D:
             L_out = self.physics.linear_operator(state_prime, bg_precomputed, self.dt)
             return {k: L_out[k] * self.pi_scale if k == 'pi' else L_out[k] for k in L_out}
 
-        x_sol_scaled, _ = gmres(A_fn, rhs_scaled, x0=rhs_scaled, tol=1e-5, maxiter=20, restart=10)
+        x_sol_scaled, _ = gmres(A_fn, rhs_scaled, x0=rhs_scaled, tol=1e-5, maxiter=20, restart=5)
         return {k: x_sol_scaled[k] / self.pi_scale if k == 'pi' else x_sol_scaled[k] for k in x_sol_scaled}
 
 
@@ -187,12 +187,15 @@ class SISLStepper3D:
         
         R_eta_dot = -(1.0 - alpha) * self.advector.advect_cubic(residual_n, coords_w)
 
-        rhs_u = self.advector.advect_cubic(u_in, coords_u)
-        rhs_v = self.advector.advect_cubic(v_in, coords_v)
-        rhs_w = self.advector.advect_cubic(w_in, coords_w)
-        rhs_pi_prime = self.advector.advect_cubic(pi_prime_in, coords_m)
-        rho_next = self.advector.advect_cubic(state['rho'], coords_m)
-        th_v_next = self.advector.advect_cubic(state['th_v'], coords_m)
+        # UNLIMITED: Momentum and pressure waves must propagate smoothly
+        rhs_u = self.advector.advect_cubic(u_in, coords_u, use_limiter=False)
+        rhs_v = self.advector.advect_cubic(v_in, coords_v, use_limiter=False)
+        rhs_w = self.advector.advect_cubic(w_in, coords_w, use_limiter=False)
+        rhs_pi_prime = self.advector.advect_cubic(pi_prime_in, coords_m, use_limiter=False)
+        
+        # LIMITED: Thermodynamic scalars must not checkerboard
+        rho_next = self.advector.advect_cubic(state['rho'], coords_m, use_limiter=True)
+        th_v_next = self.advector.advect_cubic(state['th_v'], coords_m, use_limiter=True)
 
         th_v_prime_next = th_v_next - self.physics.theta_bg
         th_v_prime_w_next = self.physics.op.avg(th_v_prime_next, axis=2, from_loc='m', to_loc='w')

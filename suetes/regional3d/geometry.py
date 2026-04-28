@@ -94,7 +94,14 @@ class RegionalGrid3D:
         # 1. Vertical Metrics (dz)
         self.dz_m_full = self.Z_w[:, :, 1:] - self.Z_w[:, :, :-1]
         
-        Z_m_pad = jnp.pad(self.Z_m, ((0, 0), (0, 0), (1, 1)), mode='edge')
+        Z_m_extrap_bottom = self.Z_m[:, :, 0] - (self.Z_m[:, :, 1] - self.Z_m[:, :, 0])
+        Z_m_extrap_top = self.Z_m[:, :, -1] + (self.Z_m[:, :, -1] - self.Z_m[:, :, -2])
+        Z_m_pad = jnp.concatenate([
+            jnp.expand_dims(Z_m_extrap_bottom, axis=-1), 
+            self.Z_m, 
+            jnp.expand_dims(Z_m_extrap_top, axis=-1)
+        ], axis=-1)
+        
         self.dz_w_full = Z_m_pad[:, :, 1:] - Z_m_pad[:, :, :-1]
 
         # 2. Horizontal Metrics at W-points for Kinematic Advection

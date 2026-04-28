@@ -121,7 +121,7 @@ def test_25d_schaer_mountain():
     grid = RegionalGrid3D(nx, ny, nz, dx, dy, dz, lat_center=0.0, lon_center=0.0, h_func=schaer_2d, transform=sleve)
     
     op = CGridOperator3D(grid)
-    physics = Euler3D(grid, op, CONSTANTS, damp_height=grid.Lz)
+    physics = Euler3D(grid, op, CONSTANTS, damp_height=grid.Lz, N_bv=0.0)
     
     dt = 10.0
     stepper = SISLStepper3D(physics, dt, use_mass_fixer=True, tracer_keys=['tracer'])
@@ -143,7 +143,7 @@ def test_25d_schaer_mountain():
         return st
 
     sim = Simulation(stepper, forcing_fn=None, bc_fn=full_bc)
-    final_state = sim.run(state, 0.0, 4500.0, dt, chunk_steps=50)
+    final_state = sim.run(state, 0.0, 2000.0, dt, chunk_steps=50)
     
     plt.figure(figsize=(10, 5))
     y_idx = ny // 2
@@ -160,5 +160,5 @@ def test_25d_schaer_mountain():
     print(">>> Saved test_B_25d_schaer.png")
 
 if __name__ == "__main__":
-    test_25d_bubble()
+    # test_25d_bubble()
     test_25d_schaer_mountain()

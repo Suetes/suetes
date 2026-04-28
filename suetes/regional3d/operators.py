@@ -65,15 +65,16 @@ def tensor_product_interp_3d(field, coords, use_limiter=False):
         y1 = jnp.minimum(y0 + 1, ny - 1)
         z1 = jnp.minimum(z0 + 1, nz - 1)
 
-        neighbors = jnp.array([
-            field[x0, y0, z0], field[x1, y0, z0],
-            field[x0, y1, z0], field[x1, y1, z0],
-            field[x0, y0, z1], field[x1, y0, z1],
-            field[x0, y1, z1], field[x1, y1, z1]
-        ])
+        # Base case
+        f_min = f_max = field[x0, y0, z0]
 
-        f_min = jnp.min(neighbors, axis=0)
-        f_max = jnp.max(neighbors, axis=0)
+        # Chain the 7 other neighbors
+        for i, j, k in [(x1,y0,z0), (x0,y1,z0), (x1,y1,z0), 
+                        (x0,y0,z1), (x1,y0,z1), (x0,y1,z1), (x1,y1,z1)]:
+            neighbor = field[i, j, k]
+            f_min = jnp.minimum(f_min, neighbor)
+            f_max = jnp.maximum(f_max, neighbor)
+
         return jnp.clip(f_interp, f_min, f_max)
 
     return f_interp
