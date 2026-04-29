@@ -85,15 +85,39 @@ class SemiImplicitSolver3D:
         self.pi_scale = 100000.0 
 
     def solve(self, rhs_prime, bg_precomputed):
+        # rhs_prime['eta_dot'] is R_eta_dot, which is already a velocity [m/s]
         rhs_scaled = {k: rhs_prime[k] * self.pi_scale if k == 'pi' else rhs_prime[k] for k in rhs_prime}
 
         def A_fn(state_scaled):
-            state_prime = {k: state_scaled[k] / self.pi_scale if k == 'pi' else state_scaled[k] for k in state_scaled}
+            state_prime = {
+                'u': state_scaled['u'], 
+                'v': state_scaled['v'], 
+                'w': state_scaled['w'],
+                'pi': state_scaled['pi'] / self.pi_scale,
+                # Decode the solver's velocity (W_contra) back to physical eta_dot [1/s]
+                'eta_dot': state_scaled['eta_dot'] / bg_precomputed['dz_w_full']
+            }
             L_out = self.physics.linear_operator(state_prime, bg_precomputed, self.dt)
-            return {k: L_out[k] * self.pi_scale if k == 'pi' else L_out[k] for k in L_out}
+            
+            return {
+                'u': L_out['u'], 
+                'v': L_out['v'], 
+                'w': L_out['w'],
+                'pi': L_out['pi'] * self.pi_scale,
+                # L_out['eta_dot'] is the kinematic residual, already a velocity [m/s]
+                'eta_dot': L_out['eta_dot'] 
+            }
 
         x_sol_scaled, _ = gmres(A_fn, rhs_scaled, x0=rhs_scaled, tol=1e-5, maxiter=20, restart=5)
-        return {k: x_sol_scaled[k] / self.pi_scale if k == 'pi' else x_sol_scaled[k] for k in x_sol_scaled}
+        
+        return {
+            'u': x_sol_scaled['u'], 
+            'v': x_sol_scaled['v'], 
+            'w': x_sol_scaled['w'],
+            'pi': x_sol_scaled['pi'] / self.pi_scale,
+            # Convert the final solved velocity back into the true eta_dot [1/s]
+            'eta_dot': x_sol_scaled['eta_dot'] / bg_precomputed['dz_w_full']
+        }
 
 
 class SISLStepper3D:
@@ -200,6 +224,14 @@ class SISLStepper3D:
         th_v_prime_next = th_v_next - self.physics.theta_bg
         th_v_prime_w_next = self.physics.op.avg(th_v_prime_next, axis=2, from_loc='m', to_loc='w')
         rhs_w += 0.5 * self.dt * (self.physics.c['g'] * (th_v_prime_w_next / th_v_bg_w))
+
+        # --- FIX: ZERO OUT RHS BOUNDARIES FOR KINEMATIC CONSTRAINTS ---
+        rhs_w = rhs_w.at[:, :, 0].set(0.0)
+        rhs_w = rhs_w.at[:, :, -1].set(0.0)
+
+        R_eta_dot = R_eta_dot.at[:, :, 0].set(0.0)
+        R_eta_dot = R_eta_dot.at[:, :, -1].set(0.0)
+        # --------------------------------------------------------------
 
         rhs_prime = {'u': rhs_u, 'v': rhs_v, 'w': rhs_w, 'pi': rhs_pi_prime, 'eta_dot': R_eta_dot}
         state_prime_next = self.implicit_solver.solve(rhs_prime, bg_precomputed)

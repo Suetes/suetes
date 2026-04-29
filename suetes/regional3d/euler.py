@@ -104,22 +104,32 @@ class Euler3D:
 
     def linear_operator(self, state_prime, bg, dt):
         tends = self.get_tendencies(state_prime, bg)
-        
-        alpha = 0.55 # Or 0.6
+        alpha = 0.55 
 
-        # Implicit solve
         L_u = state_prime['u'] - alpha * dt * tends['u']
         L_v = state_prime['v'] - alpha * dt * tends['v']
         L_w = (1.0 + dt * self.tau_damp) * state_prime['w'] - alpha * dt * tends['w']
         L_pi = state_prime['pi'] - alpha * dt * tends['pi']
         
-        # 1. Bring horizontal winds to the W-grid
+        # Bring horizontal winds to the W-grid
         u_m = self.op.avg(state_prime['u'], axis=0, from_loc='u', to_loc='m')
         u_w = self.op.avg(u_m, axis=2, from_loc='m', to_loc='w')
         v_m = self.op.avg(state_prime['v'], axis=1, from_loc='v', to_loc='m')
         v_w = self.op.avg(v_m, axis=2, from_loc='m', to_loc='w')
 
-        # 2. Add horizontal terrain advection to the implicit constraint!
+        # --- FIX: OVERRIDE L_w AT BOUNDARIES ---
+        # Bottom: Kinematic constraint (w - u*dz/dx - v*dz/dy = 0)
+        kinematic_bottom = state_prime['w'][:, :, 0] - (
+            u_w[:, :, 0] * self.grid.z_xi_w[:, :, 0] + 
+            v_w[:, :, 0] * self.grid.z_eta_w[:, :, 0]
+        )
+        L_w = L_w.at[:, :, 0].set(kinematic_bottom)
+        
+        # Top: Rigid lid (w = 0)
+        L_w = L_w.at[:, :, -1].set(state_prime['w'][:, :, -1])
+        # ---------------------------------------
+
+        # Horizontal terrain advection to the implicit constraint
         L_eta_dot = alpha * (
             bg['dz_w_full'] * state_prime['eta_dot'] 
             + u_w * self.grid.z_xi_w 
@@ -127,8 +137,6 @@ class Euler3D:
             - state_prime['w']
         )
         
-        # 3. ONLY force eta_dot to 0 at the boundaries. 
-        # Do NOT force L_w to 0! Let GMRES balance the vertical momentum naturally.
         L_eta_dot = L_eta_dot.at[:, :, 0].set(state_prime['eta_dot'][:, :, 0])
         L_eta_dot = L_eta_dot.at[:, :, -1].set(state_prime['eta_dot'][:, :, -1])
         
