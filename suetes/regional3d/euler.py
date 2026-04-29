@@ -1,12 +1,15 @@
 import jax
 import jax.numpy as jnp
+from suetes.regional3d.diffusion import HyperFilter
 
 class Euler3D:
-    def __init__(self, grid, operators, constants, damp_height=20000.0, max_damp=0.5, N_bv=0.01):
+    def __init__(self, grid, operators, constants, damp_height=20000.0, max_damp=0.5, N_bv=0.01, nu_h=5e6, nu_v=5e6):
         self.grid = grid
         self.op = operators
         self.c = constants
         self.theta_0 = 300.0
+        self.nu_h = nu_h
+        self.nu_v = nu_v
         
          # USE PHYSICAL 3D HEIGHT (Z_m), NOT LOGICAL 1D HEIGHT (zeta_m)
         Z_m = self.grid.Z_m
@@ -28,6 +31,9 @@ class Euler3D:
             max_damp * 0.5 * (1.0 + jnp.tanh(jnp.pi * (z_w_3d - damp_height) / (z_top - damp_height) - jnp.pi/2)),
             0.0
         )
+
+        # Initialize the spatial filter
+        self.diffusion = HyperFilter(self.grid, nu_h=self.nu_h, nu_v=self.nu_v)
 
     def precompute_bg(self, bg_state):
         th_v_bg, rho_bg, pi_bg = bg_state['th_v'], bg_state['rho'], bg_state['pi']
@@ -99,7 +105,14 @@ class Euler3D:
         div_z = (self.op.diff(flux_z, axis=2, from_loc='w', to_loc='m') * self.grid.dz) / bg['dz_m_full']
 
         tend_pi = -bg['C_pi'] * (div_x + div_y + div_z)
-        
+
+        # --- 4. EXPLICIT DIFFUSION ---
+        diff_tends = self.diffusion.get_tendencies(state_prime)
+
+        tend_u += diff_tends['u']
+        tend_v += diff_tends['v']
+        tend_w += diff_tends['w']
+
         return {'u': tend_u, 'v': tend_v, 'w': tend_w, 'pi': tend_pi}
 
     def linear_operator(self, state_prime, bg, dt):

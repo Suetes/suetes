@@ -104,11 +104,10 @@ class SemiImplicitSolver3D:
                 'v': L_out['v'], 
                 'w': L_out['w'],
                 'pi': L_out['pi'] * self.pi_scale,
-                # L_out['eta_dot'] is the kinematic residual, already a velocity [m/s]
                 'eta_dot': L_out['eta_dot'] 
             }
 
-        x_sol_scaled, _ = gmres(A_fn, rhs_scaled, x0=rhs_scaled, tol=1e-5, maxiter=20, restart=5)
+        x_sol_scaled, _ = gmres(A_fn, rhs_scaled, x0=rhs_scaled, tol=1e-6, maxiter=50, restart=10)
         
         return {
             'u': x_sol_scaled['u'], 
