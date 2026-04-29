@@ -79,7 +79,7 @@ stepper = SISLStepper3D(physics, dt, use_mass_fixer=False)
 sim = Simulation(stepper, forcing_fn, bc_fn)
 
 # --- 4. RUN SIMULATION ---
-t_end = 600.0 # Run for 10 minutes of physical time
+t_end = 1000.0 # Run for 10 minutes of physical time
 print("\nLaunching Warm Bubble Benchmark...")
 final_state = sim.run(state, t_start=0.0, t_end=t_end, dt=dt, chunk_steps=20)
 

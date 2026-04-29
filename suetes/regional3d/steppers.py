@@ -217,8 +217,8 @@ class SISLStepper3D:
         rhs_pi_prime = self.advector.advect_cubic(pi_prime_in, coords_m, use_limiter=False)
         
         # LIMITED: Thermodynamic scalars must not checkerboard
-        rho_next = self.advector.advect_cubic(state['rho'], coords_m, use_limiter=True)
-        th_v_next = self.advector.advect_cubic(state['th_v'], coords_m, use_limiter=True)
+        rho_next = self.advector.advect_cubic(state['rho'], coords_m, use_limiter=False)
+        th_v_next = self.advector.advect_cubic(state['th_v'], coords_m, use_limiter=False)
 
         th_v_prime_next = th_v_next - self.physics.theta_bg
         th_v_prime_w_next = self.physics.op.avg(th_v_prime_next, axis=2, from_loc='m', to_loc='w')
