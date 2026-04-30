@@ -78,11 +78,14 @@ class TopographyProcessor:
         z_era5_grid = interp_era5(pts)
 
         print("3. Interpolating GEBCO Topography...")
-        # Add a 2-degree buffer so we don't accidentally clip outside GEBCO bounds
-        gebco_lat, gebco_lon, gebco_z = self._get_gebco_topo(
-            target_lat.min() - 2, target_lat.max() + 2, 
-            target_lon.min() - 2, target_lon.max() + 2
-        )
+        # Add a 2-degree buffer and CAST JAX ARRAYS TO FLOAT so xarray/pandas can read them
+        min_lat = float(target_lat.min()) - 2.0
+        max_lat = float(target_lat.max()) + 2.0
+        min_lon = float(target_lon.min()) - 2.0
+        max_lon = float(target_lon.max()) + 2.0
+
+        gebco_lat, gebco_lon, gebco_z = self._get_gebco_topo(min_lat, max_lat, min_lon, max_lon)
+        
         interp_gebco = RegularGridInterpolator((gebco_lat, gebco_lon), gebco_z, bounds_error=False, fill_value=None)
         z_gebco_grid = interp_gebco(pts)
 
