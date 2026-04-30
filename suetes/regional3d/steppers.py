@@ -176,15 +176,7 @@ class SemiImplicitSolver3D:
                 'eta_dot': L_out['eta_dot'] 
             }
 
-        x_sol_scaled, _ = gmres(
-            A_fn, 
-            rhs_scaled, 
-            x0=rhs_scaled, 
-            tol=1e-5, 
-            maxiter=10,       # Drastically reduced!
-            restart=10,
-            M=M_fn            # Inject the LU preconditioner
-        )
+        x_sol_scaled, _ = gmres(A_fn, rhs_scaled, x0=rhs_scaled, tol=1e-5, maxiter=10, restart=10, M=M_fn)
         
         return {
             'u': x_sol_scaled['u'], 
@@ -195,6 +187,63 @@ class SemiImplicitSolver3D:
             'eta_dot': x_sol_scaled['eta_dot'] / bg_precomputed['dz_w_full']
         }
 
+class FluxFormAdvector:
+    def __init__(self, grid, dt):
+        self.grid = grid
+        self.dt = dt
+
+    def advect_1d(self, scalar_1d, cfl_inter_1d):
+        """Advects a 1D scalar using interface Courant numbers."""
+        N = scalar_1d.shape[0]
+        
+        # scalar_1d acts as the logical mass in the grid cell
+        M_inter = jnp.pad(jnp.cumsum(scalar_1d), (1, 0))
+        
+        idx_inter = jnp.arange(N + 1, dtype=jnp.float32)
+        idx_dep = idx_inter - cfl_inter_1d
+        
+        # Solid boundary condition for the advector 
+        # (The Davies sponge will handle the open boundaries later)
+        idx_dep = jnp.clip(idx_dep, 0.0, float(N))
+        
+        M_dep = jnd.map_coordinates(M_inter, [idx_dep], order=1, mode='nearest')
+        return M_dep[1:] - M_dep[:-1]
+
+    def advect_3d_split(self, field, state, bg_precomputed):
+        # 1. Calculate true Courant numbers (index crossing rates)
+        m_u = self.grid.m_factors['u'][..., None]
+        m_v = self.grid.m_factors['v'][..., None]
+        
+        cfl_x = (state['u'] * m_u * self.dt) / self.grid.dx
+        cfl_y = (state['v'] * m_v * self.dt) / self.grid.dy
+        cfl_z = state['eta_dot'] * self.dt
+        
+        # --- NEW: Convert to Absolute Cell Mass ---
+        # We compute the true physical volume of every grid cell.
+        m_sq = self.grid.m_factors['m'][..., None] ** 2
+        cell_volumes = (self.grid.dx * self.grid.dy / m_sq) * bg_precomputed['dz_m_full']
+        
+        # Multiplying volumetric density (field) by volume gives absolute mass (kg)
+        cell_mass = field * cell_volumes
+        
+        # --- 2. X-Advection ---
+        vmap_x_inner = jax.vmap(self.advect_1d, in_axes=(1, 1), out_axes=1)
+        vmap_x = jax.vmap(vmap_x_inner, in_axes=(2, 2), out_axes=2)
+        mass_x = vmap_x(cell_mass, cfl_x)
+        
+        # --- 3. Y-Advection ---
+        vmap_y_inner = jax.vmap(self.advect_1d, in_axes=(0, 0), out_axes=0)
+        vmap_y = jax.vmap(vmap_y_inner, in_axes=(2, 2), out_axes=2)
+        mass_y = vmap_y(mass_x, cfl_y)
+        
+        # --- 4. Z-Advection ---
+        vmap_z_inner = jax.vmap(self.advect_1d, in_axes=(0, 0), out_axes=0)
+        vmap_z = jax.vmap(vmap_z_inner, in_axes=(1, 1), out_axes=1)
+        mass_z = vmap_z(mass_y, cfl_z)
+        
+        # --- 5. Convert Absolute Mass back to Volumetric Density ---
+        return mass_z / cell_volumes
+
 
 class SISLStepper3D:
     def __init__(self, physics, dt, use_mass_fixer=False, tracer_keys=None):
@@ -202,6 +251,7 @@ class SISLStepper3D:
         self.use_mass_fixer = use_mass_fixer
         self.tracer_keys = tracer_keys if tracer_keys is not None else []
         self.advector = SemiLagrangianAdvector3D(physics.grid, physics, dt)
+        self.ffsl_advector = FluxFormAdvector(physics.grid, dt)
         self.implicit_solver = SemiImplicitSolver3D(physics, dt)
 
     def _apply_mass_fixer(self, state_before, state_after):
@@ -294,9 +344,15 @@ class SISLStepper3D:
         rhs_pi_prime = self.advector.advect_cubic(pi_prime_in, coords_m, use_limiter=False)
         
         # LIMITED: Thermodynamic scalars must not checkerboard
-        rho_next = self.advector.advect_cubic(state['rho'], coords_m, use_limiter=False)
-        th_v_next = self.advector.advect_cubic(state['th_v'], coords_m, use_limiter=False)
+        # rho_next = self.advector.advect_cubic(state['rho'], coords_m, use_limiter=False)
+        # th_v_next = self.advector.advect_cubic(state['th_v'], coords_m, use_limiter=False)
 
+        # Use conservative FFSL advection to prevent checkerboarding
+        rho_next = self.ffsl_advector.advect_3d_split(state['rho'], state, bg_precomputed)
+        # Use cubic advection for virtual potential temperature!
+        th_v_next = self.advector.advect_cubic(state['th_v'], coords_m, use_limiter=False)
+        
+        # Add the buoyancy correction for w using the cleanly advected th_v
         th_v_prime_next = th_v_next - self.physics.theta_bg
         th_v_prime_w_next = self.physics.op.avg(th_v_prime_next, axis=2, from_loc='m', to_loc='w')
         rhs_w += 0.5 * self.dt * (self.physics.c['g'] * (th_v_prime_w_next / th_v_bg_w))
@@ -304,28 +360,28 @@ class SISLStepper3D:
         # --- FIX: ZERO OUT RHS BOUNDARIES FOR KINEMATIC CONSTRAINTS ---
         rhs_w = rhs_w.at[:, :, 0].set(0.0)
         rhs_w = rhs_w.at[:, :, -1].set(0.0)
-
         R_eta_dot = R_eta_dot.at[:, :, 0].set(0.0)
         R_eta_dot = R_eta_dot.at[:, :, -1].set(0.0)
-        # --------------------------------------------------------------
-
+        
+        # --- 3. IMPLICIT SOLVE ---
         rhs_prime = {'u': rhs_u, 'v': rhs_v, 'w': rhs_w, 'pi': rhs_pi_prime, 'eta_dot': R_eta_dot}
         state_prime_next = self.implicit_solver.solve(rhs_prime, bg_precomputed)
         
+        # --- 4. ASSEMBLE FINAL STATE ---
         state_next = {
             'u': state_prime_next['u'], 'v': state_prime_next['v'], 'w': state_prime_next['w'], 
             'pi': state_prime_next['pi'] + self.physics.pi_bg,
-            'rho': rho_next, 'th_v': th_v_next, 'eta_dot': state_prime_next['eta_dot']
+            'rho': rho_next, 
+            'th_v': th_v_next, 
+            'eta_dot': state_prime_next['eta_dot']
         }
 
-        # Tracer advection
+        # Tracers use FFSL to strictly conserve mass
         for key in self.tracer_keys:
             if key in state:
-                state_next[key] = self.advector.advect_linear(state[key], coords_m)
+                rho_tr_next = ffsl_advector.advect_3d_split(state['rho'] * state[key], state, bg_precomputed)
+                state_next[key] = rho_tr_next / (rho_next + 1e-15)
 
-        # --- MASS FIXER ---
-        if self.use_mass_fixer:
-            state_next = self._apply_mass_fixer(state, state_next)
-
-        # Wrap the final return in the boundary condition function
+        # Remove self._apply_mass_fixer entirely! 
+        # (It is no longer needed since rho and tracers are perfectly conserved)
         return bc_fn(state_next, forcing)
