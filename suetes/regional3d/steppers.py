@@ -1,8 +1,70 @@
 import jax
+from jax import vmap
 import jax.numpy as jnp
 from jax.scipy.sparse.linalg import gmres
+from jax.scipy.linalg import lu_factor, lu_solve
 import jax.scipy.ndimage as jnd
 from .operators import tensor_product_interp_3d
+
+class VerticalPreconditioner:
+    def __init__(self, physics, dt, alpha=0.55):
+        self.physics = physics
+        self.dt = dt
+        self.alpha = alpha
+
+    def build_dense_matrix(self, bg_precomputed):
+        nx, ny, nz = self.physics.grid.nx, self.physics.grid.ny, self.physics.grid.nz
+        
+        # 1. Define your 1D tridiagonal coefficients here
+        # (These are placeholders - you will replace them with your actual physics)
+        lower = jnp.zeros((nx, ny, nz - 1))  # Sub-diagonal
+        main  = jnp.ones((nx, ny, nz))       # Main diagonal
+        upper = jnp.zeros((nx, ny, nz - 1))  # Super-diagonal
+
+        # 2. Construct the dense Nz x Nz matrix for all horizontal columns
+        # Shape will be (nx, ny, nz, nz)
+        i, j = jnp.meshgrid(jnp.arange(nz), jnp.arange(nz), indexing='ij')
+        
+        # JAX's advanced indexing/where makes building this dense matrix fast
+        A_dense = jnp.where(
+            i == j, main[..., i],
+            jnp.where(
+                i == j + 1, lower[..., j],
+                jnp.where(i == j - 1, upper[..., i], 0.0)
+            )
+        )
+        return A_dense
+
+    def precompute_lu(self, bg_precomputed):
+        """Called ONCE before GMRES to factorize the matrices."""
+        A_dense = self.build_dense_matrix(bg_precomputed)
+        
+        # vmap over the horizontal x (axis 0) and y (axis 1) dimensions
+        vmap_lu_factor = vmap(vmap(lu_factor, in_axes=0), in_axes=0)
+        
+        # lu_and_piv is a tuple: (LU_matrices, pivot_indices)
+        self.lu_and_piv = vmap_lu_factor(A_dense)
+
+    def __call__(self, rhs_scaled):
+        """Called inside GMRES every iteration to apply M^-1."""
+        rhs_pi = rhs_scaled['pi']
+        
+        # vmap the solve over the horizontal dimensions
+        vmap_lu_solve = vmap(vmap(lu_solve, in_axes=(0, 0)), in_axes=(0, 0))
+        
+        # Fast preconditioned solve
+        precond_pi = vmap_lu_solve(self.lu_and_piv, rhs_pi)
+        
+        # Placeholder for w back-substitution
+        precond_w = rhs_scaled['w'] 
+
+        return {
+            'u': rhs_scaled['u'],
+            'v': rhs_scaled['v'],
+            'w': precond_w,
+            'pi': precond_pi,
+            'eta_dot': rhs_scaled['eta_dot']
+        }
 
 class SemiLagrangianAdvector3D:
     def __init__(self, grid, physics, dt):
@@ -88,6 +150,13 @@ class SemiImplicitSolver3D:
         # rhs_prime['eta_dot'] is R_eta_dot, which is already a velocity [m/s]
         rhs_scaled = {k: rhs_prime[k] * self.pi_scale if k == 'pi' else rhs_prime[k] for k in rhs_prime}
 
+        # --- 1. Setup Preconditioner ---
+        preconditioner = VerticalPreconditioner(self.physics, self.dt)
+        preconditioner.precompute_lu(bg_precomputed)  # Factorize ONCE
+
+        def M_fn(state_scaled):
+            return preconditioner(state_scaled)       # Fast solve inside GMRES
+
         def A_fn(state_scaled):
             state_prime = {
                 'u': state_scaled['u'], 
@@ -107,7 +176,15 @@ class SemiImplicitSolver3D:
                 'eta_dot': L_out['eta_dot'] 
             }
 
-        x_sol_scaled, _ = gmres(A_fn, rhs_scaled, x0=rhs_scaled, tol=1e-6, maxiter=50, restart=10)
+        x_sol_scaled, _ = gmres(
+            A_fn, 
+            rhs_scaled, 
+            x0=rhs_scaled, 
+            tol=1e-5, 
+            maxiter=10,       # Drastically reduced!
+            restart=10,
+            M=M_fn            # Inject the LU preconditioner
+        )
         
         return {
             'u': x_sol_scaled['u'], 

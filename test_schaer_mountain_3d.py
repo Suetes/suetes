@@ -77,7 +77,7 @@ sim = Simulation(stepper, forcing_fn, bc_fn)
 
 # --- 5. RUN SIMULATION ---
 # We run for 2 hours (7200s) to allow the gravity waves to reach a steady state
-t_end = 3600.0 
+t_end = 7200.0 
 print("\nLaunching Schär Mountain Benchmark...")
 final_state = sim.run(state, t_start=0.0, t_end=t_end, dt=dt, chunk_steps=50)
 
