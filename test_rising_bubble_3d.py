@@ -75,7 +75,7 @@ def forcing_fn(state, t):
 
 # Use a 2.5 second time step. High resolution means we need a smaller dt.
 dt = 2.5
-stepper = SISLStepper3D(physics, dt, use_mass_fixer=False)
+stepper = SISLStepper3D(physics, dt)
 sim = Simulation(stepper, forcing_fn, bc_fn)
 
 # --- 4. RUN SIMULATION ---
@@ -92,7 +92,7 @@ perturbation = th_v_slice - th_v_bg_slice
 
 plt.figure(figsize=(10, 8))
 # Transpose for plotting (Z on y-axis, X on x-axis)
-plt.contourf(grid.x_m, grid.z_m, perturbation.T, levels=20, cmap='magma')
+plt.contourf(grid.x_m, grid.z_m, perturbation.T, levels=40, cmap='RdBu_r')
 plt.colorbar(label='Potential Temp Perturbation (K)')
 plt.title(f'Warm Bubble at T = {t_end}s')
 plt.xlabel('X Distance (m)')

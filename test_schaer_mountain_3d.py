@@ -72,7 +72,7 @@ def forcing_fn(state, t):
 
 # A 4.0 second time step is generally safe for 500m resolution at 10m/s
 dt = 4.0
-stepper = SISLStepper3D(physics, dt, use_mass_fixer=False)
+stepper = SISLStepper3D(physics, dt)
 sim = Simulation(stepper, forcing_fn, bc_fn)
 
 # --- 5. RUN SIMULATION ---

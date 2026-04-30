@@ -132,19 +132,19 @@ class SemiLagrangianAdvector3D:
         return jnp.stack([Xi_idx - alpha_x, Yi_idx - alpha_y, Zi_idx - alpha_z], axis=0)
 
     def advect_linear(self, field, coords):
-        """Blazing fast native trilinear interpolation. No limiter needed."""
-        # Note: map_coordinates expects shape (ndim, ...), so coords must be stacked
+        """Trilinear interpolation. No limiter needed."""
         return jnd.map_coordinates(field, coords, order=1, mode='nearest')
 
     def advect_cubic(self, field, coords, use_limiter=False):
-        """Your custom tricubic function, used ONLY for final dynamics."""
+        """Tricubic interpolation, used ONLY for final dynamics."""
         return tensor_product_interp_3d(field, coords, use_limiter=use_limiter)
 
 
 class SemiImplicitSolver3D:
     def __init__(self, physics, dt):
-        self.physics, self.dt = physics, dt
-        self.pi_scale = 100000.0 
+        self.physics = physics
+        self.dt = dt
+        self.pi_scale = 100000.0
 
     def solve(self, rhs_prime, bg_precomputed):
         # rhs_prime['eta_dot'] is R_eta_dot, which is already a velocity [m/s]
@@ -199,7 +199,8 @@ class FluxFormAdvector:
         # scalar_1d acts as the logical mass in the grid cell
         M_inter = jnp.pad(jnp.cumsum(scalar_1d), (1, 0))
         
-        idx_inter = jnp.arange(N + 1, dtype=jnp.float32)
+        # Use the dtype of the scalar to maintain float64 precision
+        idx_inter = jnp.arange(N + 1, dtype=scalar_1d.dtype)
         idx_dep = idx_inter - cfl_inter_1d
         
         # Solid boundary condition for the advector 
@@ -218,61 +219,39 @@ class FluxFormAdvector:
         cfl_y = (state['v'] * m_v * self.dt) / self.grid.dy
         cfl_z = state['eta_dot'] * self.dt
         
-        # --- NEW: Convert to Absolute Cell Mass ---
-        # We compute the true physical volume of every grid cell.
+        # --- Convert to Absolute Cell Mass ---
         m_sq = self.grid.m_factors['m'][..., None] ** 2
         cell_volumes = (self.grid.dx * self.grid.dy / m_sq) * bg_precomputed['dz_m_full']
         
         # Multiplying volumetric density (field) by volume gives absolute mass (kg)
         cell_mass = field * cell_volumes
         
-        # --- 2. X-Advection ---
+        # --- X-Advection ---
         vmap_x_inner = jax.vmap(self.advect_1d, in_axes=(1, 1), out_axes=1)
         vmap_x = jax.vmap(vmap_x_inner, in_axes=(2, 2), out_axes=2)
         mass_x = vmap_x(cell_mass, cfl_x)
         
-        # --- 3. Y-Advection ---
+        # --- Y-Advection ---
         vmap_y_inner = jax.vmap(self.advect_1d, in_axes=(0, 0), out_axes=0)
         vmap_y = jax.vmap(vmap_y_inner, in_axes=(2, 2), out_axes=2)
         mass_y = vmap_y(mass_x, cfl_y)
         
-        # --- 4. Z-Advection ---
+        # --- Z-Advection ---
         vmap_z_inner = jax.vmap(self.advect_1d, in_axes=(0, 0), out_axes=0)
         vmap_z = jax.vmap(vmap_z_inner, in_axes=(1, 1), out_axes=1)
         mass_z = vmap_z(mass_y, cfl_z)
         
-        # --- 5. Convert Absolute Mass back to Volumetric Density ---
+        # --- Convert Absolute Mass back to Volumetric Density ---
         return mass_z / cell_volumes
 
 
 class SISLStepper3D:
-    def __init__(self, physics, dt, use_mass_fixer=False, tracer_keys=None):
+    def __init__(self, physics, dt, tracer_keys=None):
         self.physics, self.dt = physics, dt
-        self.use_mass_fixer = use_mass_fixer
         self.tracer_keys = tracer_keys if tracer_keys is not None else []
         self.advector = SemiLagrangianAdvector3D(physics.grid, physics, dt)
         self.ffsl_advector = FluxFormAdvector(physics.grid, dt)
         self.implicit_solver = SemiImplicitSolver3D(physics, dt)
-
-    def _apply_mass_fixer(self, state_before, state_after):
-        """Applies a global multiplicative mass fixer to passive tracers in 3D."""
-        # 3D Cell volume incorporating the 2D map scale factor
-        m_sq = self.physics.grid.m_factors['m'][..., None] ** 2
-        cell_volumes = (self.physics.grid.dx * self.physics.grid.dy / m_sq) * self.physics.grid.dz
-        
-        rho_before = state_before['rho']
-        rho_after = state_after['rho']
-        fixed_state = dict(state_after)
-        
-        for key in self.tracer_keys:
-            if key in state_before and key in state_after:
-                tr_before, tr_after = state_before[key], state_after[key]
-                mass_before = jnp.sum(tr_before * rho_before * cell_volumes)
-                mass_after = jnp.sum(tr_after * rho_after * cell_volumes)
-                ratio = mass_before / (mass_after + 1e-15)
-                fixed_state[key] = tr_after * ratio
-                
-        return fixed_state
 
     def integrate(self, state, t_start, num_steps, forcing, bc_fn):
         """Wraps the step function in a JAX scan loop for fast execution."""
@@ -319,15 +298,12 @@ class SISLStepper3D:
         pi_prime_in = state_prime_n['pi'] + (1.0 - alpha) * self.dt * tends_n['pi']
 
         # --- 3D KINEMATIC ADVECTION ---
-        # Average u and v to the w-grid shape (nx, ny, nz+1)
         u_m = self.physics.op.avg(state['u'], axis=0, from_loc='u', to_loc='m')
         u_w = self.physics.op.avg(u_m, axis=2, from_loc='m', to_loc='w')
         
         v_m = self.physics.op.avg(state['v'], axis=1, from_loc='v', to_loc='m')
         v_w = self.physics.op.avg(v_m, axis=2, from_loc='m', to_loc='w')
 
-        # The full 3D kinematic constraint
-        # w = u(dz/dx) + v(dz/dy) + eta_dot(dz/dzeta)
         residual_n = (
             bg_precomputed['dz_w_full'] * state['eta_dot'] + 
             u_w * self.physics.grid.z_xi_w + 
@@ -343,13 +319,10 @@ class SISLStepper3D:
         rhs_w = self.advector.advect_cubic(w_in, coords_w, use_limiter=False)
         rhs_pi_prime = self.advector.advect_cubic(pi_prime_in, coords_m, use_limiter=False)
         
-        # LIMITED: Thermodynamic scalars must not checkerboard
-        # rho_next = self.advector.advect_cubic(state['rho'], coords_m, use_limiter=False)
-        # th_v_next = self.advector.advect_cubic(state['th_v'], coords_m, use_limiter=False)
-
-        # Use conservative FFSL advection to prevent checkerboarding
+        # STRICT CONSERVATION: Advect mass with FFSL scheme
         rho_next = self.ffsl_advector.advect_3d_split(state['rho'], state, bg_precomputed)
-        # Use cubic advection for virtual potential temperature!
+        
+        # INTENSIVE DYNAMICS: Advect virtual potential temperature with Tricubic SL
         th_v_next = self.advector.advect_cubic(state['th_v'], coords_m, use_limiter=False)
         
         # Add the buoyancy correction for w using the cleanly advected th_v
@@ -357,7 +330,7 @@ class SISLStepper3D:
         th_v_prime_w_next = self.physics.op.avg(th_v_prime_next, axis=2, from_loc='m', to_loc='w')
         rhs_w += 0.5 * self.dt * (self.physics.c['g'] * (th_v_prime_w_next / th_v_bg_w))
 
-        # --- FIX: ZERO OUT RHS BOUNDARIES FOR KINEMATIC CONSTRAINTS ---
+        # --- ZERO OUT RHS BOUNDARIES FOR KINEMATIC CONSTRAINTS ---
         rhs_w = rhs_w.at[:, :, 0].set(0.0)
         rhs_w = rhs_w.at[:, :, -1].set(0.0)
         R_eta_dot = R_eta_dot.at[:, :, 0].set(0.0)
@@ -379,9 +352,7 @@ class SISLStepper3D:
         # Tracers use FFSL to strictly conserve mass
         for key in self.tracer_keys:
             if key in state:
-                rho_tr_next = ffsl_advector.advect_3d_split(state['rho'] * state[key], state, bg_precomputed)
+                rho_tr_next = self.ffsl_advector.advect_3d_split(state['rho'] * state[key], state, bg_precomputed)
                 state_next[key] = rho_tr_next / (rho_next + 1e-15)
 
-        # Remove self._apply_mass_fixer entirely! 
-        # (It is no longer needed since rho and tracers are perfectly conserved)
         return bc_fn(state_next, forcing)

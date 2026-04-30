@@ -48,33 +48,61 @@ def test_2_backtracking(grid, advector, nx, ny, nz, dx, dt):
     print(f"Max trajectory error: {error:.5f} indices")
     assert error < 1e-4, "Semi-Lagrangian iterative backtracker is failing."
 
-def test_3_mass_consistency(grid, nx, ny, nz, dx, dy, dt):
-    print("\n--- MASS CONSISTENCY TEST ---")
+def test_3_mass_conservation(grid, physics, dt):
+    """Tests the Flux-Form Semi-Lagrangian scheme for exact mass conservation."""
+    print("\n" + "="*40)
+    print("TEST 3: FFSL STRICT MASS CONSERVATION (FLOAT64)")
+    print("="*40)
+
+    # Diagnose background density for the new test state
+    rho_bg = physics.c['p0'] / (physics.c['Rd'] * physics.theta_bg) * \
+             (physics.pi_bg ** (physics.c['cvd'] / physics.c['Rd']))
+
+    bg_state_ref = {
+        'pi': physics.pi_bg,
+        'th_v': physics.theta_bg,
+        'rho': rho_bg
+    }
+    bg_precomputed = physics.precompute_bg(bg_state_ref)
+
+    state = {
+        'u': jnp.ones((grid.nx + 1, grid.ny, grid.nz), dtype=jnp.float64) * 15.0,
+        'v': jnp.ones((grid.nx, grid.ny + 1, grid.nz), dtype=jnp.float64) * 5.0,
+        'w': jnp.zeros((grid.nx, grid.ny, grid.nz + 1), dtype=jnp.float64),
+        'pi': physics.pi_bg,
+        'th_v': physics.theta_bg,
+        'eta_dot': jnp.zeros((grid.nx, grid.ny, grid.nz + 1), dtype=jnp.float64),
+        'rho': rho_bg, 
+        'tracer_1': jnp.ones((grid.nx, grid.ny, grid.nz), dtype=jnp.float64) * 2.5 
+    }
+    
+    # 1. Calculate Initial Mass (explicitly in float64)
     m_sq = grid.m_factors['m'][..., None] ** 2
+    cell_volumes = (grid.dx * grid.dy / m_sq) * grid.dz_m_full
+    mass_initial = float(jnp.sum(state['rho'] * cell_volumes, dtype=jnp.float64))
+    print(f"Initial Mass: {mass_initial:.6e} kg")
 
-    # This uses the true 3D physical depths (dz_m_full) instead of the 1D logical depth (dz)
-    cell_volumes = (dx * dy / m_sq) * grid.dz_m_full
+    # 2. Enforce a Closed Box (Solid Walls)
+    state_closed = dict(state)
+    state_closed['u'] = state['u'].at[0, :, :].set(0.0).at[-1, :, :].set(0.0)
+    state_closed['v'] = state['v'].at[:, 0, :].set(0.0).at[:, -1, :].set(0.0)
+    state_closed['eta_dot'] = state['eta_dot'].at[:, :, 0].set(0.0).at[:, :, -1].set(0.0)
 
-    rho_init = jnp.ones((nx, ny, nz))
-    tr1_init = jnp.ones((nx, ny, nz))
+    # 3. Advect using the new FFSL scheme
+    ffsl_advector = FluxFormAdvector(grid, dt)
+    advect_jit = jax.jit(ffsl_advector.advect_3d_split)
+    
+    rho_next = advect_jit(state_closed['rho'], state_closed, bg_precomputed)
 
-    mass_initial = float(jnp.sum(tr1_init * rho_init * cell_volumes))
-    print(f"Initial Mass integral: {mass_initial:e} kg")
-
-    stepper = SISLStepper3D(DummyPhysics(grid), dt, use_mass_fixer=True, tracer_keys=['tr1'])
-
-    state_before = {'rho': rho_init, 'tr1': tr1_init}
-    state_after_loss = {'rho': rho_init * 0.95, 'tr1': tr1_init * 0.95}
-
-    fixed_state = stepper._apply_mass_fixer(state_before, state_after_loss)
-
-    mass_unfixed = float(jnp.sum(state_after_loss['tr1'] * state_after_loss['rho'] * cell_volumes))
-    mass_fixed = float(jnp.sum(fixed_state['tr1'] * state_after_loss['rho'] * cell_volumes))
-
-    print(f"Mass after advection loss: {mass_unfixed:e} kg")
-    print(f"Mass after fixer applied:  {mass_fixed:e} kg")
-
-    assert jnp.isclose(mass_initial, mass_fixed, rtol=1e-4), "Mass fixer is not conserving volume!"
+    # 4. Calculate Final Mass (explicitly in float64)
+    mass_final = float(jnp.sum(rho_next * cell_volumes, dtype=jnp.float64))
+    print(f"Final Mass:   {mass_final:.6e} kg")
+    
+    drift = mass_final - mass_initial
+    print(f"Mass Drift:   {drift:.6e} kg")
+    
+    assert abs(drift) / mass_initial < 1e-14, f"FFSL scheme leaked mass! Drift: {drift}"
+    print("STATUS: SUCCESS (Mass conserved to high precision)")
 
 def test_4_advection_limiter(grid, advector, nx, ny, nz):
     print("\n--- 4. ADVECTION LIMITER TEST ---")
@@ -218,63 +246,6 @@ def test_8_kinematic_bottom_boundary(grid, physics, nx, ny, nz, dt):
     # Ensure the solver is perfectly matching the terrain slope constraint
     assert jnp.isclose(max_w_expected, max_w_actual, rtol=1e-4), "Solver is not enforcing flow over the mountain!"
 
-def test_9_flux_form_mass_conservation(grid, physics, dt):
-    """Tests the Flux-Form Semi-Lagrangian scheme for exact mass conservation."""
-    print("\n" + "="*40)
-    print("TEST 9: FFSL STRICT MASS CONSERVATION (FLOAT64)")
-    print("="*40)
-
-    # Diagnose background density for the new test state
-    rho_bg = physics.c['p0'] / (physics.c['Rd'] * physics.theta_bg) * \
-             (physics.pi_bg ** (physics.c['cvd'] / physics.c['Rd']))
-
-    bg_state_ref = {
-        'pi': physics.pi_bg,
-        'th_v': physics.theta_bg,
-        'rho': rho_bg
-    }
-    bg_precomputed = physics.precompute_bg(bg_state_ref)
-
-    state = {
-        'u': jnp.ones((grid.nx + 1, grid.ny, grid.nz), dtype=jnp.float64) * 15.0,
-        'v': jnp.ones((grid.nx, grid.ny + 1, grid.nz), dtype=jnp.float64) * 5.0,
-        'w': jnp.zeros((grid.nx, grid.ny, grid.nz + 1), dtype=jnp.float64),
-        'pi': physics.pi_bg,
-        'th_v': physics.theta_bg,
-        'eta_dot': jnp.zeros((grid.nx, grid.ny, grid.nz + 1), dtype=jnp.float64),
-        'rho': rho_bg, 
-        'tracer_1': jnp.ones((grid.nx, grid.ny, grid.nz), dtype=jnp.float64) * 2.5 
-    }
-    
-    # 1. Calculate Initial Mass (explicitly in float64)
-    m_sq = grid.m_factors['m'][..., None] ** 2
-    cell_volumes = (grid.dx * grid.dy / m_sq) * grid.dz_m_full
-    mass_initial = float(jnp.sum(state['rho'] * cell_volumes, dtype=jnp.float64))
-    print(f"Initial Mass: {mass_initial:.6e} kg")
-
-    # 2. Enforce a Closed Box (Solid Walls)
-    state_closed = dict(state)
-    state_closed['u'] = state['u'].at[0, :, :].set(0.0).at[-1, :, :].set(0.0)
-    state_closed['v'] = state['v'].at[:, 0, :].set(0.0).at[:, -1, :].set(0.0)
-    state_closed['eta_dot'] = state['eta_dot'].at[:, :, 0].set(0.0).at[:, :, -1].set(0.0)
-
-    # 3. Advect using the new FFSL scheme
-    ffsl_advector = FluxFormAdvector(grid, dt)
-    advect_jit = jax.jit(ffsl_advector.advect_3d_split)
-    
-    rho_next = advect_jit(state_closed['rho'], state_closed, bg_precomputed)
-
-    # 4. Calculate Final Mass (explicitly in float64)
-    mass_final = float(jnp.sum(rho_next * cell_volumes, dtype=jnp.float64))
-    print(f"Final Mass:   {mass_final:.6e} kg")
-    
-    drift = mass_final - mass_initial
-    print(f"Mass Drift:   {drift:.6e} kg")
-    
-    assert abs(drift) / mass_initial < 1e-14, f"FFSL scheme leaked mass! Drift: {drift}"
-    print("STATUS: SUCCESS (Mass conserved to high precision)")
-
-
 if __name__ == "__main__":
     nx, ny, nz = 32, 32, 15
     dx, dy, dz = 1000.0, 1000.0, 500.0
@@ -300,12 +271,11 @@ if __name__ == "__main__":
 
     test_1_geometry(grid)
     test_2_backtracking(grid, advector, nx, ny, nz, dx, dt)
-    test_3_mass_consistency(grid, nx, ny, nz, dx, dy, dt)
+    test_3_mass_conservation(grid, physics, dt)
     test_4_advection_limiter(grid, advector, nx, ny, nz)
     test_5_hydrostatic_balance(grid, physics, nx, ny, nz)
     test_6_semi_implicit_solver(physics, dt, nx, ny, nz)
     test_7_davies_sponge(grid, nx, ny, nz)
     test_8_kinematic_bottom_boundary(grid, physics, nx, ny, nz, dt)
-    test_9_flux_form_mass_conservation(grid, physics, dt)
 
     print("\nAll Boundary & Kinematic tests completed successfully!")
