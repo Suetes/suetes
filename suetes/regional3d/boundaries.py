@@ -15,35 +15,35 @@ class DaviesSponge:
     def _compute_mask(self, nx, ny, depth):
         X, Y = jnp.meshgrid(jnp.arange(nx), jnp.arange(ny), indexing='ij')
         
-        # Only apply the sponge to an axis if the domain is wide enough to support it
         dist_x = jnp.minimum(X, nx - 1 - X) if nx > 2 * depth else jnp.full_like(X, 9999)
         dist_y = jnp.minimum(Y, ny - 1 - Y) if ny > 2 * depth else jnp.full_like(Y, 9999)
         
         dist_to_bound = jnp.minimum(dist_x, dist_y)
         alpha = jnp.where(dist_to_bound < depth, jnp.cos(0.5 * jnp.pi * dist_to_bound / depth) ** 2, 0.0)
-        
-        # Add Z-dimension for 3D broadcasting
+                
         return jnp.expand_dims(alpha, axis=-1)
 
     def blend(self, model_state, external_state):
-        def apply_relaxation(mod_val, ext_val, mask):
-            return (1.0 - mask) * mod_val + mask * ext_val
-
         blended = {}
+        
+        # STRICT RULE: Never blend 'pi', 'rho', or 'eta_dot'
+        # 'w' is included to absorb outgoing gravity waves (Rayleigh damping)
+        blend_vars = ['u', 'v', 'w', 'th_v', 'q']
+        
         for k in model_state.keys():
-            # Assign the correct staggered mask
-            if k == 'u':
-                mask = self.masks['u']
-            elif k == 'v':
-                mask = self.masks['v']
+            if k in blend_vars and k in external_state:
+                if k == 'u':
+                    mask = self.masks['u']
+                elif k == 'v':
+                    mask = self.masks['v']
+                elif k == 'w':
+                    mask = self.masks['m'] # w shares horizontal M-points
+                else:
+                    mask = self.masks['m']
+                
+                blended[k] = (1.0 - mask) * model_state[k] + mask * external_state[k]
             else:
-                # w, pi, rho, th_v, eta_dot, and ALL tracers use the mass-grid laterally
-                mask = self.masks['m']
-            
-            # Apply relaxation if the external boundary state has this variable
-            if k in external_state:
-                blended[k] = apply_relaxation(model_state[k], external_state[k], mask)
-            else:
+                # Diagnostic and mass variables strictly follow the internal model physics
                 blended[k] = model_state[k]
                 
         return blended

@@ -11,6 +11,9 @@ class HorizontalRegridder:
         self.lon_0 = era5_lons[0]
         self.dlon = era5_lons[1] - era5_lons[0]
 
+        # Check if the ERA5 dataset uses negative longitudes
+        self.is_negative_lon = self.lon_0 < 0 
+
         self.target_indices = {
             'm': self._compute_fractional_indices(self.grid.x_m, self.grid.y_m),
             'u': self._compute_fractional_indices(self.grid.x_c, self.grid.y_m),
@@ -20,7 +23,12 @@ class HorizontalRegridder:
     def _compute_fractional_indices(self, x_coords, y_coords):
         Xi, Yi = jnp.meshgrid(x_coords, y_coords, indexing='ij')
         target_lat, target_lon = self.grid.proj.get_lat_lon(Xi, Yi)
-        target_lon = jnp.mod(target_lon, 360.0)
+        
+        target_lon = jnp.where(
+            self.is_negative_lon,
+            (target_lon + 180.0) % 360.0 - 180.0, # Map to [-180, 180]
+            jnp.mod(target_lon, 360.0)            # Map to [0, 360]
+        )
         
         idx_lat = (target_lat - self.lat_0) / self.dlat
         idx_lon = (target_lon - self.lon_0) / self.dlon
@@ -30,11 +38,8 @@ class HorizontalRegridder:
     def regrid_3d(self, field_era5_3d, loc='m'):
         """Regrids a (levels, lat, lon) array to (levels, nx, ny)."""
         coords = self.target_indices[loc]
-        # Vectorize map_coordinates over the vertical levels (axis 0)
         vmap_regrid = jax.vmap(lambda f: jnd.map_coordinates(f, coords, order=1, mode='nearest'), in_axes=0)
-        
         regridded = vmap_regrid(field_era5_3d)
-        # Transpose to (nx, ny, levels) to prepare for column-wise vertical interpolation
         return jnp.transpose(regridded, (1, 2, 0))
 
 
@@ -61,8 +66,7 @@ class BoundaryProcessor:
 
     def _interp_3d(self, target_z, z_era5, var_era5):
         """Interpolates an ERA5 column to the Suetes terrain-following column."""
-        # Use argsort to guarantee strictly ascending coordinates, fixing the 
-        # "underground" pressure level problem perfectly.
+        # Use argsort to guarantee strictly ascending coordinates
         sort_idx = jnp.argsort(z_era5, axis=-1)
         z_era5_sorted = jnp.take_along_axis(z_era5, sort_idx, axis=-1)
         var_era5_sorted = jnp.take_along_axis(var_era5, sort_idx, axis=-1)
@@ -86,8 +90,29 @@ class BoundaryProcessor:
         q_era5 = self.regridder.regrid_3d(stitched_era5_state['q'], loc='m')
         omega_era5 = self.regridder.regrid_3d(stitched_era5_state['omega'], loc='m')
         
-        u_era5 = self.regridder.regrid_3d(stitched_era5_state['u'], loc='u')
-        v_era5 = self.regridder.regrid_3d(stitched_era5_state['v'], loc='v')
+        # --- 1a. U-Face Wind Rotation ---
+        # Interpolate BOTH geographic u and v to the staggered u-points
+        u_geo_at_u = self.regridder.regrid_3d(stitched_era5_state['u'], loc='u')
+        v_geo_at_u = self.regridder.regrid_3d(stitched_era5_state['v'], loc='u')
+        
+        Xi_u, Yi_u = jnp.meshgrid(self.grid.x_c, self.grid.y_m, indexing='ij')
+        gamma_u = self.grid.proj.get_convergence_angle(Xi_u, Yi_u)
+        gamma_u_3d = jnp.expand_dims(gamma_u, axis=-1)
+        
+        # Rotate into Grid X/Y basis and keep only the u-component
+        u_era5 = u_geo_at_u * jnp.cos(gamma_u_3d) + v_geo_at_u * jnp.sin(gamma_u_3d)
+
+        # --- 1b. V-Face Wind Rotation ---
+        # Interpolate BOTH geographic u and v to the staggered v-points
+        u_geo_at_v = self.regridder.regrid_3d(stitched_era5_state['u'], loc='v')
+        v_geo_at_v = self.regridder.regrid_3d(stitched_era5_state['v'], loc='v')
+        
+        Xi_v, Yi_v = jnp.meshgrid(self.grid.x_m, self.grid.y_c, indexing='ij')
+        gamma_v = self.grid.proj.get_convergence_angle(Xi_v, Yi_v)
+        gamma_v_3d = jnp.expand_dims(gamma_v, axis=-1)
+        
+        # Rotate into Grid X/Y basis and keep only the v-component
+        v_era5 = -u_geo_at_v * jnp.sin(gamma_v_3d) + v_geo_at_v * jnp.cos(gamma_v_3d)
 
         # --- 2. Thermodynamics ---
         # Thermodynamics are computed entirely on the mass points
@@ -109,6 +134,12 @@ class BoundaryProcessor:
         
         # W sits on the vertical cell faces but shares the horizontal coordinates of M
         state['w'] = self._interp_3d(self.grid.Z_w, z_era5_m, w_era5)
+        
+        # --- THE FIX 2: STRICT KINEMATIC BOUNDARIES ---
+        # ERA5 has tiny non-zero velocities at the edges. 
+        # We must zero them out so the Sponge doesn't fight the implicit solver!
+        state['w'] = state['w'].at[:, :, 0].set(0.0)
+        state['w'] = state['w'].at[:, :, -1].set(0.0)
         
         # --- 4. Kinematics ---
         state['eta_dot'] = jnp.zeros_like(state['w'])

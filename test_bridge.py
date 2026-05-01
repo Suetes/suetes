@@ -6,13 +6,13 @@ from suetes.preprocessing.topography import TopographyProcessor
 from suetes.preprocessing.era2suetes import BoundaryProcessor
 
 def main():
-    # 1. Base Setup (600x600 km domain)
+    # Base setup (600x600 km domain)
     nx, ny, nz = 300, 300, 40
     dx, dy, dz = 2000.0, 2000.0, 500.0
     lat_c, lon_c = 45.0, 5.0
-    sponge_depth = 15
+    sponge_depth = 20
 
-    print("1. Initializing Topography and Grid...")
+    print("Initializing topography and grid...")
     base_grid = RegionalGrid3D(nx, ny, nz, dx, dy, dz, lat_c, lon_c)
     
     topo_proc = TopographyProcessor(
@@ -24,26 +24,26 @@ def main():
     # Rebuild the final grid with high-res 3D terrain
     grid = RegionalGrid3D(nx, ny, nz, dx, dy, dz, lat_c, lon_c, h_func=h_func)
 
-    # 2. Process ERA5 Raw Data
-    print("2. Stitching ERA5 Data...")
+    # Process ERA5 raw data
+    print("Stitching ERA5 data...")
     era5_proc = ERA5Processor(
         pl_path="suetes/data/suetes_test_run_pressure_levels.nc",
         sl_path="suetes/data/suetes_test_run_single_levels.nc"
     )
     stitched_state = era5_proc.get_stitched_state(time_idx=0)
 
-    # 3. The Bridge (ERA5 -> Suetes)
-    print("3. Running Boundary Processor (Horizontal & Vertical Interpolation)...")
+    # Bridge (ERA5 -> Suetes)
+    print("Running boundary processor (Horizontal and vertical interpolation)...")
     constants = {
         'g': 9.81, 'Rd': 287.0, 'cp': 1004.0, 'p0': 100000.0, 'epsilon': 0.622
     }
     bridge = BoundaryProcessor(grid, stitched_state['latitude'], stitched_state['longitude'], constants)
     
-    # BOOM. This is your model-ready state!
+    # This is the model-ready state
     suetes_state = bridge.process(stitched_state)
 
-    # 4. Verification Plot
-    print("4. Generating Verification Plot...")
+    # Verification plot
+    print("Generating verification plot...")
     
     mid_y_idx = ny // 2
     x_coords = grid.x_m / 1000.0  
@@ -55,7 +55,6 @@ def main():
     # Get true surface topography from the W-grid (bottom interface)
     terrain_z = grid.Z_w[:, mid_y_idx, 0]
 
-    # --- THE VISUAL FIX ---
     # Pad the data down to the exact terrain surface so there is no visual gap
     Z_slice_padded = np.concatenate([terrain_z[:, None], Z_slice], axis=1)
     th_v_slice_padded = np.concatenate([th_v_slice[:, 0:1], th_v_slice], axis=1)
@@ -67,12 +66,12 @@ def main():
     contour = ax.contourf(X_2d_padded, Z_slice_padded, th_v_slice_padded, levels=30, cmap='inferno')
     plt.colorbar(contour, label='Virtual Potential Temp (th_v) [K]')
     
-    ax.fill_between(x_coords, 0, terrain_z, color='dimgray', label='Suetes Topography (GEBCO+ERA5)')
+    ax.fill_between(x_coords, 0, terrain_z, color='dimgray', label='Suetes topography (GEBCO+ERA5)')
 
     ax.set_ylim(0, 15000) 
-    ax.set_title(f"Suetes Model State (Y-Index: {mid_y_idx}) - Interpolated from ERA5")
-    ax.set_xlabel("X Distance from Domain Center [km]")
-    ax.set_ylabel("Geometric Height [m]")
+    ax.set_title(f"Suetes model state (y-index: {mid_y_idx}) - Interpolated from ERA5")
+    ax.set_xlabel("X distance from domain center [km]")
+    ax.set_ylabel("Geometric height [m]")
     ax.legend(loc='upper right')
     
     plt.tight_layout()

@@ -23,6 +23,28 @@ class ObliqueStereographic:
         
         return jnp.degrees(lat), jnp.degrees(lon)
 
+    def get_convergence_angle(self, x, y):
+        """
+        Calculates the convergence angle (gamma) between True North and Grid North.
+        Uses the robust analytical form for Oblique Stereographic projections 
+        to avoid center singularities.
+        """
+        rho = jnp.sqrt(x**2 + y**2)
+        rho = jnp.where(rho == 0, 1e-15, rho)
+        
+        c = 2.0 * jnp.arctan(rho / (2.0 * self.R))
+        sin_c = jnp.sin(c)
+        cos_c = jnp.cos(c)
+        sin_phic = jnp.sin(self.phi_c)
+        cos_phic = jnp.cos(self.phi_c)
+        
+        # Angle from Grid Y (North) to True North
+        num = x * sin_c
+        # The denominator relies smoothly on X, Y preventing the sign-flip singularity
+        den = rho * cos_c * cos_phic - y * sin_c * sin_phic 
+        
+        return jnp.arctan2(num, den)
+
 
 class RegionalGrid3D:
     def __init__(self, nx, ny, nz, dx, dy, dz, lat_center, lon_center, h_func=None, transform=None):

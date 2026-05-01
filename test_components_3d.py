@@ -7,6 +7,7 @@ from suetes.regional3d.operators import CGridOperator3D
 from suetes.regional3d.steppers import SemiLagrangianAdvector3D, SISLStepper3D, SemiImplicitSolver3D, FluxFormAdvector
 from suetes.regional3d.euler import Euler3D
 from suetes.regional3d.boundaries import DaviesSponge
+from suetes.shared.transforms import SleveSimple
 
 # Dummy physics object to satisfy the advector initialization
 class DummyPhysics:
@@ -246,6 +247,83 @@ def test_8_kinematic_bottom_boundary(grid, physics, nx, ny, nz, dt):
     # Ensure the solver is perfectly matching the terrain slope constraint
     assert jnp.isclose(max_w_expected, max_w_actual, rtol=1e-4), "Solver is not enforcing flow over the mountain!"
 
+# --- TERRAIN DIAGNOSTICS TESTS ---
+
+def schaer_2d(x, y):
+    h0, a, lam = 2000.0, 15000.0, 8000.0
+    return h0 * jnp.exp(-(x**2) / (a**2)) * (jnp.cos(jnp.pi * x / lam)**2)
+
+def setup_terrain_test_env():
+    nx, ny, nz = 150, 5, 50
+    dx, dy, dz = 1000.0, 1000.0, 400.0
+    sleve = SleveSimple(scale_s=4000.0, scale_l=15000.0, n=1.35)
+    grid = RegionalGrid3D(nx, ny, nz, dx, dy, dz, 0.0, 0.0, h_func=schaer_2d, transform=sleve)
+    op = CGridOperator3D(grid)
+    constants = {'g': 9.81, 'cp': 1004.0, 'cvd': 717.0, 'Rd': 287.0, 'p0': 100000.0}
+    physics = Euler3D(grid, op, constants, damp_height=grid.Lz, N_bv=0.01)
+    
+    bg_state_ref = {
+        'rho': physics.c['p0'] / (physics.c['Rd'] * physics.theta_bg) * \
+               (physics.pi_bg ** (physics.c['cvd'] / physics.c['Rd'])),
+        'pi': physics.pi_bg,
+        'th_v': physics.theta_bg
+    }
+    bg_precomputed = physics.precompute_bg(bg_state_ref)
+    return grid, op, physics, bg_precomputed
+
+def test_9_metric_gradients():
+    print("\n--- 9. METRIC GRADIENT CONSISTENCY ---")
+    grid, op, physics, bg = setup_terrain_test_env()
+    
+    pi_prime = jnp.zeros_like(grid.Z_m)
+    state_prime = {'u': jnp.zeros_like(grid.Z_u), 'v': jnp.zeros_like(grid.Z_v), 
+                   'w': jnp.zeros_like(grid.Z_w), 'pi': pi_prime, 'eta_dot': jnp.zeros_like(grid.Z_w)}
+    
+    tends = physics.get_tendencies(state_prime, bg)
+    
+    max_u_accel = float(jnp.max(jnp.abs(tends['u'])))
+    max_w_accel = float(jnp.max(jnp.abs(tends['w'])))
+    
+    print(f"Max spurious horizontal accel (should be ~0): {max_u_accel:.4e} m/s^2")
+    print(f"Max spurious vertical accel (should be ~0):   {max_w_accel:.4e} m/s^2")
+    
+    assert max_u_accel <= 1e-6, "The transformation metrics (z_xi) are failing to cancel the vertical pressure gradient on slopes."
+    print("STATUS: SUCCESS (Hydrostatic balance holds over topography)")
+
+def test_10_kinematic_divergence():
+    print("\n--- 10. KINEMATIC DIVERGENCE (CONSTANT FLOW) ---")
+    grid, op, physics, bg = setup_terrain_test_env()
+    
+    u_0 = 10.0
+    u_prescribed = u_0 * jnp.ones_like(grid.Z_u)
+    v_prescribed = jnp.zeros_like(grid.Z_v)
+    
+    u_m = op.avg(u_prescribed, axis=0, from_loc='u', to_loc='m')
+    u_w = op.avg(u_m, axis=2, from_loc='m', to_loc='w')
+    w_prescribed = u_w * grid.z_xi_w
+    
+    state_prime = {'u': u_prescribed, 'v': v_prescribed, 
+                   'w': w_prescribed, 'pi': jnp.zeros_like(grid.Z_m), 'eta_dot': jnp.zeros_like(grid.Z_w)}
+    
+    tends = physics.get_tendencies(state_prime, bg)
+    
+    max_div = float(jnp.max(jnp.abs(tends['pi'])))
+    print(f"Max spurious pressure tendency from divergence: {max_div:.4e} 1/s")
+    
+    assert max_div <= 1e-5, "The 3D divergence operator is registering false divergence over slopes."
+    print("STATUS: SUCCESS (3D Divergence is clean)")
+
+def test_11_vertical_metric_smoothness():
+    print("\n--- 11. VERTICAL METRIC (dz) TERROR CHECK ---")
+    grid, op, physics, bg = setup_terrain_test_env()
+    
+    dz_min = float(jnp.min(bg['dz_w_full']))
+    dz_max = float(jnp.max(bg['dz_w_full']))
+    
+    print(f"Physical Layer Thickness (dz) - Min: {dz_min:.2f} m, Max: {dz_max:.2f} m")
+    assert dz_min >= 10.0, "Your SLEVE coordinate is compressing layers too thinly over the mountain peaks. This will shatter the CFL condition and cause GMRES to explode."
+    print("STATUS: SUCCESS (Vertical grid spacing is safe)")
+
 if __name__ == "__main__":
     nx, ny, nz = 32, 32, 15
     dx, dy, dz = 1000.0, 1000.0, 500.0
@@ -277,5 +355,8 @@ if __name__ == "__main__":
     test_6_semi_implicit_solver(physics, dt, nx, ny, nz)
     test_7_davies_sponge(grid, nx, ny, nz)
     test_8_kinematic_bottom_boundary(grid, physics, nx, ny, nz, dt)
+    test_9_metric_gradients()
+    test_10_kinematic_divergence()
+    test_11_vertical_metric_smoothness()
 
-    print("\nAll Boundary & Kinematic tests completed successfully!")
+    print("\nAll boundary, kinematic and terrain diagnostic tests completed successfully!")

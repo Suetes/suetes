@@ -12,6 +12,8 @@ dependencies = [
     "scipy",
     "jax",
     "jaxlib"
+    "xarray",
+    "cartopy"
 ]
 
 [tool.setuptools]

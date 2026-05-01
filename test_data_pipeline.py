@@ -1,6 +1,6 @@
 import xarray as xr
 from suetes.preprocessing.processor import ERA5Processor
-from suetes.vis.visualizer import ERA5Visualizer
+from suetes.vis.visualizer import Visualizer
 
 def main():
     print("1. Initializing Processor...")
@@ -13,7 +13,7 @@ def main():
     state = processor.get_stitched_state(time_idx=0)
 
     print("3. Initializing Visualizer...")
-    viz = ERA5Visualizer()
+    viz = Visualizer()
 
     print("4. Generating Plots...")
     # Cross Section
