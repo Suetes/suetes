@@ -73,6 +73,53 @@ class BoundaryProcessor:
 
         return self._column_interp(target_z, z_era5_sorted, var_era5_sorted)
 
+    def _balance_global_mass(self, state):
+        """
+        Calculates the net mass flux through the four lateral boundaries and 
+        applies a barotropic correction to ensure exact global mass conservation.
+        """
+        # 1. Approximate density on the boundaries (using the outermost interior cells)
+        rho_w = state['rho'][0, :, :]
+        rho_e = state['rho'][-1, :, :]
+        rho_s = state['rho'][:, 0, :]
+        rho_n = state['rho'][:, -1, :]
+
+        # 2. Get the vertical cell heights at the boundaries
+        dz_w = self.grid.dz_m_full[0, :, :]
+        dz_e = self.grid.dz_m_full[-1, :, :]
+        dz_s = self.grid.dz_m_full[:, 0, :]
+        dz_n = self.grid.dz_m_full[:, -1, :]
+
+        # 3. Calculate absolute mass flux (kg/s) through each face
+        # Flux = sum(rho * v_normal * Area)
+        # Note: West/South are inflow (+), East/North are outflow (-)
+        flux_west  = jnp.sum(state['u'][0, :, :] * rho_w * self.grid.dy * dz_w)
+        flux_east  = jnp.sum(state['u'][-1, :, :] * rho_e * self.grid.dy * dz_e)
+        flux_south = jnp.sum(state['v'][:, 0, :] * rho_s * self.grid.dx * dz_s)
+        flux_north = jnp.sum(state['v'][:, -1, :] * rho_n * self.grid.dx * dz_n)
+
+        # Net mass accumulation in the domain (kg/s)
+        net_flux = (flux_west - flux_east) + (flux_south - flux_north)
+
+        # 4. Calculate total boundary surface mass-area to distribute the correction
+        area_west  = jnp.sum(rho_w * self.grid.dy * dz_w)
+        area_east  = jnp.sum(rho_e * self.grid.dy * dz_e)
+        area_south = jnp.sum(rho_s * self.grid.dx * dz_s)
+        area_north = jnp.sum(rho_n * self.grid.dx * dz_n)
+        
+        total_mass_area = area_west + area_east + area_south + area_north
+
+        # 5. Calculate the uniform velocity correction (m/s)
+        V_c = net_flux / total_mass_area
+
+        # 6. Apply the correction to the normal winds on ALL faces
+        # We want to subtract the correction from inflow and add it to outflow
+        # so that the net flux is pushed exactly to zero.
+        state['u'] = state['u'].at[:, :, :].add(-V_c)
+        state['v'] = state['v'].at[:, :, :].add(-V_c)
+        
+        return state
+
     def process(self, stitched_era5_state):
         """
         Takes the raw numpy arrays from the ERA5Processor, applies horizontal regridding, 
@@ -123,25 +170,49 @@ class BoundaryProcessor:
 
         # --- 3. Vertical Interpolation to 3D Grid ---
         state = {}
-        # Notice we pair the _u fields with z_era5_u, and _v fields with z_era5_v
         state['u'] = self._interp_3d(self.grid.Z_u, z_era5_u, u_era5)
         state['v'] = self._interp_3d(self.grid.Z_v, z_era5_v, v_era5)
-        
         state['th_v'] = self._interp_3d(self.grid.Z_m, z_era5_m, th_v_era5)
-        state['pi'] = self._interp_3d(self.grid.Z_m, z_era5_m, pi_era5)
-        state['rho'] = self._interp_3d(self.grid.Z_m, z_era5_m, rho_era5)
         state['q'] = self._interp_3d(self.grid.Z_m, z_era5_m, q_era5)
-        
-        # W sits on the vertical cell faces but shares the horizontal coordinates of M
         state['w'] = self._interp_3d(self.grid.Z_w, z_era5_m, w_era5)
         
-        # --- THE FIX 2: STRICT KINEMATIC BOUNDARIES ---
-        # ERA5 has tiny non-zero velocities at the edges. 
-        # We must zero them out so the Sponge doesn't fight the implicit solver!
-        state['w'] = state['w'].at[:, :, 0].set(0.0)
-        state['w'] = state['w'].at[:, :, -1].set(0.0)
+        # --- HYDROSTATIC RECONSTRUCTION ---
+        pi_interp = self._interp_3d(self.grid.Z_m, z_era5_m, pi_era5)
+        pi_anchor_top = pi_interp[:, :, -1] 
         
-        # --- 4. Kinematics ---
-        state['eta_dot'] = jnp.zeros_like(state['w'])
+        delta_z = self.grid.Z_m[:, :, 1:] - self.grid.Z_m[:, :, :-1]
+        th_v_w = 0.5 * (state['th_v'][:, :, 1:] + state['th_v'][:, :, :-1])
+        delta_pi = -(self.c['g'] * delta_z) / (self.c['cp'] * th_v_w)
+        
+        # Reverse cumsum to subtract pressure increments from the top down
+        # (JAX doesn't have a native reverse_cumsum, so we flip, sum, and flip back)
+        pi_cumsum_rev = jnp.cumsum(delta_pi[..., ::-1], axis=-1)[..., ::-1]
+        
+        state['pi'] = jnp.concatenate([
+            jnp.expand_dims(pi_anchor_top, axis=2) - pi_cumsum_rev,
+            jnp.expand_dims(pi_anchor_top, axis=2)
+        ], axis=2)
+        
+        # Re-derive rho to strictly satisfy the Equation of State
+        state['rho'] = self.c['p0'] / (self.c['Rd'] * state['th_v']) * \
+                       (state['pi'] ** (self.c['cvd'] / self.c['Rd']))
 
+        # --- KINEMATIC BOUNDARIES ---
+        # 1. Calculate terrain-following w at the surface
+        u_m_surf = 0.5 * (state['u'][:-1, :, 0] + state['u'][1:, :, 0])
+        v_m_surf = 0.5 * (state['v'][:, :-1, 0] + state['v'][:, 1:, 0])
+        
+        kinematic_bottom = (
+            u_m_surf * self.grid.z_xi_w[:, :, 0] + 
+            v_m_surf * self.grid.z_eta_w[:, :, 0]
+        )
+        
+        # 2. Apply strict boundary conditions, PRESERVING the interior w!
+        state['w'] = state['w'].at[:, :, 0].set(kinematic_bottom) 
+        state['w'] = state['w'].at[:, :, -1].set(0.0)             
+        state['eta_dot'] = jnp.zeros_like(state['w'])
+        
+        # --- NEW: ENFORCE GLOBAL MASS CONSERVATION ---
+        state = self._balance_global_mass(state)
+        
         return state

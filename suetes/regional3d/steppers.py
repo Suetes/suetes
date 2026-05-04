@@ -176,7 +176,10 @@ class SemiImplicitSolver3D:
                 'eta_dot': L_out['eta_dot'] 
             }
 
-        x_sol_scaled, _ = gmres(A_fn, rhs_scaled, x0=rhs_scaled, tol=1e-5, maxiter=10, restart=10, M=M_fn)
+        x_sol_scaled, info = gmres(
+            A_fn, rhs_scaled, x0=rhs_scaled, 
+            tol=1e-4, maxiter=50, restart=50, M=M_fn
+        )
         
         return {
             'u': x_sol_scaled['u'], 
@@ -281,17 +284,20 @@ class SISLStepper3D:
             'th_v': self.physics.theta_bg
         }
         bg_precomputed = self.physics.precompute_bg(bg_state_ref)
+        
+        # Calculate the thermodynamic perturbation
+        th_v_prime_n = state['th_v'] - self.physics.theta_bg
+        
         state_prime_n = {
             'u': state['u'], 'v': state['v'], 'w': state['w'], 
-            'pi': state['pi'] - self.physics.pi_bg, 'eta_dot': state['eta_dot']
+            'pi': state['pi'] - self.physics.pi_bg, 'eta_dot': state['eta_dot'],
+            'th_v_prime_u': self.physics.op.avg(th_v_prime_n, axis=0, from_loc='m', to_loc='u'),
+            'th_v_prime_v': self.physics.op.avg(th_v_prime_n, axis=1, from_loc='m', to_loc='v'),
+            'th_v_prime_w': self.physics.op.avg(th_v_prime_n, axis=2, from_loc='m', to_loc='w')
         }
-        tends_n = self.physics.get_tendencies(state_prime_n, bg_precomputed)
         
-        th_v_prime_n = state['th_v'] - self.physics.theta_bg
-        th_v_bg_w = self.physics.op.avg(self.physics.theta_bg, axis=2, from_loc='m', to_loc='w')
-        th_v_prime_w_n = self.physics.op.avg(th_v_prime_n, axis=2, from_loc='m', to_loc='w')
-        tends_n['w'] += self.physics.c['g'] * (th_v_prime_w_n / th_v_bg_w)
-
+        tends_n = self.physics.get_tendencies(state_prime_n, bg_precomputed, is_explicit=True)
+        
         u_in = state['u'] + (1.0 - alpha) * self.dt * tends_n['u']
         v_in = state['v'] + (1.0 - alpha) * self.dt * tends_n['v']
         w_in = state['w'] + (1.0 - alpha) * self.dt * tends_n['w']
@@ -328,7 +334,7 @@ class SISLStepper3D:
         # Add the buoyancy correction for w using the cleanly advected th_v
         th_v_prime_next = th_v_next - self.physics.theta_bg
         th_v_prime_w_next = self.physics.op.avg(th_v_prime_next, axis=2, from_loc='m', to_loc='w')
-        rhs_w += 0.5 * self.dt * (self.physics.c['g'] * (th_v_prime_w_next / th_v_bg_w))
+        rhs_w += 0.5 * self.dt * (self.physics.c['g'] * (th_v_prime_w_next / bg_precomputed['th_v_w']))
 
         # --- ZERO OUT RHS BOUNDARIES FOR KINEMATIC CONSTRAINTS ---
         rhs_w = rhs_w.at[:, :, 0].set(0.0)

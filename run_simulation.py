@@ -7,6 +7,7 @@ from suetes.regional3d.operators import CGridOperator3D
 from suetes.regional3d.euler import Euler3D
 from suetes.regional3d.steppers import SISLStepper3D
 from suetes.regional3d.boundaries import DaviesSponge
+from suetes.shared.transforms import SleveSimple
 
 from suetes.preprocessing.processor import ERA5Processor
 from suetes.preprocessing.topography import TopographyProcessor
@@ -61,7 +62,8 @@ def main():
         gebco_path="suetes/data/gebco_data.nc"
     )
     h_func = topo_proc.process_and_blend(base_grid, sponge_depth=sponge_depth, smooth_sigma=2.0)  
-    grid = RegionalGrid3D(nx, ny, nz, dx, dy, dz, lat_c, lon_c, h_func=h_func)
+    sleve_transform = SleveSimple(scale_s=10000.0, n=1.0)
+    grid = RegionalGrid3D(nx, ny, nz, dx, dy, dz, lat_c, lon_c, h_func=h_func, transform=sleve_transform)
 
     # ==========================================
     # 3. ERA5 BOUNDARY PROCESSING
@@ -89,11 +91,7 @@ def main():
     print("Initializing Dynamical Core...")
     operators = CGridOperator3D(grid)
     physics = Euler3D(grid, operators, constants, damp_height=11500.0, nu_h=5e5)
-
-    # Override the idealized atmosphere with the true ERA5 horizontal mean
-    physics.theta_bg = suetes_bc_t0['th_v']
-    physics.pi_bg = suetes_bc_t0['pi']
-
+    
     stepper = SISLStepper3D(physics, dt, tracer_keys=['q'])
     sponge = DaviesSponge(grid, sponge_depth=sponge_depth)
 
@@ -109,28 +107,32 @@ def main():
     # We write a custom scan_fn here so we can update the time dynamically
     def scan_fn(curr_state, step_idx):
         t_curr = step_idx * dt
-        
-        # 1. Linearly interpolate the 3D boundary forcing for this specific second
         bc_state_t = time_manager.get_forcing(t_curr)
         
-        # 2. Define the boundary condition closure for this step
-        # (It ignores the 'forcing' arg and captures bc_state_t directly)
         def bc_fn(state_next, _):
             return sponge.blend(state_next, bc_state_t)
             
-        # 3. Take one physical Semi-Implicit Semi-Lagrangian step!
         next_state = stepper.step(curr_state, t_curr, forcing=None, bc_fn=bc_fn)
         
-        return next_state, None
+        # Track the maximum vertical velocity in the domain
+        max_w = jnp.max(jnp.abs(next_state['w']))
+        
+        return next_state, max_w # Return max_w as the accumulated output
 
     start_time = time.time()
     
-    # Run the compiled loop!
-    final_state, _ = jax.lax.scan(scan_fn, initial_state, jnp.arange(num_steps))
-    
-    # Block until GPU is finished executing
+    # final_max_w_array will contain the max w for every single timestep
+    num_steps = 10
+    final_state, final_max_w_array = jax.lax.scan(scan_fn, initial_state, jnp.arange(num_steps))
     jax.block_until_ready(final_state['u']) 
+    
     print(f"Integration Complete! Wall time: {time.time() - start_time:.2f} seconds.")
+    
+    # Print the profile of the first 10 steps, and the last 10 steps
+    import numpy as np
+    w_array = np.array(final_max_w_array)
+    print(f"Max W (Steps 1-10):  {w_array[:10]}")
+    print(f"Max W (Last 10):     {w_array[-10:]}")
 
     # ==========================================
     # 6. VISUALIZE THE RESULTS

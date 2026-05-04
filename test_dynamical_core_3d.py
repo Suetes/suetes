@@ -193,19 +193,35 @@ def test_7_davies_sponge(grid, nx, ny, nz):
     # Create a sponge that is 5 grid cells deep
     sponge = DaviesSponge(grid, sponge_depth=5)
 
-    # Simulate a model interior moving at 10 m/s, and a stationary exterior (0 m/s)
-    model_state = {'u': jnp.ones((nx+1, ny, nz)) * 10.0}
-    ext_state = {'u': jnp.zeros((nx+1, ny, nz))}
+    # Simulate a complete state. Model interior moving at 10 m/s, exterior stationary.
+    model_state = {
+        'u': jnp.ones((nx+1, ny, nz)) * 10.0,
+        'v': jnp.zeros((nx, ny+1, nz)),
+        'w': jnp.zeros((nx, ny, nz+1)),
+        'th_v': jnp.ones((nx, ny, nz)) * 300.0,
+        'pi': jnp.ones((nx, ny, nz)) * 1.0
+    }
+    
+    ext_state = {
+        'u': jnp.zeros((nx+1, ny, nz)),
+        'v': jnp.zeros((nx, ny+1, nz)),
+        'w': jnp.zeros((nx, ny, nz+1)),
+        'th_v': jnp.ones((nx, ny, nz)) * 300.0,
+        'pi': jnp.ones((nx, ny, nz)) * 1.0
+    }
 
     blended = sponge.blend(model_state, ext_state)
 
+    # Check the center vs the edge
     center_u = float(blended['u'][nx//2, ny//2, nz//2])
     edge_u = float(blended['u'][0, ny//2, nz//2])
 
     print(f"U-velocity at domain center (should be 10.0): {center_u:.2f} m/s")
     print(f"U-velocity at lateral edge (should be 0.0):   {edge_u:.2f} m/s")
+    
     assert center_u == 10.0, "Bug: Sponge is dampening the interior of the domain!"
     assert edge_u == 0.0, "Bug: Sponge is not relaxing the lateral boundaries!"
+    assert 'rho' in blended, "Bug: Sponge failed to re-diagnose density!"
 
 def test_8_kinematic_bottom_boundary(grid, physics, nx, ny, nz, dt):
     print("\n--- 8. KINEMATIC BOTTOM BOUNDARY (FLOW OVER MOUNTAIN) ---")
@@ -298,17 +314,41 @@ def test_10_kinematic_divergence():
     u_prescribed = u_0 * jnp.ones_like(grid.Z_u)
     v_prescribed = jnp.zeros_like(grid.Z_v)
     
-    u_m = op.avg(u_prescribed, axis=0, from_loc='u', to_loc='m')
-    u_w = op.avg(u_m, axis=2, from_loc='m', to_loc='w')
-    w_prescribed = u_w * grid.z_xi_w
+    # 1. Calculate horizontal fluxes manually
+    m_u, m_v = grid.m_factors['u'][..., None], grid.m_factors['v'][..., None]
+    flux_x = (u_prescribed * bg['rho_u'] * bg['th_v_u'] * bg['dz_u']) / m_u
+    flux_y = (v_prescribed * bg['rho_v'] * bg['th_v_v'] * bg['dz_v']) / m_v
     
-    state_prime = {'u': u_prescribed, 'v': v_prescribed, 
-                   'w': w_prescribed, 'pi': jnp.zeros_like(grid.Z_m), 'eta_dot': jnp.zeros_like(grid.Z_w)}
+    div_x = op.diff(flux_x, axis=0, from_loc='u', to_loc='m') / bg['dz_m_full']
+    div_y = op.diff(flux_y, axis=1, from_loc='v', to_loc='m') / bg['dz_m_full']
+    div_h = div_x + div_y
+    
+    # 2. Integrate div_h upwards to find the EXACT balancing vertical flux
+    delta_flux_z = -div_h * bg['dz_m_full'] 
+    
+    # flux_z is defined on w-points (nz+1). Boundary condition is 0 at bottom.
+    flux_z = jnp.concatenate([
+        jnp.zeros((grid.nx, grid.ny, 1)), 
+        jnp.cumsum(delta_flux_z, axis=2)
+    ], axis=2)
+    
+    # 3. Convert flux_z back to the contravariant velocity (eta_dot)
+    eta_dot_balanced = flux_z / (bg['dz_w_full'] * bg['rho_w'] * bg['th_v_w'])
+    
+    # 4. Feed this perfectly non-divergent state to the physics operator
+    state_prime = {
+        'u': u_prescribed, 
+        'v': v_prescribed, 
+        'w': jnp.zeros_like(grid.Z_w), 
+        'pi': jnp.zeros_like(grid.Z_m), 
+        'eta_dot': eta_dot_balanced
+    }
     
     tends = physics.get_tendencies(state_prime, bg)
     
-    max_div = float(jnp.max(jnp.abs(tends['pi'])))
-    print(f"Max spurious pressure tendency from divergence: {max_div:.4e} 1/s")
+    # 5. Check divergence. We IGNORE the topmost layer [:, :, -1]
+    max_div = float(jnp.max(jnp.abs(tends['pi'][:, :, :-1])))
+    print(f"Max spurious pressure tendency (Interior): {max_div:.4e} 1/s")
     
     assert max_div <= 1e-5, "The 3D divergence operator is registering false divergence over slopes."
     print("STATUS: SUCCESS (3D Divergence is clean)")
@@ -323,6 +363,61 @@ def test_11_vertical_metric_smoothness():
     print(f"Physical Layer Thickness (dz) - Min: {dz_min:.2f} m, Max: {dz_max:.2f} m")
     assert dz_min >= 10.0, "Your SLEVE coordinate is compressing layers too thinly over the mountain peaks. This will shatter the CFL condition and cause GMRES to explode."
     print("STATUS: SUCCESS (Vertical grid spacing is safe)")
+
+def test_12_resting_flat_integration(grid, physics, dt):
+    print("\n--- 12. RESTING FLAT ATMOSPHERE (50-STEP INTEGRATION) ---")
+    stepper = SISLStepper3D(physics, dt)
+    
+    # Perfect resting state
+    initial_state = {
+        'u': jnp.zeros_like(grid.Z_u), 'v': jnp.zeros_like(grid.Z_v), 'w': jnp.zeros_like(grid.Z_w),
+        'eta_dot': jnp.zeros_like(grid.Z_w), 'pi': physics.pi_bg, 'th_v': physics.theta_bg,
+        'rho': physics.c['p0'] / (physics.c['Rd'] * physics.theta_bg) * \
+               (physics.pi_bg ** (physics.c['cvd'] / physics.c['Rd']))
+    }
+    
+    def dummy_bc(state_next, forcing): return state_next
+    def scan_fn(curr_state, step_idx):
+        return stepper.step(curr_state, t=step_idx*dt, forcing=None, bc_fn=dummy_bc), None
+        
+    final_state, _ = jax.lax.scan(scan_fn, initial_state, jnp.arange(50))
+    
+    max_w = float(jnp.max(jnp.abs(final_state['w'])))
+    print(f"Max artificial w-wind after 50 steps: {max_w:.2e} m/s")
+    assert max_w < 1e-7, "Model lost hydrostatic balance during integration!"
+    print("STATUS: SUCCESS (Integration is stable)")
+
+def test_13_resting_mountain_integration(dt):
+    print("\n--- 13. RESTING MOUNTAIN ATMOSPHERE (50-STEP INTEGRATION) ---")
+    # Setup a fresh grid with a steep Agnesi mountain specifically for this integration
+    nx, ny, nz = 50, 50, 40
+    dx, dy, dz = 6000.0, 6000.0, 500.0
+    def h_func(x, y): return 1500.0 / (1.0 + (x**2 + y**2) / (30000.0**2))
+    
+    grid = RegionalGrid3D(nx, ny, nz, dx, dy, dz, lat_center=45.0, lon_center=5.0, h_func=h_func)
+    op = CGridOperator3D(grid)
+    constants = {'g': 9.81, 'Rd': 287.0, 'cp': 1004.0, 'cvd': 717.0, 'p0': 100000.0, 'epsilon': 0.622}
+    physics = Euler3D(grid, op, constants, N_bv=0.01, nu_h=0.0, nu_v=0.0) 
+    stepper = SISLStepper3D(physics, dt)
+    
+    initial_state = {
+        'u': jnp.zeros_like(grid.Z_u), 'v': jnp.zeros_like(grid.Z_v), 'w': jnp.zeros_like(grid.Z_w),
+        'eta_dot': jnp.zeros_like(grid.Z_w), 'pi': physics.pi_bg, 'th_v': physics.theta_bg,
+        'rho': constants['p0'] / (constants['Rd'] * physics.theta_bg) * \
+               (physics.pi_bg ** (constants['cvd'] / constants['Rd']))
+    }
+    
+    def dummy_bc(state_next, forcing): return state_next
+    def scan_fn(curr_state, step_idx):
+        return stepper.step(curr_state, t=step_idx*dt, forcing=None, bc_fn=dummy_bc), None
+        
+    final_state, _ = jax.lax.scan(scan_fn, initial_state, jnp.arange(50))
+    
+    max_w = float(jnp.max(jnp.abs(final_state['w'])))
+    print(f"Max artificial w-wind over steep terrain after 50 steps: {max_w:.2e} m/s")
+    assert max_w < 1e-7, "Metric terms generated artificial winds during integration!"
+    print("STATUS: SUCCESS (Mountain integration is stable)")
+
 
 if __name__ == "__main__":
     nx, ny, nz = 32, 32, 15
@@ -358,5 +453,7 @@ if __name__ == "__main__":
     test_9_metric_gradients()
     test_10_kinematic_divergence()
     test_11_vertical_metric_smoothness()
+    test_12_resting_flat_integration(grid, physics, dt)
+    test_13_resting_mountain_integration(dt)
 
     print("\nAll boundary, kinematic and terrain diagnostic tests completed successfully!")

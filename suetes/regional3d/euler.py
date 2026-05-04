@@ -48,36 +48,48 @@ class Euler3D:
             'dz_w_full': self.grid.dz_w_full,
             'dz_u': self.op.avg(self.grid.dz_m_full, axis=0, from_loc='m', to_loc='u'),
             'dz_v': self.op.avg(self.grid.dz_m_full, axis=1, from_loc='m', to_loc='v'),
-            'C_pi': (self.c['Rd'] / self.c['cvd']) * (pi_bg / (rho_bg * th_v_bg))
+            'C_pi': (self.c['Rd'] / self.c['cvd']) * (pi_bg / (rho_bg * th_v_bg)),
+            'pi_bg': pi_bg
         }
 
-    def get_tendencies(self, state_prime, bg):
-        u, v, w, pi, eta_dot = state_prime['u'], state_prime['v'], state_prime['w'], state_prime['pi'], state_prime['eta_dot']
+    def get_tendencies(self, state_prime, bg, is_explicit=False):
+        u, v, w, pi_prime, eta_dot = state_prime['u'], state_prime['v'], state_prime['w'], state_prime['pi'], state_prime['eta_dot']
         
-        # --- 1. PRESSURE GRADIENTS ---
-        grad_pi_x = self.op.diff(pi, axis=0, from_loc='m', to_loc='u')
-        grad_pi_y = self.op.diff(pi, axis=1, from_loc='m', to_loc='v')
-        
-        # True physical vertical gradient! 
-        # op.diff divides by logical dz, so we undo that and divide by actual physical dz.
-        grad_pi_z_w = self.op.diff(pi, axis=2, from_loc='m', to_loc='w') * (self.grid.dz / bg['dz_w_full'])
+        th_v_u = bg['th_v_u'] + state_prime.get('th_v_prime_u', 0.0)
+        th_v_v = bg['th_v_v'] + state_prime.get('th_v_prime_v', 0.0)
+        th_v_w = bg['th_v_w'] + state_prime.get('th_v_prime_w', 0.0)
 
-        # Metric Terms (Slope of the Z_m surfaces at u and v points)
+        # --- 1. HORIZONTAL PRESSURE GRADIENTS (MUST use pi_prime) ---
+        grad_pi_prime_x = self.op.diff(pi_prime, axis=0, from_loc='m', to_loc='u')
+        grad_pi_prime_y = self.op.diff(pi_prime, axis=1, from_loc='m', to_loc='v')
+        grad_pi_prime_z_w = self.op.diff(pi_prime, axis=2, from_loc='m', to_loc='w') * (self.grid.dz / bg['dz_w_full'])
+
         z_xi_u = self.op.diff(self.grid.Z_m, axis=0, from_loc='m', to_loc='u')
         z_eta_v = self.op.diff(self.grid.Z_m, axis=1, from_loc='m', to_loc='v')
 
-        # Average true grad_pi_z (w-grid) to horizontal face points
-        grad_pi_z_m = self.op.avg(grad_pi_z_w, axis=2, from_loc='w', to_loc='m')
-        grad_pi_z_u = self.op.avg(grad_pi_z_m, axis=0, from_loc='m', to_loc='u')
-        grad_pi_z_v = self.op.avg(grad_pi_z_m, axis=1, from_loc='m', to_loc='v')
+        grad_pi_prime_z_m = self.op.avg(grad_pi_prime_z_w, axis=2, from_loc='w', to_loc='m')
+        grad_pi_prime_z_u = self.op.avg(grad_pi_prime_z_m, axis=0, from_loc='m', to_loc='u')
+        grad_pi_prime_z_v = self.op.avg(grad_pi_prime_z_m, axis=1, from_loc='m', to_loc='v')
 
-        # True Cartesian Horizontal Pressure Gradients
-        grad_pi_x_cart = grad_pi_x - z_xi_u * grad_pi_z_u
-        grad_pi_y_cart = grad_pi_y - z_eta_v * grad_pi_z_v
+        grad_pi_x_cart = grad_pi_prime_x - z_xi_u * grad_pi_prime_z_u
+        grad_pi_y_cart = grad_pi_prime_y - z_eta_v * grad_pi_prime_z_v
 
-        tend_u = -self.c['cp'] * bg['th_v_u'] * grad_pi_x_cart
-        tend_v = -self.c['cp'] * bg['th_v_v'] * grad_pi_y_cart
-        tend_w = -self.c['cp'] * bg['th_v_w'] * grad_pi_z_w
+        tend_u = -self.c['cp'] * th_v_u * grad_pi_x_cart
+        tend_v = -self.c['cp'] * th_v_v * grad_pi_y_cart
+
+        # --- 2. VERTICAL PRESSURE GRADIENT ---
+        # Take gradient of the perturbation
+        grad_pi_prime_z_w = self.op.diff(pi_prime, axis=2, from_loc='m', to_loc='w') * (self.grid.dz / bg['dz_w_full'])
+
+        if is_explicit:
+            # Perturbation form cancels discrete gravity at rest
+            th_v_prime_w = state_prime.get('th_v_prime_w', 0.0)
+            buoyancy = self.c['g'] * (th_v_prime_w / bg['th_v_w'])
+            
+            tend_w = -self.c['cp'] * th_v_w * grad_pi_prime_z_w + buoyancy
+        else:
+            # The implicit solver matrix requires strict linearity
+            tend_w = -self.c['cp'] * bg['th_v_w'] * grad_pi_prime_z_w
 
         # --- 2. CORIOLIS ---
         v_at_u = self.op.avg(self.op.avg(v, axis=1, from_loc='v', to_loc='m'), axis=0, from_loc='m', to_loc='u')
@@ -116,7 +128,7 @@ class Euler3D:
         return {'u': tend_u, 'v': tend_v, 'w': tend_w, 'pi': tend_pi}
 
     def linear_operator(self, state_prime, bg, dt):
-        tends = self.get_tendencies(state_prime, bg)
+        tends = self.get_tendencies(state_prime, bg, is_explicit=False)
         alpha = 0.55 
 
         L_u = state_prime['u'] - alpha * dt * tends['u']
