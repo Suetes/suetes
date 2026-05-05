@@ -1,4 +1,6 @@
+import jax
 import jax.numpy as jnp
+
 
 class ObliqueStereographic:
     def __init__(self, lat_center, lon_center, R_earth=6371229.0):
@@ -25,25 +27,26 @@ class ObliqueStereographic:
 
     def get_convergence_angle(self, x, y):
         """
-        Calculates the convergence angle (gamma) between True North and Grid North.
-        Uses the robust analytical form for Oblique Stereographic projections 
-        to avoid center singularities.
+        Uses JAX Auto-Diff to find the exact True North vector.
+        True North points in the direction of steepest increasing latitude.
         """
-        rho = jnp.sqrt(x**2 + y**2)
-        rho = jnp.where(rho == 0, 1e-15, rho)
+        def get_phi(x_val, y_val):
+            # The exact same math as get_lat_lon, but scalar and returns radians
+            rho = jnp.sqrt(x_val**2 + y_val**2) + 1e-15
+            c = 2.0 * jnp.arctan(rho / (2.0 * self.R))
+            sin_c = jnp.sin(c)
+            cos_c = jnp.cos(c)
+            sin_phic = jnp.sin(self.phi_c)
+            cos_phic = jnp.cos(self.phi_c)
+            
+            return jnp.arcsin(cos_c * sin_phic + (y_val * sin_c * cos_phic) / rho)
+            
+        # vmap handles the 2D meshgrid arrays (axes 0 and 1)
+        grad_fn = jax.vmap(jax.vmap(jax.grad(get_phi, argnums=(0, 1))))
+        dphi_dx, dphi_dy = grad_fn(x, y)
         
-        c = 2.0 * jnp.arctan(rho / (2.0 * self.R))
-        sin_c = jnp.sin(c)
-        cos_c = jnp.cos(c)
-        sin_phic = jnp.sin(self.phi_c)
-        cos_phic = jnp.cos(self.phi_c)
-        
-        # Angle from Grid Y (North) to True North
-        num = x * sin_c
-        # The denominator relies smoothly on X, Y preventing the sign-flip singularity
-        den = rho * cos_c * cos_phic - y * sin_c * sin_phic 
-        
-        return jnp.arctan2(num, den)
+        # arctan2(X, Y) gives the exact clockwise angle from the Y-axis
+        return jnp.arctan2(dphi_dx, dphi_dy)
 
 
 class RegionalGrid3D:

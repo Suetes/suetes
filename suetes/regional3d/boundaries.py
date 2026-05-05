@@ -18,8 +18,13 @@ class DaviesSponge:
         dist_x = jnp.minimum(X, nx - 1 - X) if nx > 2 * depth else jnp.full_like(X, 9999)
         dist_y = jnp.minimum(Y, ny - 1 - Y) if ny > 2 * depth else jnp.full_like(Y, 9999)
         
-        dist_to_bound = jnp.minimum(dist_x, dist_y)
-        alpha = jnp.where(dist_to_bound < depth, jnp.cos(0.5 * jnp.pi * dist_to_bound / depth) ** 2, 0.0)
+        # 1D weights: 1.0 in the free interior, tapering to 0.0 at the absolute boundary
+        wx = jnp.where(dist_x < depth, jnp.sin(0.5 * jnp.pi * dist_x / depth) ** 2, 1.0)
+        wy = jnp.where(dist_y < depth, jnp.sin(0.5 * jnp.pi * dist_y / depth) ** 2, 1.0)
+        
+        # The blending alpha needs to be 1.0 at the boundary, 0.0 in interior
+        # The product of sines ensures the corners are mathematically smooth
+        alpha = 1.0 - (wx * wy)
                 
         return jnp.expand_dims(alpha, axis=-1)
 

@@ -114,19 +114,19 @@ class BoundaryProcessor:
         Calculates the net mass flux through the four lateral boundaries and 
         applies a barotropic correction to ensure exact global mass conservation.
         """
-        # 1. Approximate density on the boundaries (using the outermost interior cells)
+        # Approximate density on the boundaries (using the outermost interior cells)
         rho_w = state['rho'][0, :, :]
         rho_e = state['rho'][-1, :, :]
         rho_s = state['rho'][:, 0, :]
         rho_n = state['rho'][:, -1, :]
 
-        # 2. Get the vertical cell heights at the boundaries
+        # Get the vertical cell heights at the boundaries
         dz_w = self.grid.dz_m_full[0, :, :]
         dz_e = self.grid.dz_m_full[-1, :, :]
         dz_s = self.grid.dz_m_full[:, 0, :]
         dz_n = self.grid.dz_m_full[:, -1, :]
 
-        # 3. Calculate absolute mass flux (kg/s) through each face
+        # Calculate absolute mass flux (kg/s) through each face
         # Flux = sum(rho * v_normal * Area)
         # Note: West/South are inflow (+), East/North are outflow (-)
         flux_west  = jnp.sum(state['u'][0, :, :] * rho_w * self.grid.dy * dz_w)
@@ -137,7 +137,7 @@ class BoundaryProcessor:
         # Net mass accumulation in the domain (kg/s)
         net_flux = (flux_west - flux_east) + (flux_south - flux_north)
 
-        # 4. Calculate total boundary surface mass-area to distribute the correction
+        # Calculate total boundary surface mass-area to distribute the correction
         area_west  = jnp.sum(rho_w * self.grid.dy * dz_w)
         area_east  = jnp.sum(rho_e * self.grid.dy * dz_e)
         area_south = jnp.sum(rho_s * self.grid.dx * dz_s)
@@ -145,10 +145,10 @@ class BoundaryProcessor:
         
         total_mass_area = area_west + area_east + area_south + area_north
 
-        # 5. Calculate the uniform velocity correction (m/s)
+        # Calculate the uniform velocity correction (m/s)
         V_c = net_flux / total_mass_area
 
-        # 6. Apply the correction to the normal winds on ALL faces
+        # Apply the correction to the normal winds on ALL faces
         # We want to subtract the correction from inflow and add it to outflow
         # so that the net flux is pushed exactly to zero.
         state['u'] = state['u'].at[:, :, :].add(-V_c)
@@ -161,7 +161,7 @@ class BoundaryProcessor:
         Takes the raw numpy arrays from the ERA5Processor, applies horizontal regridding, 
         thermodynamic conversion, and vertical interpolation, returning a model-ready state.
         """
-        # --- 1. Horizontal Regridding ---
+        # Horizontal Regridding 
         # We must regrid the ERA5 heights to the staggered locations so the 
         # vertical interpolator has the correct physical z-coordinate for every face!
         z_era5_m = self.regridder.regrid_3d(stitched_era5_state['geopotential'] / self.c['g'], loc='m')
@@ -173,7 +173,7 @@ class BoundaryProcessor:
         q_era5 = self.regridder.regrid_3d(stitched_era5_state['q'], loc='m')
         omega_era5 = self.regridder.regrid_3d(stitched_era5_state['omega'], loc='m')
         
-        # --- 1a. U-Face Wind Rotation ---
+        # U-Face Wind Rotation
         # Interpolate BOTH geographic u and v to the staggered u-points
         u_geo_at_u = self.regridder.regrid_3d(stitched_era5_state['u'], loc='u')
         v_geo_at_u = self.regridder.regrid_3d(stitched_era5_state['v'], loc='u')
@@ -185,7 +185,7 @@ class BoundaryProcessor:
         # Rotate into Grid X/Y basis and keep only the u-component
         u_era5 = u_geo_at_u * jnp.cos(gamma_u_3d) + v_geo_at_u * jnp.sin(gamma_u_3d)
 
-        # --- 1b. V-Face Wind Rotation ---
+        # V-Face Wind Rotation
         # Interpolate BOTH geographic u and v to the staggered v-points
         u_geo_at_v = self.regridder.regrid_3d(stitched_era5_state['u'], loc='v')
         v_geo_at_v = self.regridder.regrid_3d(stitched_era5_state['v'], loc='v')
@@ -197,14 +197,14 @@ class BoundaryProcessor:
         # Rotate into Grid X/Y basis and keep only the v-component
         v_era5 = -u_geo_at_v * jnp.sin(gamma_v_3d) + v_geo_at_v * jnp.cos(gamma_v_3d)
 
-        # --- 2. Thermodynamics ---
+        # THERMODYNAMICS
         # Thermodynamics are computed entirely on the mass points
         th_v_era5, pi_era5, rho_era5 = self._thermodynamics(T_era5, p_era5, q_era5)
 
         # Convert omega (Pa/s) to geometric w (m/s) using hydrostatic approx
         w_era5 = -omega_era5 / (rho_era5 * self.c['g'])
 
-        # --- 3. Vertical Interpolation to 3D Grid ---
+        # Vertical Interpolation to 3D Grid
         state = {}
         state['u'] = self._interp_3d(self.grid.Z_u, z_era5_u, u_era5)
         state['v'] = self._interp_3d(self.grid.Z_v, z_era5_v, v_era5)
@@ -212,7 +212,7 @@ class BoundaryProcessor:
         state['q'] = self._interp_3d(self.grid.Z_m, z_era5_m, q_era5)
         state['w'] = self._interp_3d(self.grid.Z_w, z_era5_m, w_era5)
         
-        # --- HYDROSTATIC RECONSTRUCTION ---
+        # Hydrostatic pressure reconstruction
         pi_interp = self._interp_3d(self.grid.Z_m, z_era5_m, pi_era5)
         pi_anchor_top = pi_interp[:, :, -1] 
         
@@ -233,8 +233,8 @@ class BoundaryProcessor:
         state['rho'] = self.c['p0'] / (self.c['Rd'] * state['th_v']) * \
                        (state['pi'] ** (self.c['cvd'] / self.c['Rd']))
 
-        # --- KINEMATIC BOUNDARIES ---
-        # 1. Calculate terrain-following w at the surface
+        # KINEMATIC BOUNDARIES
+        # Calculate terrain-following w at the surface
         u_m_surf = 0.5 * (state['u'][:-1, :, 0] + state['u'][1:, :, 0])
         v_m_surf = 0.5 * (state['v'][:, :-1, 0] + state['v'][:, 1:, 0])
         
@@ -243,12 +243,12 @@ class BoundaryProcessor:
             v_m_surf * self.grid.z_eta_w[:, :, 0]
         )
         
-        # 2. Apply strict boundary conditions, PRESERVING the interior w!
+        # Apply strict boundary conditions
         state['w'] = state['w'].at[:, :, 0].set(kinematic_bottom) 
         state['w'] = state['w'].at[:, :, -1].set(0.0)             
         state['eta_dot'] = jnp.zeros_like(state['w'])
         
-        # --- NEW: ENFORCE GLOBAL MASS CONSERVATION ---
+        # Enforce global mass conservation (this needs to be implemented correctly)
         # state = self._balance_global_mass(state)
         
         return state

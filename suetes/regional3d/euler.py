@@ -84,8 +84,13 @@ class Euler3D:
         grad_pi_x_cart = grad_pi_prime_x - z_xi_u * grad_pi_prime_z_u
         grad_pi_y_cart = grad_pi_prime_y - z_eta_v * grad_pi_prime_z_v
 
-        tend_u = -self.c['cp'] * th_v_u * grad_pi_x_cart
-        tend_v = -self.c['cp'] * th_v_v * grad_pi_y_cart
+        # Map factors from the projection
+        m_u = jnp.expand_dims(self.grid.m_factors['u'], axis=-1)
+        m_v = jnp.expand_dims(self.grid.m_factors['v'], axis=-1)
+
+        # Apply map factors to the physical gradient
+        tend_u = -self.c['cp'] * th_v_u * grad_pi_x_cart * m_u
+        tend_v = -self.c['cp'] * th_v_v * grad_pi_y_cart * m_v
 
         # Vertical pressure gradient
         grad_pi_prime_z_w = self.op.diff(pi_prime, axis=2, from_loc='m', to_loc='w') * (self.grid.dz / bg['dz_w_full'])
@@ -125,7 +130,11 @@ class Euler3D:
         # Undo the logical dz division from op.diff, divide only by physical dz_m_full
         div_z = (self.op.diff(flux_z, axis=2, from_loc='w', to_loc='m') * self.grid.dz) / bg['dz_m_full']
 
-        tend_pi = -bg['C_pi'] * (div_x + div_y + div_z)
+        m_m = jnp.expand_dims(self.grid.m_factors['m'], axis=-1)
+
+        # Multiply the horizontal divergence sum by m^2. 
+        # Vertical divergence (div_z) is unaffected by the horizontal map factor.
+        tend_pi = -bg['C_pi'] * (m_m**2 * (div_x + div_y) + div_z)
 
         # Explicit diffusion
         diff_tends = self.diffusion.get_tendencies(state_prime, bg_precomputed=bg)
@@ -153,7 +162,10 @@ class Euler3D:
 
         # Override L_w at boundaries
         # Bottom: Kinematic constraint (w - u*dz/dx - v*dz/dy = 0)
-        kinematic_bottom = state_prime['w'][:, :, 0] - (
+        m_w = jnp.expand_dims(self.grid.m_factors['w'], axis=-1)
+
+        # 1. Fix the Bottom Boundary Condition
+        kinematic_bottom = state_prime['w'][:, :, 0] - m_w[:, :, 0] * (
             u_w[:, :, 0] * self.grid.z_xi_w[:, :, 0] + 
             v_w[:, :, 0] * self.grid.z_eta_w[:, :, 0]
         )
@@ -163,11 +175,10 @@ class Euler3D:
         L_w = L_w.at[:, :, -1].set(state_prime['w'][:, :, -1])
         # ---------------------------------------
 
-        # Horizontal terrain advection to the implicit constraint
+        # 2. Fix the implicit terrain advection
         L_eta_dot = alpha * (
             bg['dz_w_full'] * state_prime['eta_dot'] 
-            + u_w * self.grid.z_xi_w 
-            + v_w * self.grid.z_eta_w 
+            + m_w * (u_w * self.grid.z_xi_w + v_w * self.grid.z_eta_w) 
             - state_prime['w']
         )
         
