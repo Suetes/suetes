@@ -2,6 +2,42 @@ import jax
 import jax.numpy as jnp
 import jax.scipy.ndimage as jnd
 
+
+class TimeManager:
+    def __init__(self, states_list, times_sec_list, grid):
+        self.grid = grid
+        self.times_sec = jnp.array(times_sec_list, dtype=jnp.float64)
+        
+        # Stack the list of dicts into a single dict of 4D arrays (time, X, Y, Z)
+        # This allows JAX to dynamically slice the correct time index during the scan loop
+        self.stacked_states = {}
+        for k in states_list[0].keys():
+            self.stacked_states[k] = jnp.stack([state[k] for state in states_list], axis=0)
+
+    def get_forcing(self, t):
+        # 1. Find the left bounding time index for the current t
+        # (e.g., if t=4000s, idx will be 1, representing the 3600s boundary)
+        idx = jnp.searchsorted(self.times_sec, t, side='right') - 1
+        
+        # Clip to prevent out-of-bounds errors if the simulation runs slightly past the last ERA5 state
+        idx = jnp.clip(idx, 0, len(self.times_sec) - 2)
+        
+        t0 = self.times_sec[idx]
+        t1 = self.times_sec[idx + 1]
+        
+        # 2. Calculate interpolation weight
+        alpha = (t - t0) / (t1 - t0)
+        alpha = jnp.clip(alpha, 0.0, 1.0)
+        
+        # 3. Dynamically slice the two bounding states and interpolate
+        interp_state = {}
+        for k in self.stacked_states.keys():
+            state_t0 = self.stacked_states[k][idx]
+            state_t1 = self.stacked_states[k][idx + 1]
+            interp_state[k] = (1.0 - alpha) * state_t0 + alpha * state_t1
+            
+        return interp_state
+
 class HorizontalRegridder:
     def __init__(self, grid, era5_lats, era5_lons):
         self.grid = grid
@@ -213,6 +249,6 @@ class BoundaryProcessor:
         state['eta_dot'] = jnp.zeros_like(state['w'])
         
         # --- NEW: ENFORCE GLOBAL MASS CONSERVATION ---
-        state = self._balance_global_mass(state)
+        # state = self._balance_global_mass(state)
         
         return state

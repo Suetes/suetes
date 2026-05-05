@@ -3,25 +3,35 @@ import jax.numpy as jnp
 from suetes.regional3d.diffusion import HyperFilter
 
 class Euler3D:
-    def __init__(self, grid, operators, constants, damp_height=20000.0, max_damp=0.5, N_bv=0.01, nu_h=5e6, nu_v=5e6):
+    def __init__(self, grid, operators, constants, initial_era5_state=None, N_bv=0.01, damp_height=20000.0, max_damp=0.5, nu_h=5e6, nu_v=5e6):
         self.grid = grid
         self.op = operators
         self.c = constants
-        self.theta_0 = 300.0
         self.nu_h = nu_h
         self.nu_v = nu_v
         
-         # USE PHYSICAL 3D HEIGHT (Z_m), NOT LOGICAL 1D HEIGHT (zeta_m)
+        # USE PHYSICAL 3D HEIGHT (Z_m), NOT LOGICAL 1D HEIGHT (zeta_m)
         Z_m = self.grid.Z_m
         
-        self.theta_bg = self.theta_0 * jnp.exp((N_bv**2 / self.c['g']) * Z_m) if N_bv > 0.0 else self.theta_0 * jnp.ones_like(Z_m)
-        
-        # CALCULATE 3D PI ANALYTICALLY
-        if N_bv > 0.0:
-            self.pi_bg = 1.0 + (self.c['g']**2 / (self.c['cp'] * self.theta_0 * N_bv**2)) * \
-                         (jnp.exp(-N_bv**2 * Z_m / self.c['g']) - 1.0)
+        if initial_era5_state is not None:
+            # Get the average physical height of each logical level
+            z_1d = jnp.mean(Z_m, axis=(0, 1))
+            # Get the average thermodynamic profile
+            th_v_1d = jnp.mean(initial_era5_state['th_v'], axis=(0, 1))
+            pi_1d = jnp.mean(initial_era5_state['pi'], axis=(0, 1))
+            # Interpolate the 1D profile onto the 3D grid based on geometric height
+            self.theta_bg = jnp.interp(Z_m, z_1d, th_v_1d)
+            self.pi_bg = jnp.interp(Z_m, z_1d, pi_1d)
         else:
-            self.pi_bg = 1.0 - (self.c['g'] / (self.c['cp'] * self.theta_0)) * Z_m
+            # Analytical background for idealized test suites
+            self.theta_0 = 300.0
+            self.theta_bg = self.theta_0 * jnp.exp((N_bv**2 / self.c['g']) * Z_m) if N_bv > 0.0 else self.theta_0 * jnp.ones_like(Z_m)
+            
+            if N_bv > 0.0:
+                self.pi_bg = 1.0 + (self.c['g']**2 / (self.c['cp'] * self.theta_0 * N_bv**2)) * \
+                             (jnp.exp(-N_bv**2 * Z_m / self.c['g']) - 1.0)
+            else:
+                self.pi_bg = 1.0 - (self.c['g'] / (self.c['cp'] * self.theta_0)) * Z_m
         
         z_w_3d = self.grid.Z_w
         z_top = self.grid.Lz 
@@ -59,7 +69,7 @@ class Euler3D:
         th_v_v = bg['th_v_v'] + state_prime.get('th_v_prime_v', 0.0)
         th_v_w = bg['th_v_w'] + state_prime.get('th_v_prime_w', 0.0)
 
-        # --- 1. HORIZONTAL PRESSURE GRADIENTS (MUST use pi_prime) ---
+        # Horizontal pressure gradients (use pi_prime)
         grad_pi_prime_x = self.op.diff(pi_prime, axis=0, from_loc='m', to_loc='u')
         grad_pi_prime_y = self.op.diff(pi_prime, axis=1, from_loc='m', to_loc='v')
         grad_pi_prime_z_w = self.op.diff(pi_prime, axis=2, from_loc='m', to_loc='w') * (self.grid.dz / bg['dz_w_full'])
@@ -77,8 +87,7 @@ class Euler3D:
         tend_u = -self.c['cp'] * th_v_u * grad_pi_x_cart
         tend_v = -self.c['cp'] * th_v_v * grad_pi_y_cart
 
-        # --- 2. VERTICAL PRESSURE GRADIENT ---
-        # Take gradient of the perturbation
+        # Vertical pressure gradient
         grad_pi_prime_z_w = self.op.diff(pi_prime, axis=2, from_loc='m', to_loc='w') * (self.grid.dz / bg['dz_w_full'])
 
         if is_explicit:
@@ -91,7 +100,7 @@ class Euler3D:
             # The implicit solver matrix requires strict linearity
             tend_w = -self.c['cp'] * bg['th_v_w'] * grad_pi_prime_z_w
 
-        # --- 2. CORIOLIS ---
+        # Coriolis
         v_at_u = self.op.avg(self.op.avg(v, axis=1, from_loc='v', to_loc='m'), axis=0, from_loc='m', to_loc='u')
         u_at_v = self.op.avg(self.op.avg(u, axis=0, from_loc='u', to_loc='m'), axis=1, from_loc='m', to_loc='v')
         
@@ -99,7 +108,7 @@ class Euler3D:
         tend_u += f_u_3d * v_at_u
         tend_v -= f_v_3d * u_at_v
 
-        # --- 3. DIVERGENCE ---
+        # Divergence
         m_u, m_v, m_m = self.grid.m_factors['u'][..., None], self.grid.m_factors['v'][..., None], self.grid.m_factors['m'][..., None]
         
         flux_x = (u * bg['rho_u'] * bg['th_v_u'] * bg['dz_u']) / m_u
@@ -118,8 +127,8 @@ class Euler3D:
 
         tend_pi = -bg['C_pi'] * (div_x + div_y + div_z)
 
-        # --- 4. EXPLICIT DIFFUSION ---
-        diff_tends = self.diffusion.get_tendencies(state_prime)
+        # Explicit diffusion
+        diff_tends = self.diffusion.get_tendencies(state_prime, bg_precomputed=bg)
 
         tend_u += diff_tends['u']
         tend_v += diff_tends['v']
@@ -142,7 +151,7 @@ class Euler3D:
         v_m = self.op.avg(state_prime['v'], axis=1, from_loc='v', to_loc='m')
         v_w = self.op.avg(v_m, axis=2, from_loc='m', to_loc='w')
 
-        # --- FIX: OVERRIDE L_w AT BOUNDARIES ---
+        # Override L_w at boundaries
         # Bottom: Kinematic constraint (w - u*dz/dx - v*dz/dy = 0)
         kinematic_bottom = state_prime['w'][:, :, 0] - (
             u_w[:, :, 0] * self.grid.z_xi_w[:, :, 0] + 

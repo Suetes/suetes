@@ -74,11 +74,16 @@ class HyperFilter:
         else:
             return (f_pad[:, :, 2:] - 2.0 * f + f_pad[:, :, :-2]) / (ds**2)
 
-    def get_tendencies(self, state_prime):
+    def get_tendencies(self, state_prime, bg_precomputed=None):
         diff_tends = {}
         for k in ['u', 'v', 'w', 'th_v']:
             if k in state_prime:
-                f = state_prime[k]
+                # If we are diffusing thermodynamics, subtract the background first!
+                if k == 'th_v' and bg_precomputed is not None:
+                    # Assuming state_prime['th_v'] is the absolute field here
+                    f = state_prime['th_v'] - bg_precomputed['th_v']
+                else:
+                    f = state_prime[k]
                 
                 # Compute Horizontal Hyperdiffusion: -nu * d4/dx4
                 # We iterate the Laplacian twice to get the 4th derivative

@@ -23,44 +23,22 @@ class DaviesSponge:
                 
         return jnp.expand_dims(alpha, axis=-1)
 
-    def blend(self, model_state, external_state):
+    def blend(self, intermediate_state, external_state):
         blended = {}
         
-        # STRICT MASS CONSERVATION:
+        # MASS CONSERVATION:
         # We only blend horizontal momentum, temperature, and tracers.
-        # We DO NOT blend w, pi, or rho. They must remain completely controlled 
-        # by the implicit solver and FFSL advector to guarantee continuity.
-        blend_vars = ['u', 'v', 'w', 'th_v', 'q', 'pi']
+        # pi, w, and eta_dot are left completely untouched for the implicit solver.
+        blend_vars = ['u', 'v', 'th_v', 'q']
         
-        for k in model_state.keys():
+        for k in intermediate_state.keys():
             if k in blend_vars and k in external_state:
-                if k == 'u':
-                    mask = self.masks['u']
-                elif k == 'v':
-                    mask = self.masks['v']
-                else:
-                    mask = self.masks['m']
-                
-                blended[k] = (1.0 - mask) * model_state[k] + mask * external_state[k]
+                # Use the mass mask as the default for scalar variables
+                mask = self.masks.get(k, self.masks['m'])
+                blended[k] = (1.0 - mask) * intermediate_state[k] + mask * external_state[k]
             else:
-                blended[k] = model_state[k]
+                blended[k] = intermediate_state[k]
                 
-        # Re-diagnose density to strictly satisfy the Equation of State in the sponge
-        Rd, cvd, p0 = 287.0, 717.0, 100000.0
-        blended['rho'] = p0 / (Rd * blended['th_v']) * (blended['pi'] ** (cvd / Rd))
-
-        # 1. Manually average the 2D bottom slice from faces to mass points
-        u_m_surf = 0.5 * (blended['u'][:-1, :, 0] + blended['u'][1:, :, 0])
-        v_m_surf = 0.5 * (blended['v'][:, :-1, 0] + blended['v'][:, 1:, 0])
-
-        # 2. Compute the terrain-following kinematic w
-        kinematic_bottom = (
-            u_m_surf * self.grid.z_xi_w[:, :, 0] + 
-            v_m_surf * self.grid.z_eta_w[:, :, 0]
-        )
-
-        # 3. Strictly enforce it at the bottom boundary
-        blended['w'] = blended['w'].at[:, :, 0].set(kinematic_bottom)
-        
-        # NOTICE: We completely removed the manual 'rho' recalculation here!
+        # The sponge simply relaxes the explicitly advected variables toward the forcing.
+        # The Equation of State and kinematic boundaries are dynamically handled by the implicit solver.
         return blended

@@ -2,9 +2,12 @@ import jax
 from jax import vmap
 import jax.numpy as jnp
 from jax.scipy.sparse.linalg import gmres
-from jax.scipy.linalg import lu_factor, lu_solve
+from jax.lax.linalg import tridiagonal_solve
 import jax.scipy.ndimage as jnd
 from .operators import tensor_product_interp_3d
+
+import jax.numpy as jnp
+from jax.lax.linalg import tridiagonal_solve
 
 class VerticalPreconditioner:
     def __init__(self, physics, dt, alpha=0.55):
@@ -12,58 +15,90 @@ class VerticalPreconditioner:
         self.dt = dt
         self.alpha = alpha
 
-    def build_dense_matrix(self, bg_precomputed):
-        nx, ny, nz = self.physics.grid.nx, self.physics.grid.ny, self.physics.grid.nz
+    def precompute_banded(self, bg):
+        """Derives the 1D vertical Helmholtz equation coefficients for pi'."""
+        dt, alpha, cp = self.dt, self.alpha, self.physics.c['cp']
         
-        # 1. Define your 1D tridiagonal coefficients here
-        # (These are placeholders - you will replace them with your actual physics)
-        lower = jnp.zeros((nx, ny, nz - 1))  # Sub-diagonal
-        main  = jnp.ones((nx, ny, nz))       # Main diagonal
-        upper = jnp.zeros((nx, ny, nz - 1))  # Super-diagonal
-
-        # 2. Construct the dense Nz x Nz matrix for all horizontal columns
-        # Shape will be (nx, ny, nz, nz)
-        i, j = jnp.meshgrid(jnp.arange(nz), jnp.arange(nz), indexing='ij')
+        self.th_v_w = bg['th_v_w']
+        self.dz_w_full = bg['dz_w_full']
+        self.rho_w = bg['rho_w']
+        self.tau_damp = self.physics.tau_damp
         
-        # JAX's advanced indexing/where makes building this dense matrix fast
-        A_dense = jnp.where(
-            i == j, main[..., i],
-            jnp.where(
-                i == j + 1, lower[..., j],
-                jnp.where(i == j - 1, upper[..., i], 0.0)
-            )
-        )
-        return A_dense
-
-    def precompute_lu(self, bg_precomputed):
-        """Called ONCE before GMRES to factorize the matrices."""
-        A_dense = self.build_dense_matrix(bg_precomputed)
+        # 1. K_w: Acoustic wave speed / Sponge layer (defined on w-points)
+        # FIX: Removed dz_logical 
+        self.K_w = (alpha * dt * cp * self.th_v_w) / \
+              (self.dz_w_full * (1.0 + dt * self.tau_damp))
         
-        # vmap over the horizontal x (axis 0) and y (axis 1) dimensions
-        vmap_lu_factor = vmap(vmap(lu_factor, in_axes=0), in_axes=0)
+        # 2. P: Mass-weighted acoustic propagation (defined on w-points)
+        P = self.K_w * self.rho_w * self.th_v_w
         
-        # lu_and_piv is a tuple: (LU_matrices, pivot_indices)
-        self.lu_and_piv = vmap_lu_factor(A_dense)
+        P = P.at[:, :, 0].set(0.0)
+        P = P.at[:, :, -1].set(0.0)
+        
+        # 3. L_pi: Thermodynamic compressibility (defined on mass-points)
+        # FIX: Removed dz_logical
+        self.L_pi = (alpha * dt * bg['C_pi']) / bg['dz_m_full']
+        
+        # 4. Tridiagonal Matrix Assembly
+        self.lower = -self.L_pi * P[:, :, :-1]
+        self.upper = -self.L_pi * P[:, :, 1:]
+        self.main  = 1.0 - self.lower - self.upper
 
     def __call__(self, rhs_scaled):
-        """Called inside GMRES every iteration to apply M^-1."""
-        rhs_pi = rhs_scaled['pi']
+        # --- 1. UNSCALE FOR PHYSICAL MATH ---
+        pi_scale = 100000.0
+        rhs_pi_phys = rhs_scaled['pi'] / pi_scale
+        rhs_w_phys = rhs_scaled['w']
+
+        # --- 2. KINEMATIC 3D FORCING ---
+        u_m = self.physics.op.avg(rhs_scaled['u'], axis=0, from_loc='u', to_loc='m')
+        u_w = self.physics.op.avg(u_m, axis=2, from_loc='m', to_loc='w')
+        v_m = self.physics.op.avg(rhs_scaled['v'], axis=1, from_loc='v', to_loc='m')
+        v_w = self.physics.op.avg(v_m, axis=2, from_loc='m', to_loc='w')
         
-        # vmap the solve over the horizontal dimensions
-        vmap_lu_solve = vmap(vmap(lu_solve, in_axes=(0, 0)), in_axes=(0, 0))
+        kinematic_3d = (
+            u_w * self.physics.grid.z_xi_w + 
+            v_w * self.physics.grid.z_eta_w
+        )
+        kinematic_w = kinematic_3d[:, :, 0]
+
+        # --- 3. PHYSICAL PRECONDITIONER SOLVE ---
+        w_contra_known = (rhs_w_phys / (1.0 + self.dt * self.tau_damp)) + (rhs_scaled['eta_dot'] / self.alpha) - kinematic_3d
         
-        # Fast preconditioned solve
-        precond_pi = vmap_lu_solve(self.lu_and_piv, rhs_pi)
+        w_tilde = self.rho_w * self.th_v_w * w_contra_known
+        w_tilde = w_tilde.at[:, :, 0].set(0.0)
+        w_tilde = w_tilde.at[:, :, -1].set(0.0)
         
-        # Placeholder for w back-substitution
-        precond_w = rhs_scaled['w'] 
+        # FIX: Multiply by dz to undo op.diff's internal division (Matches euler.py perfectly)
+        div_w_tilde = self.physics.op.diff(w_tilde, axis=2, from_loc='w', to_loc='m') * self.physics.grid.dz
+        rhs_helmholtz = rhs_pi_phys - self.L_pi * div_w_tilde
+        
+        # FAST TRIDIAGONAL SOLVE 
+        rhs_helmholtz_expanded = rhs_helmholtz[..., None]
+        precond_pi_phys_expanded = tridiagonal_solve(self.lower, self.main, self.upper, rhs_helmholtz_expanded)
+        precond_pi_phys = precond_pi_phys_expanded[..., 0]
+        
+        # --- 4. BACK-SUBSTITUTION FOR W ---
+        grad_pi = self.physics.op.diff(precond_pi_phys, axis=2, from_loc='m', to_loc='w') * (self.physics.grid.dz / self.dz_w_full)
+        
+        alpha, dt, cp = self.alpha, self.dt, self.physics.c['cp']
+        precond_w_phys = (rhs_w_phys - alpha * dt * cp * self.th_v_w * grad_pi) / (1.0 + dt * self.tau_damp)
+        
+        precond_w_phys = precond_w_phys.at[:, :, 0].set(rhs_w_phys[:, :, 0] + kinematic_w)
+        precond_w_phys = precond_w_phys.at[:, :, -1].set(rhs_w_phys[:, :, -1])
+
+        # --- 5. BACK-SUBSTITUTION FOR ETA_DOT ---
+        precond_eta_dot = (rhs_scaled['eta_dot'] / self.alpha) + precond_w_phys - kinematic_3d
+        
+        precond_eta_dot = precond_eta_dot.at[:, :, 0].set(rhs_scaled['eta_dot'][:, :, 0] * self.dz_w_full[:, :, 0])
+        precond_eta_dot = precond_eta_dot.at[:, :, -1].set(rhs_scaled['eta_dot'][:, :, -1] * self.dz_w_full[:, :, -1])
 
         return {
             'u': rhs_scaled['u'],
             'v': rhs_scaled['v'],
-            'w': precond_w,
-            'pi': precond_pi,
-            'eta_dot': rhs_scaled['eta_dot']
+            'w': precond_w_phys,
+            'pi': precond_pi_phys * pi_scale, 
+            'eta_dot': precond_eta_dot
         }
 
 class SemiLagrangianAdvector3D:
@@ -120,7 +155,7 @@ class SemiLagrangianAdvector3D:
                 Zi_idx - 0.5 * alpha_z
             ], axis=0)
             
-            # Use the FAST linear advector for finding the departure points
+            # Use the fast linear advector for finding the departure points
             u_mid = self.advect_linear(u_idx_sec, mid_coords)
             v_mid = self.advect_linear(v_idx_sec, mid_coords)
             w_mid = self.advect_linear(w_idx_sec, mid_coords)
@@ -150,9 +185,10 @@ class SemiImplicitSolver3D:
         # rhs_prime['eta_dot'] is R_eta_dot, which is already a velocity [m/s]
         rhs_scaled = {k: rhs_prime[k] * self.pi_scale if k == 'pi' else rhs_prime[k] for k in rhs_prime}
 
-        # --- 1. Setup Preconditioner ---
+        # Setup preconditioner
         preconditioner = VerticalPreconditioner(self.physics, self.dt)
-        preconditioner.precompute_lu(bg_precomputed)  # Factorize ONCE
+        # Call the banded physics pre-computation!
+        preconditioner.precompute_banded(bg_precomputed)  
 
         def M_fn(state_scaled):
             return preconditioner(state_scaled)       # Fast solve inside GMRES
@@ -176,10 +212,7 @@ class SemiImplicitSolver3D:
                 'eta_dot': L_out['eta_dot'] 
             }
 
-        x_sol_scaled, info = gmres(
-            A_fn, rhs_scaled, x0=rhs_scaled, 
-            tol=1e-4, maxiter=50, restart=50, M=M_fn
-        )
+        x_sol_scaled, info = gmres(A_fn, rhs_scaled, x0=rhs_scaled, tol=1e-6, maxiter=10, restart=10, M=M_fn)
         
         return {
             'u': x_sol_scaled['u'], 
@@ -214,7 +247,7 @@ class FluxFormAdvector:
         return M_dep[1:] - M_dep[:-1]
 
     def advect_3d_split(self, field, state, bg_precomputed):
-        # 1. Calculate true Courant numbers (index crossing rates)
+        # Calculate true Courant numbers (index crossing rates)
         m_u = self.grid.m_factors['u'][..., None]
         m_v = self.grid.m_factors['v'][..., None]
         
@@ -222,29 +255,29 @@ class FluxFormAdvector:
         cfl_y = (state['v'] * m_v * self.dt) / self.grid.dy
         cfl_z = state['eta_dot'] * self.dt
         
-        # --- Convert to Absolute Cell Mass ---
+        # Convert to absolute cell mass
         m_sq = self.grid.m_factors['m'][..., None] ** 2
         cell_volumes = (self.grid.dx * self.grid.dy / m_sq) * bg_precomputed['dz_m_full']
         
         # Multiplying volumetric density (field) by volume gives absolute mass (kg)
         cell_mass = field * cell_volumes
         
-        # --- X-Advection ---
+        # X-advection
         vmap_x_inner = jax.vmap(self.advect_1d, in_axes=(1, 1), out_axes=1)
         vmap_x = jax.vmap(vmap_x_inner, in_axes=(2, 2), out_axes=2)
         mass_x = vmap_x(cell_mass, cfl_x)
         
-        # --- Y-Advection ---
+        # Y-advection
         vmap_y_inner = jax.vmap(self.advect_1d, in_axes=(0, 0), out_axes=0)
         vmap_y = jax.vmap(vmap_y_inner, in_axes=(2, 2), out_axes=2)
         mass_y = vmap_y(mass_x, cfl_y)
         
-        # --- Z-Advection ---
+        # Z-advection
         vmap_z_inner = jax.vmap(self.advect_1d, in_axes=(0, 0), out_axes=0)
         vmap_z = jax.vmap(vmap_z_inner, in_axes=(1, 1), out_axes=1)
         mass_z = vmap_z(mass_y, cfl_z)
         
-        # --- Convert Absolute Mass back to Volumetric Density ---
+        # Convert absolute mass back to volumetric density
         return mass_z / cell_volumes
 
 
@@ -303,7 +336,7 @@ class SISLStepper3D:
         w_in = state['w'] + (1.0 - alpha) * self.dt * tends_n['w']
         pi_prime_in = state_prime_n['pi'] + (1.0 - alpha) * self.dt * tends_n['pi']
 
-        # --- 3D KINEMATIC ADVECTION ---
+        # 3d kinematic advection
         u_m = self.physics.op.avg(state['u'], axis=0, from_loc='u', to_loc='m')
         u_w = self.physics.op.avg(u_m, axis=2, from_loc='m', to_loc='w')
         
@@ -319,19 +352,50 @@ class SISLStepper3D:
         
         R_eta_dot = -(1.0 - alpha) * self.advector.advect_cubic(residual_n, coords_w)
 
-        # UNLIMITED: Momentum and pressure waves must propagate smoothly
+        # Momentum and pressure waves must propagate smoothly
         rhs_u = self.advector.advect_cubic(u_in, coords_u, use_limiter=False)
         rhs_v = self.advector.advect_cubic(v_in, coords_v, use_limiter=False)
         rhs_w = self.advector.advect_cubic(w_in, coords_w, use_limiter=False)
         rhs_pi_prime = self.advector.advect_cubic(pi_prime_in, coords_m, use_limiter=False)
         
-        # STRICT CONSERVATION: Advect mass with FFSL scheme
+        # Advect mass with FFSL scheme
         rho_next = self.ffsl_advector.advect_3d_split(state['rho'], state, bg_precomputed)
         
-        # INTENSIVE DYNAMICS: Advect virtual potential temperature with Tricubic SL
+        # Advect virtual potential temperature with Tricubic SL
         th_v_next = self.advector.advect_cubic(state['th_v'], coords_m, use_limiter=False)
         
-        # Add the buoyancy correction for w using the cleanly advected th_v
+        # Tracers use FFSL to strictly conserve mass
+        tracers_next = {}
+        for key in self.tracer_keys:
+            if key in state:
+                rho_tr_next = self.ffsl_advector.advect_3d_split(state['rho'] * state[key], state, bg_precomputed)
+                tracers_next[key] = rho_tr_next / (rho_next + 1e-15)
+
+        # Apply lateral sponge to the explicit rhs state
+        rhs_to_blend = {
+            'u': rhs_u, 'v': rhs_v, 'w': rhs_w, 'pi': rhs_pi_prime, 
+            'th_v': th_v_next, 'eta_dot': R_eta_dot
+        }
+        rhs_to_blend.update(tracers_next)
+
+        # The sponge only modifies 'u', 'v', 'th_v', and tracers.
+        blended_rhs = bc_fn(rhs_to_blend, forcing)
+
+        # Unpack the blended state
+        rhs_u = blended_rhs['u']
+        rhs_v = blended_rhs['v']
+        rhs_w = blended_rhs['w']
+        rhs_pi_prime = blended_rhs['pi']
+        th_v_next = blended_rhs['th_v']
+        R_eta_dot = blended_rhs['eta_dot']
+        
+        for key in self.tracer_keys:
+            if key in blended_rhs:
+                tracers_next[key] = blended_rhs[key]
+
+        # =====================================================================
+        # 2. ADD BUOYANCY (Moved up!)
+        # =====================================================================
         th_v_prime_next = th_v_next - self.physics.theta_bg
         th_v_prime_w_next = self.physics.op.avg(th_v_prime_next, axis=2, from_loc='m', to_loc='w')
         rhs_w += 0.5 * self.dt * (self.physics.c['g'] * (th_v_prime_w_next / bg_precomputed['th_v_w']))
@@ -342,23 +406,40 @@ class SISLStepper3D:
         R_eta_dot = R_eta_dot.at[:, :, 0].set(0.0)
         R_eta_dot = R_eta_dot.at[:, :, -1].set(0.0)
         
-        # --- 3. IMPLICIT SOLVE ---
+        # =====================================================================
+        # 3. IMPLICIT SOLVE
+        # =====================================================================
         rhs_prime = {'u': rhs_u, 'v': rhs_v, 'w': rhs_w, 'pi': rhs_pi_prime, 'eta_dot': R_eta_dot}
         state_prime_next = self.implicit_solver.solve(rhs_prime, bg_precomputed)
         
-        # --- 4. ASSEMBLE FINAL STATE ---
+        # =====================================================================
+        # 4. ASSEMBLE FINAL STATE
+        # =====================================================================
         state_next = {
-            'u': state_prime_next['u'], 'v': state_prime_next['v'], 'w': state_prime_next['w'], 
+            'u': state_prime_next['u'], 
+            'v': state_prime_next['v'], 
+            'w': state_prime_next['w'], 
             'pi': state_prime_next['pi'] + self.physics.pi_bg,
             'rho': rho_next, 
             'th_v': th_v_next, 
             'eta_dot': state_prime_next['eta_dot']
         }
 
-        # Tracers use FFSL to strictly conserve mass
         for key in self.tracer_keys:
-            if key in state:
-                rho_tr_next = self.ffsl_advector.advect_3d_split(state['rho'] * state[key], state, bg_precomputed)
-                state_next[key] = rho_tr_next / (rho_next + 1e-15)
+            if key in tracers_next:
+                state_next[key] = tracers_next[key]
 
-        return bc_fn(state_next, forcing)
+        # =====================================================================
+        # 5. APPLY LATERAL SPONGE TO FINAL BALANCED STATE
+        # =====================================================================
+        state_next = bc_fn(state_next, forcing)
+
+        # =====================================================================
+        # 6. THERMODYNAMIC RECONCILIATION
+        # =====================================================================
+        # Because the sponge nudged th_v, we MUST recalculate rho to satisfy the 
+        # Equation of State, preventing a thermodynamic shock in the next step!
+        cvd, Rd, p0 = self.physics.c['cvd'], self.physics.c['Rd'], self.physics.c['p0']
+        state_next['rho'] = p0 / (Rd * state_next['th_v']) * (state_next['pi'] ** (cvd / Rd))
+
+        return state_next
