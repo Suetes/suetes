@@ -2,6 +2,10 @@ import jax
 import jax.numpy as jnp
 jax.config.update("jax_enable_x64", True)
 
+import os
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3' # Suppress all but FATAL CUDA/XLA warnings
+
+
 from suetes.regional3d.geometry import RegionalGrid3D
 from suetes.regional3d.operators import CGridOperator3D
 from suetes.regional3d.steppers import SemiLagrangianAdvector3D, SISLStepper3D, SemiImplicitSolver3D, FluxFormAdvector

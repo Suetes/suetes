@@ -37,6 +37,7 @@ class Visualizer:
         plt.tight_layout()
         if save_path:
             plt.savefig(save_path)
+            print(f"Saved cross-section to {save_path}")
         else:
             plt.show()
         plt.close()
@@ -76,6 +77,7 @@ class Visualizer:
         plt.tight_layout()
         if save_path:
             plt.savefig(save_path)
+            print(f"Saved ERA5 map to {save_path}")
         else:
             plt.show()
         plt.close()
@@ -119,77 +121,70 @@ class Visualizer:
         plt.subplots_adjust(bottom=0.15)
         if save_path:
             plt.savefig(save_path)
+            print(f"Saved topography comparison to {save_path}")
         else:
             plt.show()
         plt.close()
 
-    def plot_model_vs_era5_map(self, grid, state_model, state_era5, variable='th_v', z_idx=5, save_path=None):
-        """
-        Plots a side-by-side horizontal comparison of the Model vs ERA5.
-        """
-        # 1. Determine horizontal coordinates based on Arakawa-C staggering
-        if variable == 'u':
-            x_coords, y_coords = grid.x_c, grid.y_m
-        elif variable == 'v':
-            x_coords, y_coords = grid.x_m, grid.y_c
-        else:
-            x_coords, y_coords = grid.x_m, grid.y_m
+    def plot_model_vs_era5_map(self, grid, state_model, state_era5, variable='th_v', z_idx=5, sponge_depth=30, save_path=None):
+        """Plots a side-by-side horizontal comparison of the Model vs ERA5."""
+        if variable == 'u': x_coords, y_coords = grid.x_c, grid.y_m
+        elif variable == 'v': x_coords, y_coords = grid.x_m, grid.y_c
+        else: x_coords, y_coords = grid.x_m, grid.y_m
 
         Xi, Yi = np.meshgrid(x_coords, y_coords, indexing='ij')
-        
-        # Get geographic coordinates
         lats, lons = grid.proj.get_lat_lon(Xi, Yi)
-        
-        # --- THE FIX: Wrap longitudes to [-180, 180] ---
-        # This prevents the bounding box from exploding if the domain crosses the Prime Meridian (0°).
         lons = (lons + 180.0) % 360.0 - 180.0
 
-        # 2. Extract the 2D horizontal slices
         val_model = state_model[variable][:, :, z_idx]
         val_era5 = state_era5[variable][:, :, z_idx]
-        
-        # Calculate approximate height for the title
         z_approx = grid.z_m[z_idx] if variable != 'w' else grid.z_c[z_idx]
 
-        # Find common color limits for a fair 1:1 comparison
         vmin = min(float(np.min(val_model)), float(np.min(val_era5)))
         vmax = max(float(np.max(val_model)), float(np.max(val_era5)))
 
-        # 3. Plotting (Adjusted figsize for better aspect ratio)
         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6), subplot_kw={'projection': ccrs.PlateCarree()})
-
-        # Buffer for map extent
-        extent = [float(lons.min()) - 0.5, float(lons.max()) + 0.5, 
-                  float(lats.min()) - 0.5, float(lats.max()) + 0.5]
+        extent = [float(lons.min()) - 0.5, float(lons.max()) + 0.5, float(lats.min()) - 0.5, float(lats.max()) + 0.5]
 
         for ax, data, title in zip([ax1, ax2], [val_model, val_era5], ["Suetes Simulation (T=1h)", "ERA5 Target (T=1h)"]):
             ax.add_feature(cfeature.COASTLINE, linewidth=1.2, edgecolor='black')
             ax.add_feature(cfeature.BORDERS, linewidth=0.8, linestyle=':', edgecolor='gray')
             
-            # Use pcolormesh for fast, native grid plotting
             im = ax.pcolormesh(lons, lats, data, transform=ccrs.PlateCarree(), 
-                               cmap='RdYlBu_r' if variable in ['u', 'v', 'w'] else 'RdYlBu_r', 
-                               vmin=vmin, vmax=vmax)
+                               cmap='seismic', vmin=vmin, vmax=vmax)
             
             ax.set_title(title, fontsize=14)
             ax.set_extent(extent, crs=ccrs.PlateCarree())
             ax.gridlines(draw_labels=True, linewidth=0.5, color='gray', alpha=0.5, linestyle='--')
 
-        # Shared colorbar
+            # --- Domain Boundaries (Solid Black) ---
+            ax.plot(lons[0, :], lats[0, :], 'k-', transform=ccrs.PlateCarree(), linewidth=1.5)
+            ax.plot(lons[-1, :], lats[-1, :], 'k-', transform=ccrs.PlateCarree(), linewidth=1.5)
+            ax.plot(lons[:, 0], lats[:, 0], 'k-', transform=ccrs.PlateCarree(), linewidth=1.5)
+            ax.plot(lons[:, -1], lats[:, -1], 'k-', transform=ccrs.PlateCarree(), linewidth=1.5)
+
+            # --- Sponge Boundaries (Dashed Black) ---
+            if sponge_depth > 0:
+                sd = sponge_depth
+                ax.plot(lons[sd, sd:-sd], lats[sd, sd:-sd], 'k--', transform=ccrs.PlateCarree(), linewidth=1.5)
+                ax.plot(lons[-sd-1, sd:-sd], lats[-sd-1, sd:-sd], 'k--', transform=ccrs.PlateCarree(), linewidth=1.5)
+                ax.plot(lons[sd:-sd, sd], lats[sd:-sd, sd], 'k--', transform=ccrs.PlateCarree(), linewidth=1.5)
+                ax.plot(lons[sd:-sd, -sd-1], lats[sd:-sd, -sd-1], 'k--', transform=ccrs.PlateCarree(), linewidth=1.5)
+
         cbar_ax = fig.add_axes([0.15, 0.08, 0.7, 0.04])
         cbar = fig.colorbar(im, cax=cbar_ax, orientation='horizontal')
         cbar.set_label(f"Variable: {variable} | Approx height: {z_approx:.0f} m", fontsize=12)
 
         plt.subplots_adjust(bottom=0.20)
         
-        if save_path:
+        if save_path: 
             plt.savefig(save_path, dpi=200)
             print(f"Saved comparison to {save_path}")
-        else:
+        else: 
             plt.show()
         plt.close()
 
-    def plot_anomaly(self, grid, state_model, state_era5, variable='u', z_idx=15, save_path=None):
+    def plot_anomaly(self, grid, state_model, state_era5, variable='u', z_idx=15, sponge_depth=30, save_path=None):
         """Plots the explicit difference between the model and ERA5."""
         if variable == 'u': x_coords, y_coords = grid.x_c, grid.y_m
         elif variable == 'v': x_coords, y_coords = grid.x_m, grid.y_c
@@ -209,7 +204,6 @@ class Visualizer:
         ax.add_feature(cfeature.COASTLINE, linewidth=1.2, edgecolor='black')
         ax.add_feature(cfeature.BORDERS, linewidth=0.8, linestyle=':', edgecolor='gray')
         
-        # Use a diverging colormap centered tightly on 0
         vmax = max(float(np.max(np.abs(anomaly))), 0.1) 
         im = ax.pcolormesh(lons, lats, anomaly, transform=ccrs.PlateCarree(), cmap='seismic', vmin=-vmax, vmax=vmax)
         
@@ -217,32 +211,92 @@ class Visualizer:
         ax.set_extent(extent, crs=ccrs.PlateCarree())
         ax.gridlines(draw_labels=True, linewidth=0.5, color='gray', alpha=0.5, linestyle='--')
         
+        # --- Domain Boundaries (Solid Black) ---
+        ax.plot(lons[0, :], lats[0, :], 'k-', transform=ccrs.PlateCarree(), linewidth=1.5)
+        ax.plot(lons[-1, :], lats[-1, :], 'k-', transform=ccrs.PlateCarree(), linewidth=1.5)
+        ax.plot(lons[:, 0], lats[:, 0], 'k-', transform=ccrs.PlateCarree(), linewidth=1.5)
+        ax.plot(lons[:, -1], lats[:, -1], 'k-', transform=ccrs.PlateCarree(), linewidth=1.5)
+
+        # --- Sponge Boundaries (Dashed Black) ---
+        if sponge_depth > 0:
+            sd = sponge_depth
+            ax.plot(lons[sd, sd:-sd], lats[sd, sd:-sd], 'k--', transform=ccrs.PlateCarree(), linewidth=1.5)
+            ax.plot(lons[-sd-1, sd:-sd], lats[-sd-1, sd:-sd], 'k--', transform=ccrs.PlateCarree(), linewidth=1.5)
+            ax.plot(lons[sd:-sd, sd], lats[sd:-sd, sd], 'k--', transform=ccrs.PlateCarree(), linewidth=1.5)
+            ax.plot(lons[sd:-sd, -sd-1], lats[sd:-sd, -sd-1], 'k--', transform=ccrs.PlateCarree(), linewidth=1.5)
+
         cbar = fig.colorbar(im, ax=ax, orientation='horizontal', pad=0.1)
         cbar.set_label(f"{variable} anomaly", fontsize=12)
 
         plt.tight_layout()
-        if save_path: plt.savefig(save_path, dpi=200)
-        else: plt.show()
+        if save_path: 
+            plt.savefig(save_path, dpi=200)
+            print(f"Saved anomaly plot to {save_path}")
+        else: 
+            plt.show()
         plt.close()
 
-    def plot_suetes_w_cross_section(self, grid, state_model, y_idx, save_path=None):
+    def plot_divergence(self, grid, state_model, z_idx=5, sponge_depth=30, save_path=None):
+        """Calculates and plots the horizontal divergence of the wind field."""
+        # Calculate horizontal divergence (du/dx + dv/dy) on the mass points
+        u = state_model['u'][:, :, z_idx]
+        v = state_model['v'][:, :, z_idx]
+        
+        du_dx = (u[1:, :] - u[:-1, :]) / grid.dx
+        dv_dy = (v[:, 1:] - v[:, :-1]) / grid.dy
+        
+        div = du_dx + dv_dy
+        
+        Xi, Yi = np.meshgrid(grid.x_m, grid.y_m, indexing='ij')
+        lats, lons = grid.proj.get_lat_lon(Xi, Yi)
+        lons = (lons + 180.0) % 360.0 - 180.0
+
+        fig, ax = plt.subplots(1, 1, figsize=(10, 6), subplot_kw={'projection': ccrs.PlateCarree()})
+        extent = [float(lons.min()) - 0.5, float(lons.max()) + 0.5, float(lats.min()) - 0.5, float(lats.max()) + 0.5]
+        
+        ax.add_feature(cfeature.COASTLINE, linewidth=1.2, edgecolor='black')
+        ax.add_feature(cfeature.BORDERS, linewidth=0.8, linestyle=':', edgecolor='gray')
+        
+        # Scale divergence for visibility (usually on the order of 1e-5 to 1e-4)
+        vmax = 1e-4 
+        im = ax.pcolormesh(lons, lats, div, transform=ccrs.PlateCarree(), cmap='seismic', vmin=-vmax, vmax=vmax)
+        
+        ax.set_title(f"Horizontal Divergence at Level {z_idx}", fontsize=14)
+        ax.set_extent(extent, crs=ccrs.PlateCarree())
+        ax.gridlines(draw_labels=True, linewidth=0.5, color='gray', alpha=0.5, linestyle='--')
+        
+        # --- Sponge Boundaries (Dashed Black) ---
+        if sponge_depth > 0:
+            sd = sponge_depth
+            ax.plot(lons[sd, sd:-sd], lats[sd, sd:-sd], 'k--', transform=ccrs.PlateCarree(), linewidth=1.5)
+            ax.plot(lons[-sd-1, sd:-sd], lats[-sd-1, sd:-sd], 'k--', transform=ccrs.PlateCarree(), linewidth=1.5)
+            ax.plot(lons[sd:-sd, sd], lats[sd:-sd, sd], 'k--', transform=ccrs.PlateCarree(), linewidth=1.5)
+            ax.plot(lons[sd:-sd, -sd-1], lats[sd:-sd, -sd-1], 'k--', transform=ccrs.PlateCarree(), linewidth=1.5)
+
+        cbar = fig.colorbar(im, ax=ax, orientation='horizontal', pad=0.1)
+        cbar.set_label("Divergence [s⁻¹]", fontsize=12)
+
+        plt.tight_layout()
+        if save_path: 
+            plt.savefig(save_path, dpi=200)
+            print(f"Saved divergence plot to {save_path}")
+        else: 
+            plt.show()
+        plt.close()
+
+    def plot_suetes_w_cross_section(self, grid, state_model, y_idx, sponge_depth=30, save_path=None):
         """Plots a vertical cross-section of Vertical Velocity (W) through the Suetes grid."""
         x_coords = grid.x_m / 1000.0  # Convert to km
         
-        # W sits on Z_w (the vertical cell faces). We plot it using X and Z_w.
         Z_slice = grid.Z_w[:, y_idx, :]
         W_slice = state_model['w'][:, y_idx, :]
-        
-        # Surface topography is the bottom of Z_w
         terrain_z = grid.Z_w[:, y_idx, 0]
         
         X_2d = np.broadcast_to(x_coords[:, None], Z_slice.shape)
         
         fig, ax = plt.subplots(figsize=(12, 6))
         
-        # Use a diverging colormap for vertical velocity (red=up, blue=down)
         vmax = max(float(np.max(W_slice)), float(np.abs(np.min(W_slice))))
-        # Clamp vmax so it highlights the mountain waves perfectly
         vmax = min(max(vmax, 0.1), 3.0) 
         
         contour = ax.contourf(X_2d, Z_slice, W_slice, levels=30, cmap='seismic', vmin=-vmax, vmax=vmax)
@@ -250,6 +304,12 @@ class Visualizer:
         
         ax.fill_between(x_coords, 0, terrain_z, color='dimgray', label='Suetes Topography')
         
+        # --- Sponge Boundaries (Dashed Black Vertical Lines) ---
+        if sponge_depth > 0:
+            # We use x_coords to find the correct physical distance of the sponge edges
+            ax.axvline(x=x_coords[sponge_depth], color='k', linestyle='--', linewidth=1.5, label='Sponge Boundary')
+            ax.axvline(x=x_coords[-sponge_depth-1], color='k', linestyle='--', linewidth=1.5)
+
         ax.set_title(f"Suetes vertical velocity (y-index: {y_idx})")
         ax.set_xlabel("X distance from domain center [km]")
         ax.set_ylabel("Geometric height [m]")
@@ -257,6 +317,9 @@ class Visualizer:
         ax.legend(loc='upper right')
         
         plt.tight_layout()
-        if save_path: plt.savefig(save_path, dpi=200)
-        else: plt.show()
+        if save_path: 
+            plt.savefig(save_path, dpi=200)
+            print(f"Saved cross-section to {save_path}")
+        else: 
+            plt.show()
         plt.close()

@@ -6,7 +6,7 @@ import jax.scipy.ndimage as jnd
 class TimeManager:
     def __init__(self, states_list, times_sec_list, grid):
         self.grid = grid
-        self.times_sec = jnp.array(times_sec_list, dtype=jnp.float64)
+        self.times_sec = jnp.array(times_sec_list, dtype=jnp.float32)
         
         # Stack the list of dicts into a single dict of 4D arrays (time, X, Y, Z)
         # This allows JAX to dynamically slice the correct time index during the scan loop
@@ -148,12 +148,23 @@ class BoundaryProcessor:
         # Calculate the uniform velocity correction (m/s)
         V_c = net_flux / total_mass_area
 
-        # Apply the correction to the normal winds on ALL faces
-        # We want to subtract the correction from inflow and add it to outflow
-        # so that the net flux is pushed exactly to zero.
-        state['u'] = state['u'].at[:, :, :].add(-V_c)
-        state['v'] = state['v'].at[:, :, :].add(-V_c)
+        # Distribute the correction as a linear gradient across the domain to avoid 
+        # a localized divergence shock at the boundaries.
         
+        # Create normalized coordinates spanning [-1.0, 1.0]
+        x_norm = (jnp.arange(self.grid.nx + 1) / self.grid.nx) * 2.0 - 1.0
+        y_norm = (jnp.arange(self.grid.ny + 1) / self.grid.ny) * 2.0 - 1.0
+        
+        # Reshape for 3D broadcasting
+        x_norm_3d = jnp.expand_dims(x_norm, axis=(1, 2))
+        y_norm_3d = jnp.expand_dims(y_norm, axis=(0, 2))
+
+        # Apply linearly: West face gets -V_c (reduces inflow), East gets +V_c (increases outflow)
+        state['u'] = state['u'] + (V_c * x_norm_3d)
+        
+        # South face gets -V_c, North gets +V_c
+        state['v'] = state['v'] + (V_c * y_norm_3d)
+
         return state
 
     def process(self, stitched_era5_state):
@@ -249,6 +260,6 @@ class BoundaryProcessor:
         state['eta_dot'] = jnp.zeros_like(state['w'])
         
         # Enforce global mass conservation (this needs to be implemented correctly)
-        # state = self._balance_global_mass(state)
+        state = self._balance_global_mass(state)
         
         return state

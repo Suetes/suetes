@@ -136,6 +136,21 @@ class Euler3D:
         # Vertical divergence (div_z) is unaffected by the horizontal map factor.
         tend_pi = -bg['C_pi'] * (m_m**2 * (div_x + div_y) + div_z)
 
+        # --- DIVERGENCE DAMPING ---
+        # A targeted filter to kill 2dx acoustic checkerboarding
+        du_dx = self.op.diff(u, axis=0, from_loc='u', to_loc='m') / self.grid.dx
+        dv_dy = self.op.diff(v, axis=1, from_loc='v', to_loc='m') / self.grid.dy
+        div_h_kinematic = du_dx + dv_dy
+        
+        grad_div_x = self.op.diff(div_h_kinematic, axis=0, from_loc='m', to_loc='u') / self.grid.dx
+        grad_div_y = self.op.diff(div_h_kinematic, axis=1, from_loc='m', to_loc='v') / self.grid.dy
+        
+        # Set to the absolute maximum safe explicit CFL limit
+        nu_div = 2.5e5 
+        tend_u += nu_div * grad_div_x
+        tend_v += nu_div * grad_div_y
+        # --------------------------
+
         # Explicit diffusion
         diff_tends = self.diffusion.get_tendencies(state_prime, bg_precomputed=bg)
 

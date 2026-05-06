@@ -138,9 +138,9 @@ class SemiLagrangianAdvector3D:
         u_idx_sec, v_idx_sec, w_idx_sec = self._get_index_velocities(state['u'], state['v'], state['eta_dot'], loc)
         
         nx, ny, nz = self.grid.nx, self.grid.ny, self.grid.nz
-        idx_x = jnp.arange(nx + (1 if loc == 'u' else 0), dtype=jnp.float64)
-        idx_y = jnp.arange(ny + (1 if loc == 'v' else 0), dtype=jnp.float64)
-        idx_z = jnp.arange(nz + (1 if loc == 'w' else 0), dtype=jnp.float64)
+        idx_x = jnp.arange(nx + (1 if loc == 'u' else 0), dtype=jnp.float32)
+        idx_y = jnp.arange(ny + (1 if loc == 'v' else 0), dtype=jnp.float32)
+        idx_z = jnp.arange(nz + (1 if loc == 'w' else 0), dtype=jnp.float32)
         Xi_idx, Yi_idx, Zi_idx = jnp.meshgrid(idx_x, idx_y, idx_z, indexing='ij')
         
         # Initial guess (Explicit Euler displacement)
@@ -235,7 +235,7 @@ class FluxFormAdvector:
         # scalar_1d acts as the logical mass in the grid cell
         M_inter = jnp.pad(jnp.cumsum(scalar_1d), (1, 0))
         
-        # Use the dtype of the scalar to maintain float64 precision
+        # Use the dtype of the scalar to maintain consistency
         idx_inter = jnp.arange(N + 1, dtype=scalar_1d.dtype)
         idx_dep = idx_inter - cfl_inter_1d
         

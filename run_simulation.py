@@ -1,3 +1,6 @@
+import os
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3' # Suppress all but FATAL CUDA/XLA warnings
+
 import jax
 import jax.numpy as jnp
 import time
@@ -27,7 +30,7 @@ def main():
     sponge_depth = 30
     
     dt = 30.0 # timestep (in seconds)
-    sim_hours = 1 
+    sim_hours = 3 
     
     sim_time_seconds = sim_hours * 3600.0
     num_steps = int(sim_time_seconds / dt)
@@ -82,18 +85,18 @@ def main():
     # ==========================================
     # 4. PHYSICS & STEPPER INITIALIZATION
     # ==========================================
-    print("Initializing Dynamical Core...")
+    print("Initializing dynamical core...")
     operators = CGridOperator3D(grid)
-    physics = Euler3D(grid, operators, constants, initial_era5_state=initial_state, damp_height=9000.0, max_damp=3.0, nu_h=5e5)
+    physics = Euler3D(grid, operators, constants, initial_era5_state=initial_state, damp_height=9000.0, max_damp=3.0, nu_h=1.0e11, nu_v=0.0)
     
     stepper = SISLStepper3D(physics, dt, tracer_keys=['q'])
-    sponge = DaviesSponge(grid, sponge_depth=sponge_depth)
+    sponge = DaviesSponge(grid, sponge_depth=sponge_depth, dt=dt, tau_bndy=300.0)
 
     # ==========================================
     # 5. THE INTEGRATION LOOP
     # ==========================================
     print(f"Starting integration: {num_steps} steps (dt={dt}s).")
-    print("Compiling JAX graph... (This will take a few minutes on the first run!)")
+    print("Compiling JAX graph...")
     
     # We write a custom scan_fn here so we can update the time dynamically
     def scan_fn(curr_state, step_idx):
@@ -116,7 +119,7 @@ def main():
     final_state, final_max_w_array = jax.lax.scan(scan_fn, initial_state, jnp.arange(num_steps))
     jax.block_until_ready(final_state['u']) 
     
-    print(f"Integration Complete! Wall time: {time.time() - start_time:.2f} seconds.")
+    print(f"Integration complete! Wall time: {time.time() - start_time:.2f} seconds.")
     
     # Print the profile of the first 10 steps, and the last 10 steps
     w_array = np.array(final_max_w_array)
@@ -139,6 +142,7 @@ def main():
         state_era5=final_era5_state, 
         variable='th_v', 
         z_idx=5, 
+        sponge_depth=sponge_depth,
         save_path=f"compare_th_v_{sim_hours}h.png"
     )
 
@@ -149,6 +153,7 @@ def main():
         state_era5=final_era5_state, 
         variable='u', 
         z_idx=15, 
+        sponge_depth=sponge_depth,
         save_path=f"compare_u_wind_{sim_hours}h.png"
     )
 
@@ -159,13 +164,25 @@ def main():
         state_era5=final_era5_state, 
         variable='u', 
         z_idx=15, 
+        sponge_depth=sponge_depth,
         save_path=f"anomaly_u_{sim_hours}h.png"
     )
     
-    # Plot the Lie Detector test! 
     # y_idx = ny // 2 slices right through the center of the domain (over the Alps)
     mid_y = grid.ny // 2
-    visualizer.plot_suetes_w_cross_section(grid, final_state, y_idx=mid_y, save_path=f"cross_section_w_{sim_hours}h.png")
+    visualizer.plot_suetes_w_cross_section(
+        grid=grid, 
+        state_model=final_state, 
+        y_idx=mid_y, 
+        sponge_depth=sponge_depth,
+        save_path=f"cross_section_w_{sim_hours}h.png")
+
+    visualizer.plot_divergence(
+        grid=grid, 
+        state_model=final_state, 
+        z_idx=5, 
+        sponge_depth=sponge_depth,
+        save_path=f"divergence_{sim_hours}h.png")
 
 if __name__ == "__main__":
     main()
