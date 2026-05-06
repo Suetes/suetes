@@ -3,14 +3,23 @@ import jax.numpy as jnp
 from suetes.regional3d.diffusion import HyperFilter
 
 class Euler3D:
-    def __init__(self, grid, operators, constants, initial_era5_state=None, N_bv=0.01, damp_height=20000.0, max_damp=0.5, nu_h=5e6, nu_v=5e6):
+    def __init__(self, grid, operators, constants, dt, initial_era5_state=None, 
+                 N_bv=0.01, damp_height=20000.0, max_damp=0.5, 
+                 nu_div_factor=0.8, nu_h_factor=0.1):
         self.grid = grid
         self.op = operators
         self.c = constants
-        self.nu_h = nu_h
-        self.nu_v = nu_v
+        self.dt = dt
         
-        # USE PHYSICAL 3D HEIGHT (Z_m), NOT LOGICAL 1D HEIGHT (zeta_m)
+        # Compute maximum stable explicit diffusion limits dynamically
+        max_nu_div = (self.grid.dx**2) / (4.0 * self.dt)
+        max_nu_h = (self.grid.dx**4) / (64.0 * self.dt)
+        
+        # Apply tuning factors (0.0 to 1.0)
+        self.nu_div = nu_div_factor * max_nu_div
+        self.nu_h = nu_h_factor * max_nu_h
+        
+        # Use physical 3D height (Z_m)
         Z_m = self.grid.Z_m
         
         if initial_era5_state is not None:
@@ -43,7 +52,7 @@ class Euler3D:
         )
 
         # Initialize the spatial filter
-        self.diffusion = HyperFilter(self.grid, nu_h=self.nu_h, nu_v=self.nu_v)
+        self.diffusion = HyperFilter(self.grid, nu_h=self.nu_h, nu_v = 0.0)
 
     def precompute_bg(self, bg_state):
         th_v_bg, rho_bg, pi_bg = bg_state['th_v'], bg_state['rho'], bg_state['pi']
@@ -136,8 +145,7 @@ class Euler3D:
         # Vertical divergence (div_z) is unaffected by the horizontal map factor.
         tend_pi = -bg['C_pi'] * (m_m**2 * (div_x + div_y) + div_z)
 
-        # --- DIVERGENCE DAMPING ---
-        # A targeted filter to kill 2dx acoustic checkerboarding
+        # Targeted filter to kill 2dx acoustic checkerboarding in the divergence operation
         du_dx = self.op.diff(u, axis=0, from_loc='u', to_loc='m') / self.grid.dx
         dv_dy = self.op.diff(v, axis=1, from_loc='v', to_loc='m') / self.grid.dy
         div_h_kinematic = du_dx + dv_dy
@@ -145,10 +153,9 @@ class Euler3D:
         grad_div_x = self.op.diff(div_h_kinematic, axis=0, from_loc='m', to_loc='u') / self.grid.dx
         grad_div_y = self.op.diff(div_h_kinematic, axis=1, from_loc='m', to_loc='v') / self.grid.dy
         
-        # Set to the absolute maximum safe explicit CFL limit
-        nu_div = 2.5e5 
-        tend_u += nu_div * grad_div_x
-        tend_v += nu_div * grad_div_y
+        # Apply the diffusion to damp the checkerboard noise
+        tend_u += self.nu_div * grad_div_x
+        tend_v += self.nu_div * grad_div_y
         # --------------------------
 
         # Explicit diffusion
@@ -162,6 +169,7 @@ class Euler3D:
 
     def linear_operator(self, state_prime, bg, dt):
         tends = self.get_tendencies(state_prime, bg, is_explicit=False)
+        
         alpha = 0.55 
 
         L_u = state_prime['u'] - alpha * dt * tends['u']
@@ -179,7 +187,7 @@ class Euler3D:
         # Bottom: Kinematic constraint (w - u*dz/dx - v*dz/dy = 0)
         m_w = jnp.expand_dims(self.grid.m_factors['w'], axis=-1)
 
-        # 1. Fix the Bottom Boundary Condition
+        # Fix the bottom boundary condition
         kinematic_bottom = state_prime['w'][:, :, 0] - m_w[:, :, 0] * (
             u_w[:, :, 0] * self.grid.z_xi_w[:, :, 0] + 
             v_w[:, :, 0] * self.grid.z_eta_w[:, :, 0]
@@ -188,9 +196,8 @@ class Euler3D:
         
         # Top: Rigid lid (w = 0)
         L_w = L_w.at[:, :, -1].set(state_prime['w'][:, :, -1])
-        # ---------------------------------------
 
-        # 2. Fix the implicit terrain advection
+        # Fix the implicit terrain advection
         L_eta_dot = alpha * (
             bg['dz_w_full'] * state_prime['eta_dot'] 
             + m_w * (u_w * self.grid.z_xi_w + v_w * self.grid.z_eta_w) 

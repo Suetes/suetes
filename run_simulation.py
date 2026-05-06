@@ -51,7 +51,7 @@ def main():
     )
     h_func = topo_proc.process_and_blend(base_grid, sponge_depth=sponge_depth, smooth_sigma=2.0)  
     sleve_transform = SleveSimple(scale_s=10000.0, n=1.0)
-    grid = RegionalGrid3D(nx, ny, nz, dx, dy, dz, lat_c, lon_c, h_func=h_func, transform=None)
+    grid = RegionalGrid3D(nx, ny, nz, dx, dy, dz, lat_c, lon_c, h_func=h_func, transform=sleve_transform)
 
     # ==========================================
     # 3. ERA5 BOUNDARY PROCESSING
@@ -87,10 +87,12 @@ def main():
     # ==========================================
     print("Initializing dynamical core...")
     operators = CGridOperator3D(grid)
-    physics = Euler3D(grid, operators, constants, initial_era5_state=initial_state, damp_height=9000.0, max_damp=3.0, nu_h=1.0e11, nu_v=0.0)
+    physics = Euler3D(grid, operators, constants, dt=dt, 
+                       initial_era5_state=initial_state, damp_height=9000.0, max_damp=3.0, 
+                       nu_div_factor=0.8, nu_h_factor=0.1)
     
     stepper = SISLStepper3D(physics, dt, tracer_keys=['q'])
-    sponge = DaviesSponge(grid, sponge_depth=sponge_depth, dt=dt, tau_bndy=300.0)
+    sponge = DaviesSponge(grid, sponge_depth=sponge_depth, dt=dt, tau_bndy_factor=10.0)
 
     # ==========================================
     # 5. THE INTEGRATION LOOP
@@ -121,7 +123,7 @@ def main():
     
     print(f"Integration complete! Wall time: {time.time() - start_time:.2f} seconds.")
     
-    # Print the profile of the first 10 steps, and the last 10 steps
+    # Print the profile of the first 10 steps, and the last 10 steps (to check stability)
     w_array = np.array(final_max_w_array)
     print(f"Max W (Steps 1-10):  {w_array[:10]}")
     print(f"Max W (Last 10):     {w_array[-10:]}")
@@ -183,6 +185,21 @@ def main():
         z_idx=5, 
         sponge_depth=sponge_depth,
         save_path=f"divergence_{sim_hours}h.png")
+
+    visualizer.plot_w_and_isentropes(
+        grid=grid, 
+        state_model=final_state, 
+        y_idx=mid_y, 
+        sponge_depth=sponge_depth,
+        save_path=f"isentropes_{sim_hours}h.png")
+
+    visualizer.plot_energy_spectrum(
+        grid=grid, 
+        state_model=final_state, 
+        variable='w', 
+        z_idx=5, 
+        sponge_depth=sponge_depth,
+        save_path=f"energy_spectrum_{sim_hours}h.png")
 
 if __name__ == "__main__":
     main()

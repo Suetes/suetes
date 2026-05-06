@@ -1,12 +1,15 @@
 import jax.numpy as jnp
 
 class DaviesSponge:
-    def __init__(self, grid, sponge_depth=30, dt=30.0, tau_bndy=300.0):
+    def __init__(self, grid, sponge_depth=30, dt=30.0, tau_bndy_factor=10.0):
         self.grid = grid
         self.depth = sponge_depth
         
-        # Calculate the maximum relaxation coefficient (fraction replaced per step)
-        # e.g., dt=30s, tau=300s -> max_c = 0.1 (10% blend per step at absolute boundary)
+        # Automatically scale the relaxation timescale with the timestep
+        tau_bndy = tau_bndy_factor * dt
+        
+        # Calculate the maximum relaxation coefficient
+        # If tau_bndy_factor is 10.0, max_c is strictly bounded to 0.1
         self.max_c = dt / tau_bndy
         
         # Precompute the three possible lateral staggered shapes
@@ -32,7 +35,7 @@ class DaviesSponge:
         # Base spatial alpha (0.0 in interior, 1.0 at absolute boundary)
         alpha = 1.0 - (wx * wy)
         
-        # Apply strict ERA5 overwrite at the edges, and nudging in the sponge
+        # Apply ERA5 overwrite at the edges, and nudging in the sponge
         scaled_alpha = jnp.where(is_boundary, 1.0, alpha * self.max_c)
                 
         return jnp.expand_dims(scaled_alpha, axis=-1)

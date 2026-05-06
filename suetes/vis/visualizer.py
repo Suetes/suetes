@@ -2,6 +2,7 @@ import matplotlib.pyplot as plt
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
 import numpy as np
+import scipy.signal as signal
 
 class Visualizer:
     
@@ -321,5 +322,142 @@ class Visualizer:
             plt.savefig(save_path, dpi=200)
             print(f"Saved cross-section to {save_path}")
         else: 
+            plt.show()
+        plt.close()
+
+    def plot_w_and_isentropes(self, grid, state_model, y_idx, sponge_depth=30, save_path=None):
+        """Plots W with overlaid isentropes (Virtual Potential Temperature) to diagnose wave breaking."""
+        x_coords = grid.x_m / 1000.0  # Convert to km
+        
+        # W is on w-levels, th_v is on mass-levels
+        Z_w_slice = grid.Z_w[:, y_idx, :]
+        Z_m_slice = grid.Z_m[:, y_idx, :]
+        W_slice = state_model['w'][:, y_idx, :]
+        th_v_slice = state_model['th_v'][:, y_idx, :]
+        terrain_z = grid.Z_w[:, y_idx, 0]
+        
+        X_w_2d = np.broadcast_to(x_coords[:, None], Z_w_slice.shape)
+        X_m_2d = np.broadcast_to(x_coords[:, None], Z_m_slice.shape)
+        
+        fig, ax = plt.subplots(figsize=(14, 7))
+        
+        # 1. Plot W as the background color
+        vmax = max(float(np.max(W_slice)), float(np.abs(np.min(W_slice))))
+        vmax = min(max(vmax, 0.1), 3.0) 
+        contour_w = ax.contourf(X_w_2d, Z_w_slice, W_slice, levels=30, cmap='seismic', vmin=-vmax, vmax=vmax)
+        plt.colorbar(contour_w, ax=ax, label='Vertical velocity (w) [m/s]', pad=0.02)
+        
+        # 2. Plot Isentropes (Potential Temperature) as black contour lines
+        # Determine a good contour interval based on the data
+        th_min, th_max = np.min(th_v_slice), np.max(th_v_slice)
+        levels = np.arange(np.floor(th_min), np.ceil(th_max), 2.0) # Every 2 Kelvin
+        
+        contour_th = ax.contour(X_m_2d, Z_m_slice, th_v_slice, levels=levels, 
+                                colors='black', linewidths=1.0, alpha=0.8)
+        
+        ax.fill_between(x_coords, 0, terrain_z, color='dimgray', label='Suetes Topography')
+        
+        # --- Sponge Boundaries (Dashed Black Vertical Lines) ---
+        if sponge_depth > 0:
+            ax.axvline(x=x_coords[sponge_depth], color='k', linestyle='--', linewidth=2.0)
+            ax.axvline(x=x_coords[-sponge_depth-1], color='k', linestyle='--', linewidth=2.0, label='Sponge Boundary')
+
+        ax.set_title(f"Wave breaking diagnostics: W and Isentropes (y-index: {y_idx})", fontsize=14)
+        ax.set_xlabel("X distance from domain center [km]", fontsize=12)
+        ax.set_ylabel("Geometric height [m]", fontsize=12)
+        ax.set_ylim(0, 15000)
+        ax.legend(loc='upper right')
+        
+        plt.tight_layout()
+        if save_path: 
+            plt.savefig(save_path, dpi=200)
+            print(f"Saved isentrope cross-section to {save_path}")
+        else: 
+            plt.show()
+        plt.close()
+
+    def plot_energy_spectrum(self, grid, state_model, variable='w', z_idx=5, sponge_depth=30, save_path=None):
+        """
+        Computes and plots the 1D spatial power spectrum along the X-axis.
+        Averages the spectra across all valid Y-rows to create a robust signal.
+        """
+        
+        # Extract the 2D horizontal slice
+        data_2d = state_model[variable][:, :, z_idx]
+        
+        # Crop out the sponge zone. The sponge heavily damps waves; including it will skew the spectrum.
+        if sponge_depth > 0:
+            data_inner = data_2d[sponge_depth:-sponge_depth, sponge_depth:-sponge_depth]
+        else:
+            data_inner = data_2d
+            
+        nx_inner = data_inner.shape[0]
+        dx = grid.dx
+        
+        # Transpose so we iterate over y-rows. Each row is an x-slice.
+        rows_to_compute = data_inner.T
+        spectra = []
+        
+        for row in rows_to_compute:
+            # Detrend the data to remove large-scale gradients
+            row_detrended = signal.detrend(row)
+            
+            # Apply a Hanning window to enforce periodicity and prevent spectral leakage
+            window = np.hanning(len(row_detrended))
+            row_windowed = row_detrended * window
+            
+            # Compute FFT and power density
+            fft_vals = np.fft.rfft(row_windowed)
+            power = np.abs(fft_vals)**2
+            spectra.append(power)
+            
+        # Average the power spectra across all y-rows for a smooth curve
+        avg_power = np.mean(spectra, axis=0)
+        
+        # Compute corresponding wavenumbers
+        k = np.fft.rfftfreq(nx_inner, d=dx)
+        
+        # Ignore the zero frequency (mean) for log-log plotting
+        k = k[1:]
+        avg_power = avg_power[1:]
+        
+        fig, ax = plt.subplots(figsize=(10, 6))
+        
+        # Plot the actual model spectrum
+        ax.loglog(k, avg_power, 'b-', label=f"Suetes '{variable}' Spectrum", linewidth=2)
+        
+        # Add theoretical reference line
+        ref_k = k[len(k)//10:] # Start the reference line a bit away from the largest scales
+        ref_power_53 = avg_power[len(k)//10] * (ref_k / ref_k[0])**(-5/3)
+        ax.loglog(ref_k, ref_power_53, 'k--', label="$k^{-5/3}$ physical cascade", alpha=0.7)
+        
+        # Mark resolution limits
+        k_nyquist = 1.0 / (2 * dx)
+        k_effective = 1.0 / (6 * dx)
+        
+        ax.axvline(x=k_nyquist, color='r', linestyle=':', label=rf'$2\Delta x$ Nyquist ({2*dx/1000:.1f} km)')
+        ax.axvline(x=k_effective, color='orange', linestyle=':', label=rf'$6\Delta x$ Effective ({6*dx/1000:.1f} km)')
+        
+        ax.set_title(f"Spatial Power Spectrum of '{variable}' at Level {z_idx}", fontsize=14)
+        ax.set_xlabel("Wavenumber $k$ [m⁻¹]", fontsize=12)
+        ax.set_ylabel("Spectral Power Density", fontsize=12)
+        ax.grid(True, which="both", ls="--", alpha=0.5)
+        ax.legend(fontsize=11)
+        
+        # Add secondary axis on top for Wavelengths to make it intuitive
+        def k_to_lambda(x): 
+            return np.divide(1.0, x, out=np.full_like(np.array(x, dtype=float), np.inf), where=(x!=0))
+        def lambda_to_k(x): 
+            return np.divide(1.0, x, out=np.full_like(np.array(x, dtype=float), np.inf), where=(x!=0))
+        secax = ax.secondary_xaxis('top', functions=(k_to_lambda, lambda_to_k))
+        secax.set_xlabel('Wavelength [m]', fontsize=12)
+        secax.set_xticks([1e5, 5e4, 2e4, 1.2e4])
+        secax.set_xticklabels(['100km', '50km', '20km', '12km'])
+        
+        plt.tight_layout()
+        if save_path:
+            plt.savefig(save_path, dpi=200)
+            print(f"Saved energy spectrum to {save_path}")
+        else:
             plt.show()
         plt.close()
