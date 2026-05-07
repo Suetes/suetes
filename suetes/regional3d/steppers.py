@@ -24,33 +24,30 @@ class VerticalPreconditioner:
         self.rho_w = bg['rho_w']
         self.tau_damp = self.physics.tau_damp
         
-        # 1. K_w: Acoustic wave speed / Sponge layer (defined on w-points)
-        # FIX: Removed dz_logical 
-        self.K_w = (alpha * dt * cp * self.th_v_w) / \
-              (self.dz_w_full * (1.0 + dt * self.tau_damp))
+        # K_w: Acoustic wave speed / Sponge layer (defined on w-points)
+        self.K_w = (alpha * dt * cp * self.th_v_w) / (self.dz_w_full * (1.0 + dt * self.tau_damp))
         
-        # 2. P: Mass-weighted acoustic propagation (defined on w-points)
+        # P: Mass-weighted acoustic propagation (defined on w-points)
         P = self.K_w * self.rho_w * self.th_v_w
         
         P = P.at[:, :, 0].set(0.0)
         P = P.at[:, :, -1].set(0.0)
         
-        # 3. L_pi: Thermodynamic compressibility (defined on mass-points)
-        # FIX: Removed dz_logical
+        # L_pi: Thermodynamic compressibility (defined on mass-points)
         self.L_pi = (alpha * dt * bg['C_pi']) / bg['dz_m_full']
         
-        # 4. Tridiagonal Matrix Assembly
+        # Tridiagonal matrix assembly
         self.lower = -self.L_pi * P[:, :, :-1]
         self.upper = -self.L_pi * P[:, :, 1:]
         self.main  = 1.0 - self.lower - self.upper
 
     def __call__(self, rhs_scaled):
-        # --- 1. UNSCALE FOR PHYSICAL MATH ---
+        # Unscale for physical math
         pi_scale = 100000.0
         rhs_pi_phys = rhs_scaled['pi'] / pi_scale
         rhs_w_phys = rhs_scaled['w']
 
-        # --- 2. KINEMATIC 3D FORCING ---
+        # Kinematic 3d forcing
         u_m = self.physics.op.avg(rhs_scaled['u'], axis=0, from_loc='u', to_loc='m')
         u_w = self.physics.op.avg(u_m, axis=2, from_loc='m', to_loc='w')
         v_m = self.physics.op.avg(rhs_scaled['v'], axis=1, from_loc='v', to_loc='m')
@@ -62,23 +59,23 @@ class VerticalPreconditioner:
         )
         kinematic_w = kinematic_3d[:, :, 0]
 
-        # --- 3. PHYSICAL PRECONDITIONER SOLVE ---
+        # Physical preconditioner solve
         w_contra_known = (rhs_w_phys / (1.0 + self.dt * self.tau_damp)) + (rhs_scaled['eta_dot'] / self.alpha) - kinematic_3d
         
         w_tilde = self.rho_w * self.th_v_w * w_contra_known
         w_tilde = w_tilde.at[:, :, 0].set(0.0)
         w_tilde = w_tilde.at[:, :, -1].set(0.0)
         
-        # FIX: Multiply by dz to undo op.diff's internal division (Matches euler.py perfectly)
+        # Multiply by dz to undo op.diff's internal division (Matches euler.py perfectly)
         div_w_tilde = self.physics.op.diff(w_tilde, axis=2, from_loc='w', to_loc='m') * self.physics.grid.dz
         rhs_helmholtz = rhs_pi_phys - self.L_pi * div_w_tilde
         
-        # FAST TRIDIAGONAL SOLVE 
+        # Fast tridiagonal solve 
         rhs_helmholtz_expanded = rhs_helmholtz[..., None]
         precond_pi_phys_expanded = tridiagonal_solve(self.lower, self.main, self.upper, rhs_helmholtz_expanded)
         precond_pi_phys = precond_pi_phys_expanded[..., 0]
         
-        # --- 4. BACK-SUBSTITUTION FOR W ---
+        # Back-substitution for w
         grad_pi = self.physics.op.diff(precond_pi_phys, axis=2, from_loc='m', to_loc='w') * (self.physics.grid.dz / self.dz_w_full)
         
         alpha, dt, cp = self.alpha, self.dt, self.physics.c['cp']
@@ -87,7 +84,7 @@ class VerticalPreconditioner:
         precond_w_phys = precond_w_phys.at[:, :, 0].set(rhs_w_phys[:, :, 0] + kinematic_w)
         precond_w_phys = precond_w_phys.at[:, :, -1].set(rhs_w_phys[:, :, -1])
 
-        # --- 5. BACK-SUBSTITUTION FOR ETA_DOT ---
+        # Back-substitution for eta_dot
         precond_eta_dot = (rhs_scaled['eta_dot'] / self.alpha) + precond_w_phys - kinematic_3d
         
         precond_eta_dot = precond_eta_dot.at[:, :, 0].set(rhs_scaled['eta_dot'][:, :, 0] * self.dz_w_full[:, :, 0])
@@ -239,8 +236,7 @@ class FluxFormAdvector:
         idx_inter = jnp.arange(N + 1, dtype=scalar_1d.dtype)
         idx_dep = idx_inter - cfl_inter_1d
         
-        # Solid boundary condition for the advector 
-        # (The Davies sponge will handle the open boundaries later)
+        # Solid boundary condition for the advector (Davies sponge will handle the open boundaries later)
         idx_dep = jnp.clip(idx_dep, 0.0, float(N))
         
         M_dep = jnd.map_coordinates(M_inter, [idx_dep], order=1, mode='nearest')
@@ -301,7 +297,7 @@ class SISLStepper3D:
 
     def step(self, state, t, forcing, bc_fn):
 
-        alpha = 0.55
+        alpha = 0.5
 
         if 'eta_dot' not in state: state['eta_dot'] = jnp.zeros_like(state['w'])
             
@@ -379,30 +375,47 @@ class SISLStepper3D:
         rhs_to_blend.update(tracers_next)
 
         # The sponge only modifies 'u', 'v', 'th_v', and tracers.
-        blended_rhs = bc_fn(rhs_to_blend, forcing)
-
+        
         # Unpack the blended state
-        rhs_u = blended_rhs['u']
-        rhs_v = blended_rhs['v']
-        rhs_w = blended_rhs['w']
-        rhs_pi_prime = blended_rhs['pi']
-        th_v_next = blended_rhs['th_v']
-        R_eta_dot = blended_rhs['eta_dot']
+        rhs_u = rhs_to_blend['u']
+        rhs_v = rhs_to_blend['v']
+        rhs_w = rhs_to_blend['w']
+        rhs_pi_prime = rhs_to_blend['pi']
+        th_v_next = rhs_to_blend['th_v']
+        R_eta_dot = rhs_to_blend['eta_dot']
         
         for key in self.tracer_keys:
-            if key in blended_rhs:
-                tracers_next[key] = blended_rhs[key]
+            if key in rhs_to_blend:
+                tracers_next[key] = rhs_to_blend[key]
 
         # =====================================================================
-        # 2. ADD BUOYANCY (Moved up!)
+        # 2. ADD BUOYANCY
         # =====================================================================
         th_v_prime_next = th_v_next - self.physics.theta_bg
         th_v_prime_w_next = self.physics.op.avg(th_v_prime_next, axis=2, from_loc='m', to_loc='w')
         rhs_w += 0.5 * self.dt * (self.physics.c['g'] * (th_v_prime_w_next / bg_precomputed['th_v_w']))
 
-        # --- ZERO OUT RHS BOUNDARIES FOR KINEMATIC CONSTRAINTS ---
-        rhs_w = rhs_w.at[:, :, 0].set(0.0)
+        # --- ENFORCE KINEMATIC BOUNDARY ON RHS ---
+        # Bring the explicit horizontal winds to the w-points
+        u_m_rhs = self.physics.op.avg(rhs_u, axis=0, from_loc='u', to_loc='m')
+        u_w_rhs = self.physics.op.avg(u_m_rhs, axis=2, from_loc='m', to_loc='w')
+
+        v_m_rhs = self.physics.op.avg(rhs_v, axis=1, from_loc='v', to_loc='m')
+        v_w_rhs = self.physics.op.avg(v_m_rhs, axis=2, from_loc='m', to_loc='w')
+
+        m_w = jnp.expand_dims(self.physics.grid.m_factors['w'], axis=-1)
+
+        # Calculate the flow forced vertically by the explicit winds hitting the terrain
+        rhs_kinematic_bottom = m_w[:, :, 0] * (
+            u_w_rhs[:, :, 0] * self.physics.grid.z_xi_w[:, :, 0] + 
+            v_w_rhs[:, :, 0] * self.physics.grid.z_eta_w[:, :, 0]
+        )
+
+        # Apply correct kinematic w at surface, 0.0 at the rigid lid top
+        rhs_w = rhs_w.at[:, :, 0].set(rhs_kinematic_bottom)
         rhs_w = rhs_w.at[:, :, -1].set(0.0)
+
+        # eta_dot is the cross-coordinate velocity, so 0.0 at coordinate boundaries is correct
         R_eta_dot = R_eta_dot.at[:, :, 0].set(0.0)
         R_eta_dot = R_eta_dot.at[:, :, -1].set(0.0)
         
@@ -430,14 +443,14 @@ class SISLStepper3D:
                 state_next[key] = tracers_next[key]
 
         # =====================================================================
-        # 5. APPLY LATERAL SPONGE TO FINAL BALANCED STATE
+        # 5. APPLY BOUNDARY CONDITIONS
         # =====================================================================
         state_next = bc_fn(state_next, forcing)
 
         # =====================================================================
         # 6. THERMODYNAMIC RECONCILIATION
         # =====================================================================
-        # Because the sponge nudged th_v, we MUST recalculate rho to satisfy the 
+        # Because the sponge nudged th_v and pi, we MUST recalculate rho to satisfy the 
         # Equation of State, preventing a thermodynamic shock in the next step!
         cvd, Rd, p0 = self.physics.c['cvd'], self.physics.c['Rd'], self.physics.c['p0']
         state_next['rho'] = p0 / (Rd * state_next['th_v']) * (state_next['pi'] ** (cvd / Rd))

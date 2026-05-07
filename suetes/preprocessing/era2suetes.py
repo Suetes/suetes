@@ -2,6 +2,9 @@ import jax
 import jax.numpy as jnp
 import jax.scipy.ndimage as jnd
 
+import numpy as np
+import scipy.ndimage as ndimage_cpu
+
 
 class TimeManager:
     def __init__(self, states_list, times_sec_list, grid):
@@ -42,41 +45,54 @@ class HorizontalRegridder:
     def __init__(self, grid, era5_lats, era5_lons):
         self.grid = grid
         
-        self.lat_0 = era5_lats[0]
-        self.dlat = era5_lats[1] - era5_lats[0] 
-        self.lon_0 = era5_lons[0]
-        self.dlon = era5_lons[1] - era5_lons[0]
+        self.lat_0 = float(era5_lats[0])
+        self.dlat = float(era5_lats[1] - era5_lats[0]) 
+        self.lon_0 = float(era5_lons[0])
+        self.dlon = float(era5_lons[1] - era5_lons[0])
 
-        # Check if the ERA5 dataset uses negative longitudes
         self.is_negative_lon = self.lon_0 < 0 
 
+        # Compute target indices as standard numpy arrays
         self.target_indices = {
-            'm': self._compute_fractional_indices(self.grid.x_m, self.grid.y_m),
-            'u': self._compute_fractional_indices(self.grid.x_c, self.grid.y_m),
-            'v': self._compute_fractional_indices(self.grid.x_m, self.grid.y_c)
+            'm': self._compute_fractional_indices(np.array(self.grid.x_m), np.array(self.grid.y_m)),
+            'u': self._compute_fractional_indices(np.array(self.grid.x_c), np.array(self.grid.y_m)),
+            'v': self._compute_fractional_indices(np.array(self.grid.x_m), np.array(self.grid.y_c))
         }
 
     def _compute_fractional_indices(self, x_coords, y_coords):
-        Xi, Yi = jnp.meshgrid(x_coords, y_coords, indexing='ij')
+        Xi, Yi = np.meshgrid(x_coords, y_coords, indexing='ij')
         target_lat, target_lon = self.grid.proj.get_lat_lon(Xi, Yi)
         
-        target_lon = jnp.where(
+        # Ensure we are using numpy here, not jnp
+        target_lat = np.array(target_lat)
+        target_lon = np.array(target_lon)
+        
+        target_lon = np.where(
             self.is_negative_lon,
-            (target_lon + 180.0) % 360.0 - 180.0, # Map to [-180, 180]
-            jnp.mod(target_lon, 360.0)            # Map to [0, 360]
+            (target_lon + 180.0) % 360.0 - 180.0,
+            np.mod(target_lon, 360.0)            
         )
         
         idx_lat = (target_lat - self.lat_0) / self.dlat
         idx_lon = (target_lon - self.lon_0) / self.dlon
         
-        return jnp.stack([idx_lat, idx_lon], axis=0)
+        return np.stack([idx_lat, idx_lon], axis=0)
 
     def regrid_3d(self, field_era5_3d, loc='m'):
-        """Regrids a (levels, lat, lon) array to (levels, nx, ny)."""
+        """Regrids a (levels, lat, lon) array using SciPy bicubic interpolation."""
         coords = self.target_indices[loc]
-        vmap_regrid = jax.vmap(lambda f: jnd.map_coordinates(f, coords, order=1, mode='nearest'), in_axes=0)
-        regridded = vmap_regrid(field_era5_3d)
-        return jnp.transpose(regridded, (1, 2, 0))
+        field_np = np.array(field_era5_3d)
+        
+        # Map coordinates layer by layer using standard SciPy with order=3
+        regridded_layers = []
+        for z in range(field_np.shape[0]):
+            layer = ndimage_cpu.map_coordinates(field_np[z], coords, order=3, mode='nearest')
+            regridded_layers.append(layer)
+            
+        regridded = np.stack(regridded_layers, axis=0)
+        
+        # Convert back to JAX array and transpose to (X, Y, Z) expected by the model
+        return jnp.array(np.transpose(regridded, (1, 2, 0)))
 
 
 class BoundaryProcessor:
@@ -259,7 +275,7 @@ class BoundaryProcessor:
         state['w'] = state['w'].at[:, :, -1].set(0.0)             
         state['eta_dot'] = jnp.zeros_like(state['w'])
         
-        # Enforce global mass conservation (this needs to be implemented correctly)
-        state = self._balance_global_mass(state)
+        # Enforce global mass conservation (probably a bad idea for open systems!)
+        # state = self._balance_global_mass(state)
         
         return state

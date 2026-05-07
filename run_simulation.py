@@ -26,12 +26,14 @@ def main():
     # ==========================================
     nx, ny, nz = 300, 300, 40
     dx, dy, dz = 6000.0, 6000.0, 500.0
-    lat_c, lon_c = 45.0, 5.0
+    lat_c, lon_c = 45.0, 5.0 # Alps
+    # lat_c, lon_c = 48.0, -60.0 # Labrador Sea
+
     sponge_depth = 30
     
     dt = 30.0 # timestep (in seconds)
-    sim_hours = 3 
-    
+    sim_hours = 3
+
     sim_time_seconds = sim_hours * 3600.0
     num_steps = int(sim_time_seconds / dt)
     num_era5_states = int(sim_hours) + 1 # Need +1 to cap the interpolation interval
@@ -106,6 +108,7 @@ def main():
         bc_state_t = time_manager.get_forcing(t_curr)
         
         def bc_fn(state_next, _):
+            # Pass the full state to the blender
             return sponge.blend(state_next, bc_state_t)
             
         next_state = stepper.step(curr_state, t_curr, forcing=None, bc_fn=bc_fn)

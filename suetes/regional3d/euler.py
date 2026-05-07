@@ -146,14 +146,13 @@ class Euler3D:
         tend_pi = -bg['C_pi'] * (m_m**2 * (div_x + div_y) + div_z)
 
         # Targeted filter to kill 2dx acoustic checkerboarding in the divergence operation
-        du_dx = self.op.diff(u, axis=0, from_loc='u', to_loc='m') / self.grid.dx
-        dv_dy = self.op.diff(v, axis=1, from_loc='v', to_loc='m') / self.grid.dy
+        du_dx = self.op.diff(u, axis=0, from_loc='u', to_loc='m') 
+        dv_dy = self.op.diff(v, axis=1, from_loc='v', to_loc='m') 
         div_h_kinematic = du_dx + dv_dy
-        
-        grad_div_x = self.op.diff(div_h_kinematic, axis=0, from_loc='m', to_loc='u') / self.grid.dx
-        grad_div_y = self.op.diff(div_h_kinematic, axis=1, from_loc='m', to_loc='v') / self.grid.dy
-        
-        # Apply the diffusion to damp the checkerboard noise
+
+        grad_div_x = self.op.diff(div_h_kinematic, axis=0, from_loc='m', to_loc='u') 
+        grad_div_y = self.op.diff(div_h_kinematic, axis=1, from_loc='m', to_loc='v') 
+
         tend_u += self.nu_div * grad_div_x
         tend_v += self.nu_div * grad_div_y
         # --------------------------
