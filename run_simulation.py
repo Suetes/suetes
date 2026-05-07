@@ -37,7 +37,8 @@ def main():
     sponge_depth = 30
     
     dt = 30.0 # timestep (in seconds)
-    sim_hours = 6
+    sim_hours = 12
+
 
     sim_time_seconds = sim_hours * 3600.0
     num_steps = int(sim_time_seconds / dt)
@@ -45,6 +46,9 @@ def main():
 
     constants = {'g': 9.81, 'Rd': 287.0, 'cp': 1004.0, 'cvd': 717.0, 'p0': 100000.0, 'epsilon': 0.622}
 
+    # Use moisture physics
+    USE_MOISTURE = True 
+    
     print(f"Initializing Suetes Domain ({nx}x{ny}x{nz}) at {dx}m resolution...")
 
     # ==========================================
@@ -88,6 +92,9 @@ def main():
     
     # The starting state for the model is always the first index
     initial_state = suetes_bc_states[0]
+
+    # Initialize cloud water to zero (optional)
+    initial_state['q_c'] = jnp.zeros_like(initial_state['q'])
     
     # ==========================================
     # 4. PHYSICS & STEPPER INITIALIZATION
@@ -98,7 +105,7 @@ def main():
                        initial_era5_state=initial_state, damp_height=9000.0, max_damp=3.0, 
                        nu_div_factor=0.8, nu_h_factor=0.1)
     
-    stepper = SISLStepper3D(physics, dt, tracer_keys=['q'])
+    stepper = SISLStepper3D(physics, dt, tracer_keys=['q', 'q_c'], use_moisture=USE_MOISTURE)
     sponge = DaviesSponge(grid, sponge_depth=sponge_depth, dt=dt, tau_bndy_factor=10.0)
 
     # ==========================================
@@ -158,7 +165,13 @@ def main():
     visualizer.plot_energy_spectrum(grid, final_state, 'w', 5, sponge_depth, os.path.join(output_dir, f"energy_spectrum_{sim_hours}h.png"))
 
     # Plot dashboard
-    visualizer.plot_dashboard(grid, final_state, 5, sponge_depth, None, sim_hours, os.path.join(output_dir, f"dashboard_{sim_hours}h.png"))
+    fields_to_plot = [{'var': 'w', 'cmap': 'seismic', 'title': 'Vertical Velocity [m/s]', 'scale': 'sym'},
+        {'var': 'div', 'cmap': 'seismic', 'title': 'Horizontal Divergence [s⁻¹]', 'scale': 'sym'},
+        {'var': 'q_c', 'cmap': 'Blues', 'title': 'Cloud Water [kg/kg]', 'scale': 'linear'},
+        {'var': 'u', 'cmap': 'seismic', 'title': 'Zonal Wind [m/s]', 'scale': 'linear'}
+    ]
+    visualizer.plot_dashboard(grid, final_state, 5, sponge_depth, fields=fields_to_plot, 
+                            time_hours=sim_hours, save_path=os.path.join(output_dir, f"dashboard_{sim_hours}h.png"))
 
     # Calculate and plot divergence
     visualizer.plot_divergence(grid, final_state, 5, sponge_depth, os.path.join(output_dir, f"divergence_{sim_hours}h.png"))
@@ -167,6 +180,10 @@ def main():
     mid_y = grid.ny // 2 
     visualizer.plot_suetes_w_cross_section(grid, final_state, mid_y, sponge_depth, os.path.join(output_dir, f"cross_section_w_{sim_hours}h.png"))
     visualizer.plot_w_and_isentropes(grid, final_state, mid_y, sponge_depth, os.path.join(output_dir, f"isentropes_{sim_hours}h.png"))
+    visualizer.plot_qc_cross_section(grid, final_state, mid_y, sponge_depth, os.path.join(output_dir, f"cross_section_qc_{sim_hours}h.png"))
+
+    # Plot relative humidity (near the surface)
+    visualizer.plot_rh_map(grid, final_state, constants, z_idx=1, save_path=os.path.join(output_dir, f"rh_map_{sim_hours}h.png"))
 
 if __name__ == "__main__":
     main()

@@ -42,3 +42,57 @@ class BulkAerodynamicPBL:
         tend_v = jnp.zeros_like(v).at[:, :, 0].set(drag_v_surf)
         
         return {'u': tend_u, 'v': tend_v}
+
+
+class SimpleMicrophysics:
+    def __init__(self, constants):
+        self.c = constants
+        self.Lv = 2.5e6  # Latent heat of vaporization [J/kg]
+        self.Rv = 461.5  # Gas constant for water vapor [J/(kg K)]
+        self.epsilon = constants.get('epsilon', 0.622)
+
+        # =====================================================================
+        # PRE-COMPUTED LOOKUP TABLE (LUT)
+        # =====================================================================
+        # We compute the expensive Tetens exponent once during initialization
+        # over the realistic atmospheric temperature range (150K to 330K).
+        self.T_table = jnp.linspace(150.0, 330.0, 2000)
+        self.es_table = 611.2 * jnp.exp(17.67 * (self.T_table - 273.15) / (self.T_table - 29.65))
+
+    def saturation_adjustment(self, state, pi_full):
+        """
+        Fast saturation adjustment using a linear interpolation LUT.
+        """
+        th_v = state['th_v']
+        qv = state['q']
+        qc = state.get('q_c', jnp.zeros_like(qv))
+        
+        # 1. Back out the physical temperature (T) and pressure (p)
+        Tv = th_v * pi_full
+        T = Tv / (1.0 + (1.0 / self.epsilon - 1.0) * qv - qc)
+        p = self.c['p0'] * (pi_full ** (self.c['cp'] / self.c['Rd']))
+
+        # =====================================================================
+        # 2. FAST LUT EVALUATION
+        # =====================================================================
+        # Replace the expensive jnp.exp with lightning-fast linear interpolation
+        e_s = jnp.interp(T, self.T_table, self.es_table)
+        
+        # Calculate Saturation Specific Humidity (q_s)
+        q_s = (self.epsilon * e_s) / (p - (1.0 - self.epsilon) * e_s)
+
+        # 3. Calculate Condensation/Evaporation amount (dq)
+        dq = (qv - q_s) / (1.0 + (self.Lv**2 * q_s) / (self.c['cp'] * self.Rv * T**2))
+
+        # Apply phase change only where needed
+        dq = jnp.where(dq > 0, dq, jnp.maximum(dq, -qc))
+
+        # 4. Update the mass variables
+        new_qv = qv - dq
+        new_qc = qc + dq
+        
+        # 5. Apply Latent Heating to Virtual Potential Temperature
+        T_new = T + (self.Lv / self.c['cp']) * dq
+        new_th_v = (T_new * (1.0 + (1.0 / self.epsilon - 1.0) * new_qv - new_qc)) / pi_full
+
+        return {'q': new_qv, 'q_c': new_qc, 'th_v': new_th_v}

@@ -462,6 +462,93 @@ class Visualizer:
             plt.show()
         plt.close()
 
+    def plot_qc_cross_section(self, grid, state_model, y_idx, sponge_depth=30, save_path=None):
+        """Plots a vertical cross-section of Cloud Liquid Water (q_c)."""
+        x_coords = grid.x_m / 1000.0  # Convert to km
+        
+        Z_slice = grid.Z_m[:, y_idx, :]
+        # Convert kg/kg to g/kg for readability
+        qc_slice = state_model['q_c'][:, y_idx, :] * 1000.0 
+        terrain_z = grid.Z_w[:, y_idx, 0]
+        
+        X_2d = np.broadcast_to(x_coords[:, None], Z_slice.shape)
+        
+        fig, ax = plt.subplots(figsize=(12, 6))
+        
+        # Only plot where qc > 0.01 g/kg (typical cloud threshold)
+        vmax = max(float(np.max(qc_slice)), 0.05)
+        levels = np.linspace(0.01, vmax, 20)
+        
+        contour = ax.contourf(X_2d, Z_slice, qc_slice, levels=levels, cmap='Blues', extend='max')
+        plt.colorbar(contour, ax=ax, label='Cloud Water ($q_c$) [g/kg]')
+        
+        ax.fill_between(x_coords, 0, terrain_z, color='dimgray', label='Suetes Topography')
+        
+        # --- Sponge Boundaries ---
+        if sponge_depth > 0:
+            ax.axvline(x=x_coords[sponge_depth], color='k', linestyle='--', linewidth=1.5, label='Sponge Boundary')
+            ax.axvline(x=x_coords[-sponge_depth-1], color='k', linestyle='--', linewidth=1.5)
+
+        ax.set_title(f"Cloud Liquid Water (y-index: {y_idx})", fontsize=14)
+        ax.set_xlabel("X distance from domain center [km]", fontsize=12)
+        ax.set_ylabel("Geometric height [m]", fontsize=12)
+        ax.set_ylim(0, 15000)
+        ax.legend(loc='upper right')
+        
+        plt.tight_layout()
+        if save_path: 
+            plt.savefig(save_path, dpi=200)
+            print(f"Saved qc cross-section to {save_path}")
+        else: 
+            plt.show()
+        plt.close()
+
+    def plot_rh_map(self, grid, state_model, constants, z_idx=5, save_path=None):
+        """Plots Relative Humidity to diagnose dry-air environments."""
+        Xi, Yi = np.meshgrid(grid.x_m, grid.y_m, indexing='ij')
+        lats, lons = grid.proj.get_lat_lon(Xi, Yi)
+        lons = (lons + 180.0) % 360.0 - 180.0
+        
+        qv = np.array(state_model['q'][:, :, z_idx])
+        pi = np.array(state_model['pi'][:, :, z_idx])
+        th_v = np.array(state_model['th_v'][:, :, z_idx])
+        
+        # Reverse engineer T and p to find the saturation threshold
+        epsilon = constants.get('epsilon', 0.622)
+        Tv = th_v * pi
+        T = Tv / (1.0 + (1.0 / epsilon - 1.0) * qv)
+        p = constants['p0'] * (pi ** (constants['cp'] / constants['Rd']))
+        
+        # Calculate Saturation Specific Humidity
+        e_s = 611.2 * np.exp(17.67 * (T - 273.15) / (T - 29.65))
+        q_s = (epsilon * e_s) / (p - (1.0 - epsilon) * e_s)
+        
+        # Calculate RH (capped at 100% for plotting)
+        rh = np.clip((qv / q_s) * 100.0, 0, 100)
+        
+        fig, ax = plt.subplots(figsize=(10, 6), subplot_kw={'projection': ccrs.PlateCarree()})
+        extent = [float(lons.min()) - 0.5, float(lons.max()) + 0.5, float(lats.min()) - 0.5, float(lats.max()) + 0.5]
+        
+        ax.add_feature(cfeature.COASTLINE, linewidth=1.2, edgecolor='black')
+        ax.add_feature(cfeature.BORDERS, linewidth=0.8, linestyle=':', edgecolor='gray')
+        
+        # Use a brown (dry) to green (wet) colormap
+        im = ax.pcolormesh(lons, lats, rh, transform=ccrs.PlateCarree(), cmap='BrBG', vmin=0, vmax=100)
+        
+        ax.set_title(f"Relative Humidity [%] at Level {z_idx}", fontsize=14)
+        ax.set_extent(extent, crs=ccrs.PlateCarree())
+        
+        cbar = fig.colorbar(im, ax=ax, orientation='horizontal', pad=0.1)
+        cbar.set_label("Relative Humidity [%]", fontsize=12)
+
+        plt.tight_layout()
+        if save_path: 
+            plt.savefig(save_path, dpi=200)
+            print(f"Saved RH plot to {save_path}")
+        else: 
+            plt.show()
+        plt.close()
+
     def plot_dashboard(self, grid, state_model, z_idx=5, sponge_depth=30, fields=None, time_hours=None, save_path=None):
         """
         Creates a dynamic multi-panel dashboard for a specific model level.

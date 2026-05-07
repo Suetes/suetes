@@ -4,10 +4,9 @@ import jax.numpy as jnp
 from jax.scipy.sparse.linalg import gmres
 from jax.lax.linalg import tridiagonal_solve
 import jax.scipy.ndimage as jnd
-from .operators import tensor_product_interp_3d
 
-import jax.numpy as jnp
-from jax.lax.linalg import tridiagonal_solve
+from suetes.regional3d.operators import tensor_product_interp_3d
+from suetes.regional3d.physics import SimpleMicrophysics
 
 class VerticalPreconditioner:
     def __init__(self, physics, dt, alpha=0.55):
@@ -278,12 +277,17 @@ class FluxFormAdvector:
 
 
 class SISLStepper3D:
-    def __init__(self, physics, dt, tracer_keys=None):
+    def __init__(self, physics, dt, tracer_keys=None, use_moisture=True):
         self.physics, self.dt = physics, dt
         self.tracer_keys = tracer_keys if tracer_keys is not None else []
         self.advector = SemiLagrangianAdvector3D(physics.grid, physics, dt)
         self.ffsl_advector = FluxFormAdvector(physics.grid, dt)
         self.implicit_solver = SemiImplicitSolver3D(physics, dt)
+        
+        # Handle optional moisture physics
+        self.use_moisture = use_moisture
+        if self.use_moisture:
+            self.microphysics = SimpleMicrophysics(physics.c)
 
     def integrate(self, state, t_start, num_steps, forcing, bc_fn):
         """Wraps the step function in a JAX scan loop for fast execution."""
@@ -438,9 +442,19 @@ class SISLStepper3D:
             'eta_dot': state_prime_next['eta_dot']
         }
 
+        # Load tracers
         for key in self.tracer_keys:
             if key in tracers_next:
                 state_next[key] = tracers_next[key]
+
+        # =====================================================================
+        # 4b. MICROPHYSICS (SATURATION ADJUSTMENT)
+        # =====================================================================
+        if self.use_moisture and 'q' in state_next:
+            moist_updates = self.microphysics.saturation_adjustment(state_next, state_next['pi'])
+            state_next['q'] = moist_updates['q']
+            state_next['q_c'] = moist_updates['q_c']
+            state_next['th_v'] = moist_updates['th_v']
 
         # =====================================================================
         # 5. APPLY BOUNDARY CONDITIONS
