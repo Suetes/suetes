@@ -1,15 +1,18 @@
 import jax
 import jax.numpy as jnp
 from suetes.regional3d.diffusion import HyperFilter
+from suetes.regional3d.physics import BulkAerodynamicPBL
 
 class Euler3D:
     def __init__(self, grid, operators, constants, dt, initial_era5_state=None, 
                  N_bv=0.01, damp_height=20000.0, max_damp=0.5, 
-                 nu_div_factor=0.8, nu_h_factor=0.1):
+                 nu_div_factor=0.8, nu_h_factor=0.1, use_pbl=True):
+        
         self.grid = grid
         self.op = operators
         self.c = constants
         self.dt = dt
+        self.use_pbl = use_pbl
         
         # Compute maximum stable explicit diffusion limits dynamically
         max_nu_div = (self.grid.dx**2) / (4.0 * self.dt)
@@ -53,6 +56,10 @@ class Euler3D:
 
         # Initialize the spatial filter
         self.diffusion = HyperFilter(self.grid, nu_h=self.nu_h, nu_v = 0.0)
+
+        # Planetary Boundary Layer parameterization
+        if self.use_pbl:
+            self.pbl_scheme = BulkAerodynamicPBL(self.grid, self.op)
 
     def precompute_bg(self, bg_state):
         th_v_bg, rho_bg, pi_bg = bg_state['th_v'], bg_state['rho'], bg_state['pi']
@@ -163,6 +170,17 @@ class Euler3D:
         tend_u += diff_tends['u']
         tend_v += diff_tends['v']
         tend_w += diff_tends['w']
+
+        # Planetary Boundary Layer parameterization
+        if self.use_pbl and is_explicit:  # Restrict to explicit pass!
+            # We must pass the full absolute state to the physics scheme, not just primes
+            full_state = {
+                'u': state_prime['u'],
+                'v': state_prime['v']
+            }
+            pbl_tends = self.pbl_scheme.get_tendencies(full_state, bg)
+            tend_u += pbl_tends['u']
+            tend_v += pbl_tends['v']
 
         return {'u': tend_u, 'v': tend_v, 'w': tend_w, 'pi': tend_pi}
 

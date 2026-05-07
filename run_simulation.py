@@ -24,15 +24,20 @@ def main():
     # ==========================================
     # 1. DOMAIN & TIME SETUP
     # ==========================================
+
+    # Output plot folder
+    output_dir = "suetes/plots"
+    os.makedirs(output_dir, exist_ok=True)
+
     nx, ny, nz = 300, 300, 40
     dx, dy, dz = 6000.0, 6000.0, 500.0
-    lat_c, lon_c = 45.0, 5.0 # Alps
-    # lat_c, lon_c = 48.0, -60.0 # Labrador Sea
+    # lat_c, lon_c = 45.0, 5.0 # Alps
+    lat_c, lon_c = 48.0, -60.0 # Labrador Sea
 
     sponge_depth = 30
     
     dt = 30.0 # timestep (in seconds)
-    sim_hours = 3
+    sim_hours = 6
 
     sim_time_seconds = sim_hours * 3600.0
     num_steps = int(sim_time_seconds / dt)
@@ -141,68 +146,27 @@ def main():
     final_era5_state = suetes_bc_states[-1]
     
     # Plot Virtual Potential Temperature in the lower troposphere (e.g., Level 5)
-    visualizer.plot_model_vs_era5_map(
-        grid=grid, 
-        state_model=final_state, 
-        state_era5=final_era5_state, 
-        variable='th_v', 
-        z_idx=5, 
-        sponge_depth=sponge_depth,
-        save_path=f"compare_th_v_{sim_hours}h.png"
-    )
+    visualizer.plot_model_vs_era5_map(grid, final_state, final_era5_state, 'th_v', 5, sponge_depth, os.path.join(output_dir, f"compare_th_v_{sim_hours}h.png"))
 
     # Plot U-Wind higher up (e.g., Level 15) to see the synoptic flow
-    visualizer.plot_model_vs_era5_map(
-        grid=grid, 
-        state_model=final_state, 
-        state_era5=final_era5_state, 
-        variable='u', 
-        z_idx=15, 
-        sponge_depth=sponge_depth,
-        save_path=f"compare_u_wind_{sim_hours}h.png"
-    )
+    visualizer.plot_model_vs_era5_map(grid, final_state, final_era5_state, 'u', 15, sponge_depth, os.path.join(output_dir, f"compare_u_wind_{sim_hours}h.png"))
 
     # Plot the Anomaly to verify the imprint is gone
-    visualizer.plot_anomaly(
-        grid=grid, 
-        state_model=final_state, 
-        state_era5=final_era5_state, 
-        variable='u', 
-        z_idx=15, 
-        sponge_depth=sponge_depth,
-        save_path=f"anomaly_u_{sim_hours}h.png"
-    )
-    
-    # y_idx = ny // 2 slices right through the center of the domain (over the Alps)
-    mid_y = grid.ny // 2
-    visualizer.plot_suetes_w_cross_section(
-        grid=grid, 
-        state_model=final_state, 
-        y_idx=mid_y, 
-        sponge_depth=sponge_depth,
-        save_path=f"cross_section_w_{sim_hours}h.png")
+    visualizer.plot_anomaly(grid, final_state, final_era5_state, 'u', 15, sponge_depth, os.path.join(output_dir, f"anomaly_u_{sim_hours}h.png"))
 
-    visualizer.plot_divergence(
-        grid=grid, 
-        state_model=final_state, 
-        z_idx=5, 
-        sponge_depth=sponge_depth,
-        save_path=f"divergence_{sim_hours}h.png")
+    # Plot total energy spectrum
+    visualizer.plot_energy_spectrum(grid, final_state, 'w', 5, sponge_depth, os.path.join(output_dir, f"energy_spectrum_{sim_hours}h.png"))
 
-    visualizer.plot_w_and_isentropes(
-        grid=grid, 
-        state_model=final_state, 
-        y_idx=mid_y, 
-        sponge_depth=sponge_depth,
-        save_path=f"isentropes_{sim_hours}h.png")
+    # Plot dashboard
+    visualizer.plot_dashboard(grid, final_state, 5, sponge_depth, None, sim_hours, os.path.join(output_dir, f"dashboard_{sim_hours}h.png"))
 
-    visualizer.plot_energy_spectrum(
-        grid=grid, 
-        state_model=final_state, 
-        variable='w', 
-        z_idx=5, 
-        sponge_depth=sponge_depth,
-        save_path=f"energy_spectrum_{sim_hours}h.png")
+    # Calculate and plot divergence
+    visualizer.plot_divergence(grid, final_state, 5, sponge_depth, os.path.join(output_dir, f"divergence_{sim_hours}h.png"))
+
+    # Slice plot through the middle of the domain
+    mid_y = grid.ny // 2 
+    visualizer.plot_suetes_w_cross_section(grid, final_state, mid_y, sponge_depth, os.path.join(output_dir, f"cross_section_w_{sim_hours}h.png"))
+    visualizer.plot_w_and_isentropes(grid, final_state, mid_y, sponge_depth, os.path.join(output_dir, f"isentropes_{sim_hours}h.png"))
 
 if __name__ == "__main__":
     main()

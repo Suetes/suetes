@@ -461,3 +461,100 @@ class Visualizer:
         else:
             plt.show()
         plt.close()
+
+    def plot_dashboard(self, grid, state_model, z_idx=5, sponge_depth=30, fields=None, time_hours=None, save_path=None):
+        """
+        Creates a dynamic multi-panel dashboard for a specific model level.
+        
+        Args:
+            fields (list of dicts): E.g., [{'var': 'w', 'cmap': 'seismic', 'title': 'Vertical Vel'}]
+        """
+        if fields is None:
+            # Default diagnostic panel for fields not strictly compared to ERA5
+            fields = [
+                {'var': 'w', 'cmap': 'seismic', 'title': 'Vertical Velocity [m/s]', 'scale': 'sym'},
+                {'var': 'div', 'cmap': 'seismic', 'title': 'Horizontal Divergence [s⁻¹]', 'scale': 'sym'},
+                {'var': 'th_v', 'cmap': 'plasma', 'title': 'Virtual Pot. Temp [K]', 'scale': 'linear'},
+                {'var': 'u', 'cmap': 'seismic', 'title': 'Zonal Wind [m/s]', 'scale': 'linear'}
+            ]
+
+        n_vars = len(fields)
+        cols = 2
+        rows = int(np.ceil(n_vars / cols))
+        
+        fig, axes = plt.subplots(rows, cols, figsize=(7 * cols, 5 * rows), 
+                                 subplot_kw={'projection': ccrs.PlateCarree()})
+        axes = np.atleast_1d(axes).flatten()
+        
+        # Common coordinates (project everything to mass points for the dashboard)
+        Xi, Yi = np.meshgrid(grid.x_m, grid.y_m, indexing='ij')
+        lats, lons = grid.proj.get_lat_lon(Xi, Yi)
+        lons = (lons + 180.0) % 360.0 - 180.0
+        extent = [float(lons.min()) - 0.5, float(lons.max()) + 0.5, float(lats.min()) - 0.5, float(lats.max()) + 0.5]
+
+        # Helper to compute divergence on the fly
+        def get_divergence(u, v):
+            du_dx = (u[1:, :] - u[:-1, :]) / grid.dx
+            dv_dy = (v[:, 1:] - v[:, :-1]) / grid.dy
+            return du_dx + dv_dy
+
+        for i, field_def in enumerate(fields):
+            ax = axes[i]
+            var_name = field_def['var']
+            
+            # Extract and interpolate data to mass points if necessary
+            if var_name == 'div':
+                data = get_divergence(state_model['u'][:, :, z_idx], state_model['v'][:, :, z_idx])
+            elif var_name == 'u':
+                data = 0.5 * (state_model['u'][:-1, :, z_idx] + state_model['u'][1:, :, z_idx])
+            elif var_name == 'v':
+                data = 0.5 * (state_model['v'][:, :-1, z_idx] + state_model['v'][:, 1:, z_idx])
+            else:
+                data = state_model[var_name][:, :, z_idx]
+
+            # Determine colorbar scaling
+            if field_def.get('scale') == 'sym':
+                vmax = max(float(np.max(data)), float(np.abs(np.min(data))))
+                # Cap divergence/w blowouts for cleaner visualization
+                if var_name == 'div': vmax = min(vmax, 1e-4)
+                if var_name == 'w': vmax = min(vmax, 2.0)
+                vmin = -vmax
+            else:
+                vmin, vmax = float(np.min(data)), float(np.max(data))
+
+            ax.add_feature(cfeature.COASTLINE, linewidth=1.0, edgecolor='black')
+            ax.add_feature(cfeature.BORDERS, linewidth=0.5, linestyle=':', edgecolor='gray')
+            
+            im = ax.pcolormesh(lons, lats, data, transform=ccrs.PlateCarree(), 
+                               cmap=field_def.get('cmap', 'viridis'), vmin=vmin, vmax=vmax)
+            
+            ax.set_title(field_def['title'], fontsize=12)
+            ax.set_extent(extent, crs=ccrs.PlateCarree())
+            
+            # Sponge boundaries (dashed black)
+            if sponge_depth > 0:
+                sd = sponge_depth
+                ax.plot(lons[sd, sd:-sd], lats[sd, sd:-sd], 'k--', transform=ccrs.PlateCarree(), linewidth=1.0, alpha=0.7)
+                ax.plot(lons[-sd-1, sd:-sd], lats[-sd-1, sd:-sd], 'k--', transform=ccrs.PlateCarree(), linewidth=1.0, alpha=0.7)
+                ax.plot(lons[sd:-sd, sd], lats[sd:-sd, sd], 'k--', transform=ccrs.PlateCarree(), linewidth=1.0, alpha=0.7)
+                ax.plot(lons[sd:-sd, -sd-1], lats[sd:-sd, -sd-1], 'k--', transform=ccrs.PlateCarree(), linewidth=1.0, alpha=0.7)
+
+            cbar = fig.colorbar(im, ax=ax, orientation='horizontal', pad=0.05, fraction=0.046)
+            cbar.ax.tick_params(labelsize=9)
+
+        # Turn off any unused axes if n_vars is odd
+        for j in range(i + 1, len(axes)):
+            axes[j].axis('off')
+
+        title = f"Suetes results (Level {z_idx})"
+        if time_hours is not None:
+            title += f" | T={time_hours}h"
+        plt.suptitle(title, fontsize=16, y=0.98)
+        plt.tight_layout()
+        
+        if save_path: 
+            plt.savefig(save_path, dpi=200, bbox_inches='tight')
+            print(f"Saved results plot to {save_path}")
+        else: 
+            plt.show()
+        plt.close()

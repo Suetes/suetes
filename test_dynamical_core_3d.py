@@ -194,8 +194,17 @@ def test_6_semi_implicit_solver(physics, dt, nx, ny, nz):
 
 def test_7_davies_sponge(grid, nx, ny, nz):
     print("\n--- 7. DAVIES SPONGE BOUNDARY TEST ---")
+    
+    # Explicitly set the relaxation parameters to ensure test determinism
+    tau_factor = 10.0
+    dt_test = 30.0
+    
     # Create a sponge that is 5 grid cells deep
-    sponge = DaviesSponge(grid, sponge_depth=5)
+    sponge = DaviesSponge(grid, sponge_depth=5, dt=dt_test, tau_bndy_factor=tau_factor)
+
+    # Calculate the expected blending coefficient at the absolute boundary (dist=0)
+    # max_c = dt / (tau_factor * dt) = 1.0 / tau_factor
+    max_c = 1.0 / tau_factor
 
     # Simulate a complete state. Model interior moving at 10 m/s, exterior stationary.
     model_state = {
@@ -203,7 +212,8 @@ def test_7_davies_sponge(grid, nx, ny, nz):
         'v': jnp.zeros((nx, ny+1, nz)),
         'w': jnp.zeros((nx, ny, nz+1)),
         'th_v': jnp.ones((nx, ny, nz)) * 300.0,
-        'pi': jnp.ones((nx, ny, nz)) * 1.0
+        'pi': jnp.ones((nx, ny, nz)) * 1.0,
+        'q': jnp.zeros((nx, ny, nz)) # Added tracer to match blend_vars
     }
     
     ext_state = {
@@ -211,7 +221,8 @@ def test_7_davies_sponge(grid, nx, ny, nz):
         'v': jnp.zeros((nx, ny+1, nz)),
         'w': jnp.zeros((nx, ny, nz+1)),
         'th_v': jnp.ones((nx, ny, nz)) * 300.0,
-        'pi': jnp.ones((nx, ny, nz)) * 1.0
+        'pi': jnp.ones((nx, ny, nz)) * 1.0,
+        'q': jnp.zeros((nx, ny, nz))
     }
 
     blended = sponge.blend(model_state, ext_state)
@@ -220,11 +231,14 @@ def test_7_davies_sponge(grid, nx, ny, nz):
     center_u = float(blended['u'][nx//2, ny//2, nz//2])
     edge_u = float(blended['u'][0, ny//2, nz//2])
 
+    # The edge should be a blend based on max_c
+    expected_edge_u = (1.0 - max_c) * 10.0 + (max_c) * 0.0
+
     print(f"U-velocity at domain center (should be 10.0): {center_u:.2f} m/s")
-    print(f"U-velocity at lateral edge (should be 0.0):   {edge_u:.2f} m/s")
+    print(f"U-velocity at lateral edge (should be {expected_edge_u:.2f}):   {edge_u:.2f} m/s")
     
-    assert center_u == 10.0, "Bug: Sponge is dampening the interior of the domain!"
-    assert edge_u == 0.0, "Bug: Sponge is not relaxing the lateral boundaries!"
+    assert jnp.isclose(center_u, 10.0), "Bug: Sponge is dampening the interior of the domain!"
+    assert jnp.isclose(edge_u, expected_edge_u), f"Bug: Sponge is not relaxing at the correct rate! Expected {expected_edge_u}, got {edge_u}"
     
 
 def test_8_kinematic_bottom_boundary(grid, physics, nx, ny, nz, dt):
@@ -280,7 +294,7 @@ def setup_terrain_test_env():
     grid = RegionalGrid3D(nx, ny, nz, dx, dy, dz, 0.0, 0.0, h_func=schaer_2d, transform=sleve)
     op = CGridOperator3D(grid)
     constants = {'g': 9.81, 'cp': 1004.0, 'cvd': 717.0, 'Rd': 287.0, 'p0': 100000.0}
-    physics = Euler3D(grid, op, constants, damp_height=grid.Lz, N_bv=0.01)
+    physics = Euler3D(grid, op, constants, dt=dt, damp_height=grid.Lz, N_bv=0.01)
     
     bg_state_ref = {
         'rho': physics.c['p0'] / (physics.c['Rd'] * physics.theta_bg) * \
@@ -401,7 +415,7 @@ def test_13_resting_mountain_integration(dt):
     grid = RegionalGrid3D(nx, ny, nz, dx, dy, dz, lat_center=45.0, lon_center=5.0, h_func=h_func)
     op = CGridOperator3D(grid)
     constants = {'g': 9.81, 'Rd': 287.0, 'cp': 1004.0, 'cvd': 717.0, 'p0': 100000.0, 'epsilon': 0.622}
-    physics = Euler3D(grid, op, constants, N_bv=0.01, nu_h=0.0, nu_v=0.0) 
+    physics = Euler3D(grid, op, constants, dt=dt, N_bv=0.01) 
     stepper = SISLStepper3D(physics, dt)
     
     initial_state = {
@@ -444,7 +458,7 @@ if __name__ == "__main__":
         'p0': 100000.0
     }
     op = CGridOperator3D(grid)
-    physics = Euler3D(grid, op, constants, N_bv=0.01)
+    physics = Euler3D(grid, op, constants, dt=dt, N_bv=0.01)
 
     test_1_geometry(grid)
     test_2_backtracking(grid, advector, nx, ny, nz, dx, dt)
