@@ -301,7 +301,7 @@ class SISLStepper3D:
 
     def step(self, state, t, forcing, bc_fn):
 
-        alpha = 0.5
+        alpha = 0.55
 
         if 'eta_dot' not in state: state['eta_dot'] = jnp.zeros_like(state['w'])
             
@@ -370,27 +370,6 @@ class SISLStepper3D:
             if key in state:
                 rho_tr_next = self.ffsl_advector.advect_3d_split(state['rho'] * state[key], state, bg_precomputed)
                 tracers_next[key] = rho_tr_next / (rho_next + 1e-15)
-
-        # Apply lateral sponge to the explicit rhs state
-        rhs_to_blend = {
-            'u': rhs_u, 'v': rhs_v, 'w': rhs_w, 'pi': rhs_pi_prime, 
-            'th_v': th_v_next, 'eta_dot': R_eta_dot
-        }
-        rhs_to_blend.update(tracers_next)
-
-        # The sponge only modifies 'u', 'v', 'th_v', and tracers.
-        
-        # Unpack the blended state
-        rhs_u = rhs_to_blend['u']
-        rhs_v = rhs_to_blend['v']
-        rhs_w = rhs_to_blend['w']
-        rhs_pi_prime = rhs_to_blend['pi']
-        th_v_next = rhs_to_blend['th_v']
-        R_eta_dot = rhs_to_blend['eta_dot']
-        
-        for key in self.tracer_keys:
-            if key in rhs_to_blend:
-                tracers_next[key] = rhs_to_blend[key]
 
         # =====================================================================
         # 2. ADD BUOYANCY

@@ -148,39 +148,40 @@ class Euler3D:
 
         m_m = jnp.expand_dims(self.grid.m_factors['m'], axis=-1)
 
-        # Multiply the horizontal divergence sum by m^2. 
+        # Multiply the horizontal divergence sum by m.
         # Vertical divergence (div_z) is unaffected by the horizontal map factor.
-        tend_pi = -bg['C_pi'] * (m_m**2 * (div_x + div_y) + div_z)
+        tend_pi = -bg['C_pi'] * (m_m * (div_x + div_y) + div_z)
 
-        # Targeted filter to kill 2dx acoustic checkerboarding in the divergence operation
-        du_dx = self.op.diff(u, axis=0, from_loc='u', to_loc='m') 
-        dv_dy = self.op.diff(v, axis=1, from_loc='v', to_loc='m') 
-        div_h_kinematic = du_dx + dv_dy
+        # Diffusion is only done in the explicit part
+        if is_explicit:
+            # Targeted filter to kill 2dx acoustic checkerboarding
+            du_dx = self.op.diff(u, axis=0, from_loc='u', to_loc='m') 
+            dv_dy = self.op.diff(v, axis=1, from_loc='v', to_loc='m') 
+            div_h_kinematic = du_dx + dv_dy
 
-        grad_div_x = self.op.diff(div_h_kinematic, axis=0, from_loc='m', to_loc='u') 
-        grad_div_y = self.op.diff(div_h_kinematic, axis=1, from_loc='m', to_loc='v') 
+            grad_div_x = self.op.diff(div_h_kinematic, axis=0, from_loc='m', to_loc='u') 
+            grad_div_y = self.op.diff(div_h_kinematic, axis=1, from_loc='m', to_loc='v') 
 
-        tend_u += self.nu_div * grad_div_x
-        tend_v += self.nu_div * grad_div_y
-        # --------------------------
+            tend_u += self.nu_div * grad_div_x
+            tend_v += self.nu_div * grad_div_y
 
-        # Explicit diffusion
-        diff_tends = self.diffusion.get_tendencies(state_prime, bg_precomputed=bg)
+            # Explicit diffusion
+            diff_tends = self.diffusion.get_tendencies(state_prime, bg_precomputed=bg)
 
-        tend_u += diff_tends['u']
-        tend_v += diff_tends['v']
-        tend_w += diff_tends['w']
+            tend_u += diff_tends['u']
+            tend_v += diff_tends['v']
+            tend_w += diff_tends['w']
 
-        # Planetary Boundary Layer parameterization
-        if self.use_pbl and is_explicit:  # Restrict to explicit pass!
-            # We must pass the full absolute state to the physics scheme, not just primes
-            full_state = {
-                'u': state_prime['u'],
-                'v': state_prime['v']
-            }
-            pbl_tends = self.pbl_scheme.get_tendencies(full_state, bg)
-            tend_u += pbl_tends['u']
-            tend_v += pbl_tends['v']
+            # Planetary Boundary Layer parameterization
+            if self.use_pbl: 
+                full_state = {
+                    'u': state_prime['u'],
+                    'v': state_prime['v']
+                }
+                pbl_tends = self.pbl_scheme.get_tendencies(full_state, bg)
+                tend_u += pbl_tends['u']
+                tend_v += pbl_tends['v']
+        # ---------------------------------------------------------
 
         return {'u': tend_u, 'v': tend_v, 'w': tend_w, 'pi': tend_pi}
 
@@ -200,18 +201,18 @@ class Euler3D:
         v_m = self.op.avg(state_prime['v'], axis=1, from_loc='v', to_loc='m')
         v_w = self.op.avg(v_m, axis=2, from_loc='m', to_loc='w')
 
+        # Lock the boundaries so GMRES cannot warp the ERA5 inflow/outflow (new)
+        L_u = L_u.at[0, :, :].set(state_prime['u'][0, :, :])
+        L_u = L_u.at[-1, :, :].set(state_prime['u'][-1, :, :])
+        L_v = L_v.at[:, 0, :].set(state_prime['v'][:, 0, :])
+        L_v = L_v.at[:, -1, :].set(state_prime['v'][:, -1, :])
+
         # Override L_w at boundaries
         # Bottom: Kinematic constraint (w - u*dz/dx - v*dz/dy = 0)
         m_w = jnp.expand_dims(self.grid.m_factors['w'], axis=-1)
 
         # Fix the bottom boundary condition
-        kinematic_bottom = state_prime['w'][:, :, 0] - m_w[:, :, 0] * (
-            u_w[:, :, 0] * self.grid.z_xi_w[:, :, 0] + 
-            v_w[:, :, 0] * self.grid.z_eta_w[:, :, 0]
-        )
-        L_w = L_w.at[:, :, 0].set(kinematic_bottom)
-        
-        # Top: Rigid lid (w = 0)
+        L_w = L_w.at[:, :, 0].set(state_prime['w'][:, :, 0])
         L_w = L_w.at[:, :, -1].set(state_prime['w'][:, :, -1])
 
         # Fix the implicit terrain advection

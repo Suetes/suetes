@@ -37,8 +37,7 @@ def main():
     sponge_depth = 30
     
     dt = 30.0 # timestep (in seconds)
-    sim_hours = 12
-
+    sim_hours = 6
 
     sim_time_seconds = sim_hours * 3600.0
     num_steps = int(sim_time_seconds / dt)
@@ -146,44 +145,58 @@ def main():
     # ==========================================
     # 6. VISUALIZE THE RESULTS
     # ==========================================
+    # ==========================================
+    # 6. VISUALIZE THE RESULTS
+    # ==========================================
     print("Generating comparison plots...")
     visualizer = Visualizer()
     
     # Grab the final ERA5 state to compare against the final model state
     final_era5_state = suetes_bc_states[-1]
     
-    # Plot Virtual Potential Temperature in the lower troposphere (e.g., Level 5)
-    visualizer.plot_model_vs_era5_map(grid, final_state, final_era5_state, 'th_v', 5, sponge_depth, os.path.join(output_dir, f"compare_th_v_{sim_hours}h.png"))
+    # Plot Virtual Potential Temperature comparison (Model | ERA5 | Anomaly)
+    visualizer.plot_comparison(grid, final_state, final_era5_state, 'th_v', z_idx=5, sponge_depth=sponge_depth, 
+                               save_path=os.path.join(output_dir, f"compare_th_v_{sim_hours}h.png"))
 
-    # Plot U-Wind higher up (e.g., Level 15) to see the synoptic flow
-    visualizer.plot_model_vs_era5_map(grid, final_state, final_era5_state, 'u', 15, sponge_depth, os.path.join(output_dir, f"compare_u_wind_{sim_hours}h.png"))
-
-    # Plot the Anomaly to verify the imprint is gone
-    visualizer.plot_anomaly(grid, final_state, final_era5_state, 'u', 15, sponge_depth, os.path.join(output_dir, f"anomaly_u_{sim_hours}h.png"))
+    # Plot U-Wind higher up to see the synoptic flow (Model | ERA5 | Anomaly)
+    visualizer.plot_comparison(grid, final_state, final_era5_state, 'u', z_idx=15, sponge_depth=sponge_depth, 
+                               save_path=os.path.join(output_dir, f"compare_u_wind_{sim_hours}h.png"))
 
     # Plot total energy spectrum
-    visualizer.plot_energy_spectrum(grid, final_state, 'w', 5, sponge_depth, os.path.join(output_dir, f"energy_spectrum_{sim_hours}h.png"))
+    visualizer.plot_energy_spectrum(grid, final_state, 'w', z_idx=5, sponge_depth=sponge_depth, 
+                                    save_path=os.path.join(output_dir, f"energy_spectrum_{sim_hours}h.png"))
 
     # Plot dashboard
-    fields_to_plot = [{'var': 'w', 'cmap': 'seismic', 'title': 'Vertical Velocity [m/s]', 'scale': 'sym'},
-        {'var': 'div', 'cmap': 'seismic', 'title': 'Horizontal Divergence [s⁻¹]', 'scale': 'sym'},
-        {'var': 'q_c', 'cmap': 'Blues', 'title': 'Cloud Water [kg/kg]', 'scale': 'linear'},
-        {'var': 'u', 'cmap': 'seismic', 'title': 'Zonal Wind [m/s]', 'scale': 'linear'}
+    fields_to_plot = [
+        {'var': 'w', 'cmap': 'seismic', 'title': 'Vertical Velocity [m/s]'},
+        {'var': 'div', 'cmap': 'seismic', 'title': 'Horizontal Divergence [s⁻¹]'},
+        {'var': 'q_c', 'cmap': 'Blues', 'title': 'Cloud Water [kg/kg]'},
+        {'var': 'u', 'cmap': 'seismic', 'title': 'Zonal Wind [m/s]'}
     ]
-    visualizer.plot_dashboard(grid, final_state, 5, sponge_depth, fields=fields_to_plot, 
-                            time_hours=sim_hours, save_path=os.path.join(output_dir, f"dashboard_{sim_hours}h.png"))
+    visualizer.plot_dashboard(grid, final_state, z_idx=5, sponge_depth=sponge_depth, fields=fields_to_plot, 
+                              time_hours=sim_hours, save_path=os.path.join(output_dir, f"dashboard_{sim_hours}h.png"))
 
-    # Calculate and plot divergence
-    visualizer.plot_divergence(grid, final_state, 5, sponge_depth, os.path.join(output_dir, f"divergence_{sim_hours}h.png"))
+    # Calculate and plot standalone divergence map
+    visualizer.plot_2d_field(grid, final_state, 'div', z_idx=5, sponge_depth=sponge_depth, cmap='seismic', 
+                             save_path=os.path.join(output_dir, f"divergence_{sim_hours}h.png"))
 
-    # Slice plot through the middle of the domain
+    # Slice plots through the middle of the domain
     mid_y = grid.ny // 2 
-    visualizer.plot_suetes_w_cross_section(grid, final_state, mid_y, sponge_depth, os.path.join(output_dir, f"cross_section_w_{sim_hours}h.png"))
-    visualizer.plot_w_and_isentropes(grid, final_state, mid_y, sponge_depth, os.path.join(output_dir, f"isentropes_{sim_hours}h.png"))
-    visualizer.plot_qc_cross_section(grid, final_state, mid_y, sponge_depth, os.path.join(output_dir, f"cross_section_qc_{sim_hours}h.png"))
+    
+    # Standard W cross section
+    visualizer.plot_cross_section(grid, final_state, 'w', y_idx=mid_y, sponge_depth=sponge_depth, 
+                                  save_path=os.path.join(output_dir, f"cross_section_w_{sim_hours}h.png"))
+    
+    # W cross section with isentropes overlaid
+    visualizer.plot_cross_section(grid, final_state, 'w', y_idx=mid_y, sponge_depth=sponge_depth, overlay_isentropes=True, 
+                                  save_path=os.path.join(output_dir, f"isentropes_{sim_hours}h.png"))
+                                  
+    # Cloud water cross section
+    visualizer.plot_cross_section(grid, final_state, 'q_c', y_idx=mid_y, sponge_depth=sponge_depth, 
+                                  save_path=os.path.join(output_dir, f"cross_section_qc_{sim_hours}h.png"))
 
     # Plot relative humidity (near the surface)
-    visualizer.plot_rh_map(grid, final_state, constants, z_idx=1, save_path=os.path.join(output_dir, f"rh_map_{sim_hours}h.png"))
-
+    visualizer.plot_2d_field(grid, final_state, 'rh', z_idx=1, sponge_depth=sponge_depth, constants=constants, cmap='BrBG', 
+                             save_path=os.path.join(output_dir, f"rh_map_{sim_hours}h.png"))
 if __name__ == "__main__":
     main()
