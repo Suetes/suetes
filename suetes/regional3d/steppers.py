@@ -427,7 +427,22 @@ class SISLStepper3D:
                 state_next[key] = tracers_next[key]
 
         # =====================================================================
-        # 4b. MICROPHYSICS (SATURATION ADJUSTMENT)
+        # 4b. A-POSTERIORI DIVERGENCE DAMPING
+        # =====================================================================
+        # Calculate the horizontal divergence of the IMPLICITLY solved winds
+        du_dx = self.physics.op.diff(state_next['u'], axis=0, from_loc='u', to_loc='m') 
+        dv_dy = self.physics.op.diff(state_next['v'], axis=1, from_loc='v', to_loc='m') 
+        div_h_kinematic = du_dx + dv_dy
+
+        grad_div_x = self.physics.op.diff(div_h_kinematic, axis=0, from_loc='m', to_loc='u') 
+        grad_div_y = self.physics.op.diff(div_h_kinematic, axis=1, from_loc='m', to_loc='v') 
+
+        # Apply the explicit diffusion step directly to the updated state arrays
+        state_next['u'] += self.physics.nu_div * self.dt * grad_div_x
+        state_next['v'] += self.physics.nu_div * self.dt * grad_div_y
+
+        # =====================================================================
+        # 4c. MICROPHYSICS (SATURATION ADJUSTMENT)
         # =====================================================================
         if self.use_moisture and 'q' in state_next:
             moist_updates = self.microphysics.saturation_adjustment(state_next, state_next['pi'])

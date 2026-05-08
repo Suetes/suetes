@@ -16,7 +16,7 @@ from suetes.shared.transforms import SleveSimple
 from suetes.preprocessing.processor import ERA5Processor
 from suetes.preprocessing.topography import TopographyProcessor
 from suetes.preprocessing.era2suetes import BoundaryProcessor, TimeManager
-from suetes.preprocessing.era5downloader import ERA5Manager # Make sure this import path matches your setup
+from suetes.preprocessing.era5downloader import ERA5Manager
 
 from suetes.vis.visualizer import Visualizer
 
@@ -25,16 +25,16 @@ from suetes.vis.visualizer import Visualizer
 # ==========================================
 DOMAINS = {
     "labrador_sea": {
-        "lat_c": 48.0, "lon_c": -60.0,
-        "bbox": [65.0, -80.0, 30.0, -40.0]  # N, W, S, E
-    },
-    "bonavista_peninsula": {
-        "lat_c": 48.5, "lon_c": -53.5,
-        "bbox": [60.0, -65.0, 35.0, -40.0]
+        "lat_c": 48.0, "lon_c": -60.0
     },
     "alps": {
-        "lat_c": 45.0, "lon_c": 5.0,
-        "bbox": [55.0, -15.0, 35.0, 15.0]
+        "lat_c": 45.0, "lon_c": 5.0
+    },
+    "nz_south_island": {
+        "lat_c": -43.5, "lon_c": 170.5
+    },
+    "western_canada": {
+        "lat_c": 50.0, "lon_c": -120.0
     }
 }
 
@@ -44,7 +44,7 @@ def main():
     # ==========================================
     
     # --- Select your region here ---
-    ACTIVE_DOMAIN = "alps" 
+    ACTIVE_DOMAIN = "labrador_sea" 
     cfg = DOMAINS[ACTIVE_DOMAIN]
 
     output_dir = "suetes/plots"
@@ -55,13 +55,21 @@ def main():
     sponge_depth = 30
     
     dt = 30.0 # timestep (in seconds)
-    sim_hours = 3
+    sim_hours = 6
     sim_time_seconds = sim_hours * 3600.0
     num_steps = int(sim_time_seconds / dt)
     num_era5_states = int(sim_hours) + 1 
 
     constants = {'g': 9.81, 'Rd': 287.0, 'cp': 1004.0, 'cvd': 717.0, 'p0': 100000.0, 'epsilon': 0.622}
     USE_MOISTURE = True 
+
+    # --- Dynamically calculate the bounding box ---
+    dynamic_bbox = ERA5Manager.calculate_required_bbox(
+        cfg["lat_c"], cfg["lon_c"], 
+        nx, ny, dx, dy, 
+        buffer_deg=2.0
+    )
+    print(f"Calculated ERA5 Bounding Box [N, W, S, E]: {dynamic_bbox}")
 
     # ==========================================
     # 2. DATA ACQUISITION
@@ -72,12 +80,14 @@ def main():
     # Adjust dates as needed for your specific test case
     days_to_run = [str(i).zfill(2) for i in range(1, 5)] 
     
+    cache_prefix = f"{ACTIVE_DOMAIN}_Nx{nx}_Ny{ny}_dx{int(dx)}"
+
     sl_file, pl_file = manager.download_regional_subset(
         year="2026",
         month="05",
         days=days_to_run,
-        area=cfg["bbox"],
-        prefix=ACTIVE_DOMAIN
+        area=dynamic_bbox,
+        prefix=cache_prefix
     )
 
     # ==========================================

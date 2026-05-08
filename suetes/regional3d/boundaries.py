@@ -47,7 +47,7 @@ class DaviesSponge:
 
     def blend(self, intermediate_state, external_state):
         blended = {}
-        blend_vars = ['u', 'v', 'w', 'eta_dot', 'th_v', 'q', 'pi']
+        blend_vars = ['u', 'v', 'th_v', 'q', 'pi']
         
         for k in intermediate_state.keys():
             if k in blend_vars and k in external_state:

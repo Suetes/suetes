@@ -1,4 +1,5 @@
 import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
 import numpy as np
@@ -46,6 +47,16 @@ class Visualizer:
             ax.plot(lons[sd:-sd, sd], lats[sd:-sd, sd], **kwargs)
             ax.plot(lons[sd:-sd, -sd-1], lats[sd:-sd, -sd-1], **kwargs)
 
+            # Grid-perfect dimming mask
+            ny, nx = lons.shape
+            mask = np.ones((ny, nx))
+            mask[sd:-sd, sd:-sd] = np.nan # Keep interior transparent
+            
+            cmap_white = mcolors.ListedColormap(['white'])
+            # zorder=4 ensures it draws over the data but under the coastlines/borders
+            ax.pcolormesh(lons, lats, mask, transform=ccrs.PlateCarree(), 
+                          cmap=cmap_white, alpha=0.5, zorder=4)
+
     def plot_2d_field(self, grid, state, variable, z_idx=5, sponge_depth=30, constants=None, 
                       cmap='viridis', vmin=None, vmax=None, scale='linear', title=None, ax=None, save_path=None, plot_data=None):
     
@@ -54,12 +65,20 @@ class Visualizer:
         
         Xi, Yi = np.meshgrid(grid.x_m, grid.y_m, indexing='ij')
         lats, lons = grid.proj.get_lat_lon(Xi, Yi)
-        lons = (lons + 180.0) % 360.0 - 180.0
+        
+        # --- THE DATELINE FIX ---
+        # Detect if the domain crosses the antimeridian (creating a massive min/max gap)
+        if lons.max() - lons.min() > 180.0:
+            # Convert negative longitudes back to positive (e.g., -179 -> 181) 
+            # to make the array continuous for the extent calculation and pcolormesh.
+            lons = np.where(lons < 0, lons + 360.0, lons)
+        # ------------------------
+        
         extent = [float(lons.min()) - 0.5, float(lons.max()) + 0.5, float(lats.min()) - 0.5, float(lats.max()) + 0.5]
 
         show_plot = False
         if ax is None:
-            fig, ax = plt.subplots(1, 1, figsize=(10, 6), subplot_kw={'projection': ccrs.PlateCarree()})
+            fig, ax = plt.subplots(1, 1, figsize=(10, 6), subplot_kw={'projection': ccrs.PlateCarree(central_longitude=grid.lon_c)})
             show_plot = True
 
         ax.add_feature(cfeature.COASTLINE, linewidth=1.2, edgecolor='black')
@@ -67,8 +86,13 @@ class Visualizer:
 
         extend = 'neither'
         if vmin is None and vmax is None:
-            data_max = float(np.max(data))
-            data_min = float(np.min(data))
+            if sponge_depth > 0:
+                inner_data = data[sponge_depth:-sponge_depth, sponge_depth:-sponge_depth]
+            else:
+                inner_data = data
+                
+            data_max = float(np.max(inner_data))
+            data_min = float(np.min(inner_data))
             
             if scale == 'sym': 
                 limit = max(abs(data_max), abs(data_min))
@@ -117,7 +141,7 @@ class Visualizer:
         cols = 2
         rows = int(np.ceil(n_vars / cols))
         
-        fig, axes = plt.subplots(rows, cols, figsize=(7 * cols, 5 * rows), subplot_kw={'projection': ccrs.PlateCarree()})
+        fig, axes = plt.subplots(rows, cols, figsize=(7 * cols, 5 * rows), subplot_kw={'projection': ccrs.PlateCarree(central_longitude=grid.lon_c)})
         axes = np.atleast_1d(axes).flatten()
         
         for i, field_def in enumerate(fields):
@@ -148,7 +172,7 @@ class Visualizer:
         val_era5 = self._get_plot_data(grid, state_era5, variable, z_idx)
         anomaly = val_model - val_era5
 
-        fig, axes = plt.subplots(1, 3, figsize=(18, 5), subplot_kw={'projection': ccrs.PlateCarree()})
+        fig, axes = plt.subplots(1, 3, figsize=(18, 5), subplot_kw={'projection': ccrs.PlateCarree(central_longitude=grid.lon_c)})
         titles = ["Suetes Model", "ERA5 Target", "Anomaly (Model - ERA5)"]
         datas = [val_model, val_era5, anomaly]
         
@@ -196,8 +220,15 @@ class Visualizer:
         ax.fill_between(x_coords, 0, grid.Z_w[:, y_idx, 0], color='dimgray', label='Topography')
         
         if sponge_depth > 0:
-            ax.axvline(x=x_coords[sponge_depth], color='k', linestyle='--', linewidth=1.5)
-            ax.axvline(x=x_coords[-sponge_depth-1], color='k', linestyle='--', linewidth=1.5, label='Sponge')
+            x_left = x_coords[sponge_depth]
+            x_right = x_coords[-sponge_depth-1]
+            
+            ax.axvline(x=x_left, color='k', linestyle='--', linewidth=1.5)
+            ax.axvline(x=x_right, color='k', linestyle='--', linewidth=1.5, label='Sponge')
+            
+            # Dim the sponge zones
+            ax.axvspan(x_coords[0], x_left, color='white', alpha=0.5, zorder=4)
+            ax.axvspan(x_right, x_coords[-1], color='white', alpha=0.5, zorder=4)
 
         ax.set_title(f"Cross Section: {variable} (y-index: {y_idx})", fontsize=14)
         ax.set_xlabel("X distance [km]")

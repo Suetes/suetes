@@ -1,4 +1,5 @@
 import os
+import math
 import cdsapi
 
 class ERA5Manager:
@@ -9,6 +10,35 @@ class ERA5Manager:
         # Ensure the data directory exists
         os.makedirs(self.data_dir, exist_ok=True)
 
+    @staticmethod
+    def calculate_required_bbox(lat_c, lon_c, nx, ny, dx, dy, buffer_deg=2.0):
+        """
+        Calculates the minimal ERA5 bounding box required to cover the physical grid.
+        Returns: [North, West, South, East] in degrees.
+        """
+        R = 6371000.0  # Earth radius in meters
+        
+        # Physical distance from the center to the edge
+        half_Lx = (nx * dx) / 2.0
+        half_Ly = (ny * dy) / 2.0
+        
+        # Convert meters to degrees latitude (constant scaling)
+        delta_lat = math.degrees(half_Ly / R)
+        
+        # Convert meters to degrees longitude
+        # Evaluate at the highest absolute latitude in the domain to ensure 
+        # the box is wide enough where the meridians converge the most.
+        max_abs_lat = min(89.0, abs(lat_c) + delta_lat)
+        delta_lon = math.degrees(half_Lx / (R * math.cos(math.radians(max_abs_lat))))
+        
+        # Construct [North, West, South, East] with the safety buffer
+        return [
+            round(lat_c + delta_lat + buffer_deg, 2),  # North
+            round(lon_c - delta_lon - buffer_deg, 2),  # West
+            round(lat_c - delta_lat - buffer_deg, 2),  # South
+            round(lon_c + delta_lon + buffer_deg, 2)   # East
+        ]
+
     def download_regional_subset(self, year, month, days, area, prefix="test_case"):
         """
         Downloads ERA5 single and pressure level data if it doesn't already exist.
@@ -17,7 +47,6 @@ class ERA5Manager:
         :param month: str, e.g., "03"
         :param days: list of str, e.g., ["01", "02", "03", ...]
         :param area: list of floats [North, West, South, East] 
-                     e.g., [50, -10, 40, 10] for parts of Western Europe
         :param prefix: str, name of the file prefix for caching
         """
         
@@ -46,7 +75,7 @@ class ERA5Manager:
                     "month": [month],
                     "day": days,
                     "time": times,
-                    "area": area, # Spatially subsets the data on the server!
+                    "area": area, 
                     "data_format": "netcdf",
                     "download_format": "unarchived"
                 },
@@ -75,7 +104,7 @@ class ERA5Manager:
                     "month": [month],
                     "day": days,
                     "time": times,
-                    "area": area, # Spatially subsets the data on the server!
+                    "area": area, 
                     "data_format": "netcdf",
                     "download_format": "unarchived"
                 },
@@ -84,24 +113,3 @@ class ERA5Manager:
             
         print("Data is ready for the model!")
         return sl_filepath, pl_filepath
-
-# ==========================================
-# Example Usage
-# ==========================================
-if __name__ == "__main__":
-    manager = ERA5Manager(data_dir="suetes/data")
-    
-    # Bounding box: [North, West, South, East]
-    # Make sure this box is slightly larger than your RegionalGrid3D domain
-    # so the DaviesSponge has valid boundary data to relax against.
-    domain_bbox = [55.0, -15.0, 35.0, 15.0] 
-    
-    days_to_run = [str(i).zfill(2) for i in range(1, 5)] # ["01", "02", ..., "10"]
-
-    sl_file, pl_file = manager.download_regional_subset(
-        year="2026",
-        month="03",
-        days=days_to_run,
-        area=domain_bbox,
-        prefix="suetes_test_run"
-    )

@@ -55,6 +55,9 @@ class RegionalGrid3D:
         self.delta = (dx, dy, dz)
         self.nx, self.ny, self.nz = nx, ny, nz
         self.dx, self.dy, self.dz = dx, dy, dz
+
+        self.lat_c = lat_center
+        self.lon_c = lon_center
         
         Lx, Ly = nx * dx, ny * dy
         self.Lz = nz * dz

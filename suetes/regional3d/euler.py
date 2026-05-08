@@ -154,16 +154,16 @@ class Euler3D:
 
         # Diffusion is only done in the explicit part
         if is_explicit:
-            # Targeted filter to kill 2dx acoustic checkerboarding
-            du_dx = self.op.diff(u, axis=0, from_loc='u', to_loc='m') 
-            dv_dy = self.op.diff(v, axis=1, from_loc='v', to_loc='m') 
-            div_h_kinematic = du_dx + dv_dy
+            # # Targeted filter to kill 2dx acoustic checkerboarding
+            # du_dx = self.op.diff(u, axis=0, from_loc='u', to_loc='m') 
+            # dv_dy = self.op.diff(v, axis=1, from_loc='v', to_loc='m') 
+            # div_h_kinematic = du_dx + dv_dy
 
-            grad_div_x = self.op.diff(div_h_kinematic, axis=0, from_loc='m', to_loc='u') 
-            grad_div_y = self.op.diff(div_h_kinematic, axis=1, from_loc='m', to_loc='v') 
+            # grad_div_x = self.op.diff(div_h_kinematic, axis=0, from_loc='m', to_loc='u') 
+            # grad_div_y = self.op.diff(div_h_kinematic, axis=1, from_loc='m', to_loc='v') 
 
-            tend_u += self.nu_div * grad_div_x
-            tend_v += self.nu_div * grad_div_y
+            # tend_u += self.nu_div * grad_div_x
+            # tend_v += self.nu_div * grad_div_y
 
             # Explicit diffusion
             diff_tends = self.diffusion.get_tendencies(state_prime, bg_precomputed=bg)
