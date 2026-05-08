@@ -8,9 +8,9 @@ Because it is built entirely in JAX, the dynamical core is end-to-end differenti
 
 ---
 
-## 🚀 Features
+##  Features
 
-### 🧩 Dynamics & Numerics
+###  Dynamics & Numerics
 *   **Time Integration:** Semi-Implicit Semi-Lagrangian (SISL) allowing large timesteps by overcoming explicit acoustic and advective CFL limits.
 *   **Spatial Discretization:** Arakawa C-Grid for optimal dispersion properties.
 *   **Advection:** 
@@ -21,7 +21,7 @@ Because it is built entirely in JAX, the dynamical core is end-to-end differenti
 *   **Simulation Driver:** High-level `Simulation` class for managed integration loops, JIT compilation, and chunked execution.
 *   **Stabilization:** 4th-Order Hyper-Diffusion ($\nabla^4$), Rayleigh damping sponge layers, and acoustic off-centering.
 
-### 🏔️ Terrain & Coordinates
+###  Terrain & Coordinates
 *   **Vertical Coordinates:**
     *   Standard Gal-Chen & Somerville (Linear decay).
     *   Hybrid Sigma-Z (Exponential decay).
@@ -29,7 +29,7 @@ Because it is built entirely in JAX, the dynamical core is end-to-end differenti
     *   **Integral Neural Coordinate:** A differentiable, monotonicity-guaranteed ML-driven grid transformation.
 *   **Projection:** Oblique Stereographic projection for regional modeling.
 
-### 🔄 Data & Preprocessing
+###  Data & Preprocessing
 *   **ERA5 Integration:** Automated pipeline to ingest ERA5 pressure and single-level data.
 *   **ERA5 Downloader:** Built-in `ERA5Manager` using `cdsapi` for automated regional data fetching and caching.
 *   **Topography:** High-resolution **GEBCO** bathymetry/topography blending with ERA5.
@@ -38,11 +38,11 @@ Because it is built entirely in JAX, the dynamical core is end-to-end differenti
     *   Thermodynamic balancing and hydrostatic reconstruction for clean cold-starts.
     *   **Davies Sponge** relaxation zones for seamless coupling with external forcing.
 
-### 🌡️ Physics
+###  Physics
 *   **Bulk Aerodynamic PBL:** Surface drag parameterization for land and ocean.
 *   **Rayleigh Damping:** Top-of-atmosphere sponge layer to prevent wave reflection.
 
-### 📊 Visualization & Diagnostics
+###  Visualization & Diagnostics
 Comprehensive `Visualizer` suite for model analysis:
 *   **Cross-sections:** Vertical slices of potential temperature and topography.
 *   **Geographic Maps:** Interactive maps with Cartopy integration.
@@ -52,7 +52,7 @@ Comprehensive `Visualizer` suite for model analysis:
 
 ---
 
-## 🛠️ Installation
+##  Installation
 
 1.  **Clone the repository:**
     ```bash
@@ -79,7 +79,7 @@ pip install "numpy<2" jax-metal
 
 ---
 
-## 🚦 Getting Started
+##  Getting Started
 
 The easiest way to see Suetes in action is to run the provided 3D simulation script. This script processes ERA5 data, initializes a regional domain, and runs a 6-hour simulation with full visualization output.
 
@@ -94,7 +94,7 @@ Results will be saved in `suetes/plots/`, including:
 
 ---
 
-## 🧪 Diagnostic Suite
+##  Diagnostic Suite
 
 Suetes includes an extensive suite of tests in `test_dynamical_core_3d.py` and `test_era5_coupling.py` that validate:
 *   **Exact Mass Conservation** of the FFSL scheme.
@@ -104,7 +104,7 @@ Suetes includes an extensive suite of tests in `test_dynamical_core_3d.py` and `
 
 ---
 
-## 📁 Project Structure
+## Project Structure
 
 ```text
 suetes/

@@ -5,51 +5,49 @@ class DaviesSponge:
         self.grid = grid
         self.depth = sponge_depth
         
-        # Automatically scale the relaxation timescale with the timestep
         tau_bndy = tau_bndy_factor * dt
-        
-        # Calculate the maximum relaxation coefficient
-        # If tau_bndy_factor is 10.0, max_c is strictly bounded to 0.1
         self.max_c = dt / tau_bndy
         
-        # Precompute the three possible lateral staggered shapes
+        # Pass the 'loc' identifier so the mask knows its staggering
         self.masks = {
-            'u': self._compute_mask(grid.nx + 1, grid.ny, sponge_depth),
-            'v': self._compute_mask(grid.nx, grid.ny + 1, sponge_depth),
-            'm': self._compute_mask(grid.nx, grid.ny, sponge_depth)
+            'u': self._compute_mask(grid.nx, grid.ny, sponge_depth, loc='u'),
+            'v': self._compute_mask(grid.nx, grid.ny, sponge_depth, loc='v'),
+            'm': self._compute_mask(grid.nx, grid.ny, sponge_depth, loc='m')
         }
 
-    def _compute_mask(self, nx, ny, depth):
-        X, Y = jnp.meshgrid(jnp.arange(nx), jnp.arange(ny), indexing='ij')
+    def _compute_mask(self, nx, ny, depth, loc='m'):
+        nx_pts = nx + 1 if loc == 'u' else nx
+        ny_pts = ny + 1 if loc == 'v' else ny
         
-        # Calculate distance to the closest X and Y boundaries
-        dist_x = jnp.minimum(X, nx - 1 - X) if nx > 2 * depth else jnp.full_like(X, 9999.0)
-        dist_y = jnp.minimum(Y, ny - 1 - Y) if ny > 2 * depth else jnp.full_like(Y, 9999.0)
+        X, Y = jnp.meshgrid(jnp.arange(nx_pts, dtype=jnp.float32), 
+                            jnp.arange(ny_pts, dtype=jnp.float32), 
+                            indexing='ij')
         
-        # Find the absolute shortest distance to any domain edge
-        dist_to_bound = jnp.minimum(dist_x, dist_y)
+        offset_x = 0.0 if loc == 'u' else 0.5
+        offset_y = 0.0 if loc == 'v' else 0.5
         
-        # Create a smooth cosine taper: 
-        # Equals 1.0 at the absolute boundary (dist == 0)
-        # Tapers smoothly to 0.0 at the interior edge (dist >= depth)
-        spatial_weight = jnp.where(
-            dist_to_bound < depth, 
-            jnp.cos(0.5 * jnp.pi * dist_to_bound / depth) ** 2, 
-            0.0
-        )
+        dist_x = jnp.minimum(X + offset_x, nx - (X + offset_x))
+        dist_y = jnp.minimum(Y + offset_y, ny - (Y + offset_y))
         
-        # Scale the continuous profile by the maximum stable nudging factor
-        # No more jnp.where() cliffs! The outermost cell gets max_c, tapering to 0.
-        scaled_alpha = spatial_weight * self.max_c
+        # Normalize distance: 0.0 at the boundary, 1.0 at the inner edge of the sponge
+        norm_x = jnp.clip(dist_x / depth, 0.0, 1.0)
+        norm_y = jnp.clip(dist_y / depth, 0.0, 1.0)
+        
+        # Pure cosine-squared: exactly 1.0 at the boundary, smoothly reaching 0.0 at the interior
+        weight_x = jnp.cos(0.5 * jnp.pi * norm_x) ** 2
+        weight_y = jnp.cos(0.5 * jnp.pi * norm_y) ** 2
+        
+        # Apply 2D corner blending
+        spatial_weight = 1.0 - (1.0 - weight_x) * (1.0 - weight_y)
+        
+        # Could multiply this with self.max_c if you want relaxation instead of overwrite
+        scaled_alpha = spatial_weight 
                 
         return jnp.expand_dims(scaled_alpha, axis=-1)
 
     def blend(self, intermediate_state, external_state):
         blended = {}
-        
-        # 'w' dampens the vertical acoustic jets.
-        # 'pi' provides the synoptic pressure gradient to maintain geostrophic balance.
-        blend_vars = ['u', 'v', 'w', 'th_v', 'q', 'pi'] 
+        blend_vars = ['u', 'v', 'w', 'eta_dot', 'th_v', 'q', 'pi']
         
         for k in intermediate_state.keys():
             if k in blend_vars and k in external_state:

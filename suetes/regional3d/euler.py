@@ -201,27 +201,26 @@ class Euler3D:
         v_m = self.op.avg(state_prime['v'], axis=1, from_loc='v', to_loc='m')
         v_w = self.op.avg(v_m, axis=2, from_loc='m', to_loc='w')
 
-        # Lock the boundaries so GMRES cannot warp the ERA5 inflow/outflow (new)
+        # Lock u and v at the lateral boundaries for GMRES
         L_u = L_u.at[0, :, :].set(state_prime['u'][0, :, :])
         L_u = L_u.at[-1, :, :].set(state_prime['u'][-1, :, :])
         L_v = L_v.at[:, 0, :].set(state_prime['v'][:, 0, :])
         L_v = L_v.at[:, -1, :].set(state_prime['v'][:, -1, :])
 
-        # Override L_w at boundaries
-        # Bottom: Kinematic constraint (w - u*dz/dx - v*dz/dy = 0)
+        # Override L_w at vertical boundaries only (this is mathematically correct)
         m_w = jnp.expand_dims(self.grid.m_factors['w'], axis=-1)
 
-        # Fix the bottom boundary condition
+        # Fix the vertical boundary conditions (Kinematic bottom, Rigid top)
         L_w = L_w.at[:, :, 0].set(state_prime['w'][:, :, 0])
         L_w = L_w.at[:, :, -1].set(state_prime['w'][:, :, -1])
 
-        # Fix the implicit terrain advection
         L_eta_dot = alpha * (
             bg['dz_w_full'] * state_prime['eta_dot'] 
             + m_w * (u_w * self.grid.z_xi_w + v_w * self.grid.z_eta_w) 
             - state_prime['w']
         )
         
+        # eta_dot is strictly 0 at surface and top model levels
         L_eta_dot = L_eta_dot.at[:, :, 0].set(state_prime['eta_dot'][:, :, 0])
         L_eta_dot = L_eta_dot.at[:, :, -1].set(state_prime['eta_dot'][:, :, -1])
         

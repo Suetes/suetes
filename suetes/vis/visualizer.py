@@ -47,9 +47,10 @@ class Visualizer:
             ax.plot(lons[sd:-sd, -sd-1], lats[sd:-sd, -sd-1], **kwargs)
 
     def plot_2d_field(self, grid, state, variable, z_idx=5, sponge_depth=30, constants=None, 
-                      cmap='viridis', vmin=None, vmax=None, scale='linear', title=None, ax=None, save_path=None):
-        """Plots a single generalized 2D field."""
-        data = self._get_plot_data(grid, state, variable, z_idx, constants)
+                      cmap='viridis', vmin=None, vmax=None, scale='linear', title=None, ax=None, save_path=None, plot_data=None):
+    
+        # Use the explicitly passed data if available, otherwise extract it from the state
+        data = plot_data if plot_data is not None else self._get_plot_data(grid, state, variable, z_idx, constants)
         
         Xi, Yi = np.meshgrid(grid.x_m, grid.y_m, indexing='ij')
         lats, lons = grid.proj.get_lat_lon(Xi, Yi)
@@ -64,16 +65,28 @@ class Visualizer:
         ax.add_feature(cfeature.COASTLINE, linewidth=1.2, edgecolor='black')
         ax.add_feature(cfeature.BORDERS, linewidth=0.8, linestyle=':', edgecolor='gray')
 
-        # Calculate limits based on data, and apply symmetric scaling if requested
+        extend = 'neither'
         if vmin is None and vmax is None:
-            vmax = float(np.max(data))
-            vmin = float(np.min(data))
+            data_max = float(np.max(data))
+            data_min = float(np.min(data))
+            
             if scale == 'sym': 
-                vmax = max(vmax, abs(vmin))
-                # Cap extreme blowouts for W and Div so they don't wash out the plot
-                if variable == 'div': vmax = min(vmax, 1e-4)
-                if variable == 'w': vmax = min(vmax, 2.0)
-                vmin = -vmax
+                limit = max(abs(data_max), abs(data_min))
+                
+                # Safety caps to prevent extreme outliers from washing out the plot
+                capped_limit = limit
+                if variable == 'div': capped_limit = min(limit, 1e-4)
+                if variable == 'w': capped_limit = min(limit, 1.0)
+                
+                # Tell matplotlib to draw arrows on the colorbar if we capped the visual range
+                if capped_limit < limit:
+                    extend = 'both'
+                    
+                vmax = capped_limit
+                vmin = -capped_limit
+            else:
+                vmax = data_max
+                vmin = data_min
 
         im = ax.pcolormesh(lons, lats, data, transform=ccrs.PlateCarree(), cmap=cmap, vmin=vmin, vmax=vmax)
         self._draw_domain_and_sponge(ax, lons, lats, sponge_depth)
@@ -83,7 +96,7 @@ class Visualizer:
         ax.gridlines(draw_labels=show_plot, linewidth=0.5, color='gray', alpha=0.5, linestyle='--')
 
         if show_plot:
-            cbar = plt.colorbar(im, ax=ax, orientation='horizontal', pad=0.1)
+            cbar = plt.colorbar(im, ax=ax, orientation='horizontal', pad=0.1, extend=extend)
             plt.tight_layout()
             if save_path: plt.savefig(save_path, dpi=200)
             else: plt.show()
@@ -92,14 +105,12 @@ class Visualizer:
         return im
 
     def plot_dashboard(self, grid, state_model, z_idx=5, sponge_depth=30, fields=None, time_hours=None, save_path=None):
-        """Creates a dynamic multi-panel dashboard composing plot_2d_field."""
         if fields is None:
             fields = [
                 {'var': 'w', 'cmap': 'seismic', 'title': 'Vertical Velocity [m/s]', 'scale': 'sym'},
                 {'var': 'div', 'cmap': 'seismic', 'title': 'Horizontal Divergence [s⁻¹]', 'scale': 'sym'},
                 {'var': 'q_c', 'cmap': 'Blues', 'title': 'Cloud Water [kg/kg]', 'scale': 'linear'},
-                # Switched to viridis for Zonal Wind so strictly positive jets show good contrast
-                {'var': 'u', 'cmap': 'viridis', 'title': 'Zonal Wind [m/s]', 'scale': 'linear'} 
+                {'var': 'u', 'cmap': 'seismic', 'title': 'Zonal Wind [m/s]', 'scale': 'sym'} 
             ]
 
         n_vars = len(fields)
@@ -114,7 +125,11 @@ class Visualizer:
             im = self.plot_2d_field(grid, state_model, field_def['var'], z_idx, sponge_depth, 
                                     cmap=field_def.get('cmap', 'viridis'), scale=scale, 
                                     title=field_def['title'], ax=axes[i])
-            fig.colorbar(im, ax=axes[i], orientation='horizontal', pad=0.05, fraction=0.046)
+                                    
+            # Extract the extend parameter from the mappable so subplots show arrows correctly
+            extend = im.cmap.name if hasattr(im, 'extend') else 'neither' 
+            # (Note: pcolormesh doesn't strictly store extend, but colorbar handles out-of-bounds automatically if limits are set)
+            fig.colorbar(im, ax=axes[i], orientation='horizontal', pad=0.05, fraction=0.046, extend='both' if scale == 'sym' else 'neither')
 
         for j in range(i + 1, len(axes)):
             axes[j].axis('off')
@@ -144,9 +159,10 @@ class Visualizer:
         for ax, data, title in zip(axes, datas, titles):
             cmap = 'seismic' if 'Anomaly' in title else 'viridis'
             vmin, vmax = (-vmax_anom, vmax_anom) if 'Anomaly' in title else (vmin_main, vmax_main)
-            
+
+            # Pass the pre-calculated 'data' array into plot_data
             im = self.plot_2d_field(grid, state_model, variable, z_idx, sponge_depth, 
-                                    cmap=cmap, vmin=vmin, vmax=vmax, title=title, ax=ax)
+                                    cmap=cmap, vmin=vmin, vmax=vmax, title=title, ax=ax, plot_data=data)
             fig.colorbar(im, ax=ax, orientation='horizontal', pad=0.1)
 
         plt.tight_layout()
