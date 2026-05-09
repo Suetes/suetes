@@ -1,3 +1,5 @@
+import os
+
 import jax
 jax.config.update("jax_enable_x64", True)
 import jax.numpy as jnp
@@ -10,18 +12,24 @@ from suetes.regional3d.steppers import SISLStepper3D
 from suetes.regional3d.boundaries import DaviesSponge
 from suetes.shared.driver import Simulation
 
+output_dir = "suetes/plots/benchmarks"
+os.makedirs(output_dir, exist_ok=True)
+
 # --- 1. SETUP GRID & PHYSICS ---
-# Using a 10km x 10km domain. We use a pseudo-2D setup (ny=3) just so it runs 
-# blazingly fast on your local machine for the first test, but the math is fully 3D.
 nx, ny, nz = 80, 3, 80
 dx, dy, dz = 125.0, 125.0, 125.0  # 125m resolution
+
+# Time step of simulation
+dt = 2.5  
 
 grid = RegionalGrid3D(nx, ny, nz, dx, dy, dz, lat_center=0.0, lon_center=0.0)
 op = CGridOperator3D(grid)
 
 constants = {'g': 9.81, 'cp': 1004.0, 'Rd': 287.0, 'cvd': 717.0, 'p0': 100000.0}
-physics = Euler3D(grid, op, constants, N_bv=0.00, damp_height=7500.0, max_damp=0.5,
-                  nu_h=0.0, nu_v=0.0)
+
+# Euler solver parameters
+physics = Euler3D(grid, op, constants, dt=dt, N_bv=0.00, damp_height=7500.0, max_damp=0.5,
+                  nu_div_factor=0.0, nu_h_factor=0.0, physics_suite=None)
 
 # --- 2. INITIALIZE STATE ---
 bg_ref = {
@@ -48,33 +56,26 @@ r = jnp.sqrt((X - x_c)**2 + (Z - z_c)**2)
 # Cosine-squared bubble profile (radius 1500m)
 bubble = jnp.where(r <= 1500.0, 2.0 * jnp.cos(0.5 * jnp.pi * r / 1500.0)**2, 0.0)
 
-# 1. Update the potential temperature
+# Update the potential temperature
 state['th_v'] = bg_ref['th_v'] + bubble
 
-# 2. UPDATE THE DENSITY to maintain pressure equilibrium!
+# UPDATE THE DENSITY to maintain pressure equilibrium!
 state['rho'] = physics.c['p0'] / (physics.c['Rd'] * state['th_v']) * \
                (bg_ref['pi'] ** (physics.c['cvd'] / physics.c['Rd']))
 
 # --- 3. BOUNDARIES & STEPPER ---
-# Apply a sponge layer 5 cells deep to absorb acoustic waves at the edges
-sponge = DaviesSponge(grid, sponge_depth=5)
+sponge = DaviesSponge(grid, op, sponge_depth=5, dt=dt)
 
 def bc_fn(state_in, forcing):
-    # Only use the lateral sponge!
-    ext_state = {
-        'u': jnp.zeros_like(state_in['u']),
-        'v': jnp.zeros_like(state_in['v']),
-        'th_v': bg_ref['th_v'],
-        'rho': bg_ref['rho'],
-        'pi': bg_ref['pi']
-    }
-    return sponge.blend(state_in, ext_state)
+    # For a pseudo-2D rising bubble, rigid lateral walls are perfectly fine.
+    # The explicit top Rayleigh damping will absorb the vertical acoustic/gravity waves.
+    # Do not apply the sponge, as it will crush the narrow Y-axis!
+    return state_in
 
 def forcing_fn(state, t):
     return state
 
-# Use a 2.5 second time step. High resolution means we need a smaller dt.
-dt = 2.5
+# SISLStepper3D initialization
 stepper = SISLStepper3D(physics, dt)
 sim = Simulation(stepper, forcing_fn, bc_fn)
 
@@ -97,5 +98,6 @@ plt.colorbar(label='Potential Temp Perturbation (K)')
 plt.title(f'Warm Bubble at T = {t_end}s')
 plt.xlabel('X Distance (m)')
 plt.ylabel('Altitude (m)')
-plt.savefig('warm_bubble_result.png')
-print("Saved plot to 'warm_bubble_result.png'")
+
+plt.savefig(f'{output_dir}/bubble_3d_{t_end}.png')
+print(f"Saved plot to '{output_dir}/bubble_3d_{t_end}.png'")

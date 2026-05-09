@@ -1,3 +1,11 @@
+"""
+ERA5 to Suetes Data Bridge.
+
+Handles the mathematically rigorous translation of external reanalysis data onto 
+the native numerical grid, including horizontal reprojection, thermodynamic 
+reconciliation, and hydrostatic reconstruction.
+"""
+
 import jax
 import jax.numpy as jnp
 import jax.scipy.ndimage as jnd
@@ -7,7 +15,26 @@ import scipy.ndimage as ndimage_cpu
 
 
 class TimeManager:
+    """
+    Manages the temporal interpolation of forcing fields.
+    
+    Given a list of historical ERA5 states, this class provides a mechanism
+    to retrieve the correct analytical forcing values for any point in time
+    during the simulation run, using linear interpolation between time steps.
+    """
     def __init__(self, states_list, times_sec_list, grid):
+        """
+        Initializes the TimeManager.
+
+        Args:
+            states_list (list): A list of atmospheric state dictionaries.
+                                Each dictionary must contain keys for prognostic
+                                variables (e.g., 'u', 'v', 'rho', 'th_v').
+            times_sec_list (list): A list of simulation times corresponding to 
+                                   each state in `states_list`. Times are 
+                                   expected in seconds.
+            grid (BareGrid): The computational grid object.
+        """
         self.grid = grid
         self.times_sec = jnp.array(times_sec_list, dtype=jnp.float32)
         
@@ -18,7 +45,19 @@ class TimeManager:
             self.stacked_states[k] = jnp.stack([state[k] for state in states_list], axis=0)
 
     def get_forcing(self, t):
-        # 1. Find the left bounding time index for the current t
+        """
+        Retrieves the interpolated forcing state for a given time.
+
+        Performs a linear interpolation between the two nearest known time states
+        to provide a continuous forcing field.
+
+        Args:
+            t (float): The current simulation time in seconds.
+
+        Returns:
+            dict: The interpolated atmospheric state.
+        """
+        # Find the left bounding time index for the current t
         # (e.g., if t=4000s, idx will be 1, representing the 3600s boundary)
         idx = jnp.searchsorted(self.times_sec, t, side='right') - 1
         
@@ -28,11 +67,11 @@ class TimeManager:
         t0 = self.times_sec[idx]
         t1 = self.times_sec[idx + 1]
         
-        # 2. Calculate interpolation weight
+        # Calculate interpolation weight
         alpha = (t - t0) / (t1 - t0)
         alpha = jnp.clip(alpha, 0.0, 1.0)
         
-        # 3. Dynamically slice the two bounding states and interpolate
+        # Dynamically slice the two bounding states and interpolate
         interp_state = {}
         for k in self.stacked_states.keys():
             state_t0 = self.stacked_states[k][idx]
@@ -42,7 +81,22 @@ class TimeManager:
         return interp_state
 
 class HorizontalRegridder:
+    """
+    Handles the geometric transformation of data from the ERA5 lat/lon grid
+    to the native metric grid of the Suetes model.
+    
+    It pre-calculates the interpolation indices to ensure efficient execution
+    during the dynamical simulation.
+    """
     def __init__(self, grid, era5_lats, era5_lons):
+        """
+        Initializes the regridder and pre-computes interpolation weights.
+
+        Args:
+            grid (BareGrid): The computational grid object.
+            era5_lats (np.ndarray): 1D array of latitude values from ERA5.
+            era5_lons (np.ndarray): 1D array of longitude values from ERA5.
+        """
         self.grid = grid
         
         self.lat_0 = float(era5_lats[0])
@@ -60,6 +114,9 @@ class HorizontalRegridder:
         }
 
     def _compute_fractional_indices(self, x_coords, y_coords):
+        """
+        Calculates the fractional indices of the target grid within the ERA5 domain.
+        """
         Xi, Yi = np.meshgrid(x_coords, y_coords, indexing='ij')
         target_lat, target_lon = self.grid.proj.get_lat_lon(Xi, Yi)
         
@@ -79,7 +136,11 @@ class HorizontalRegridder:
         return np.stack([idx_lat, idx_lon], axis=0)
 
     def regrid_3d(self, field_era5_3d, loc='m'):
-        """Regrids a (levels, lat, lon) array using SciPy bicubic interpolation."""
+        """
+        Regrids a 3D ERA5 field onto the native grid.
+        
+        Uses pre-computed indices for computational efficiency.
+        """
         coords = self.target_indices[loc]
         field_np = np.array(field_era5_3d)
         
@@ -96,7 +157,20 @@ class HorizontalRegridder:
 
 
 class BoundaryProcessor:
+    """
+    Handles the vertical interpolation and hydrostatic reconstruction of ERA5 
+    boundary data to match the Suetes terrain-following coordinate system.
+    """
     def __init__(self, grid, era5_lats, era5_lons, constants):
+        """
+        Initializes the BoundaryProcessor.
+
+        Args:
+            grid (BareGrid): The computational grid object.
+            era5_lats (np.ndarray): 1D array of ERA5 latitudes.
+            era5_lons (np.ndarray): 1D array of ERA5 longitudes.
+            constants (dict): Dictionary containing physical constants.
+        """
         self.grid = grid
         self.c = constants
         self.regridder = HorizontalRegridder(grid, era5_lats, era5_lons)
@@ -108,7 +182,16 @@ class BoundaryProcessor:
         )
 
     def _thermodynamics(self, T, p, q):
-        """Converts standard meteorology variables to dry-core prognostic variables."""
+        r"""
+        Converts Standard Meteorology $(T, p, q)$ to Dry-Core Prognostics $(\theta_v, \pi, \rho)$.
+
+        $$
+        \begin{align} T_v &= T(1 + 0.608 q) \\
+        \pi &= \left(\frac{p}{p_0}\right)^{\frac{R_d}{c_p}} \\
+        \theta_v &= \frac{T_v}{\pi} \\
+        \end{align}
+        $$
+        """
         epsilon = self.c.get('epsilon', 0.622)
         Tv = T * (1.0 + (1.0 / epsilon - 1.0) * q)
         rho = p / (self.c['Rd'] * Tv)
@@ -117,7 +200,17 @@ class BoundaryProcessor:
         return th_v, pi, rho
 
     def _interp_3d(self, target_z, z_era5, var_era5):
-        """Interpolates an ERA5 column to the Suetes terrain-following column."""
+        """
+        Interpolates an ERA5 column to the Suetes terrain-following column.
+
+        Args:
+            target_z (np.ndarray): Target vertical coordinates.
+            z_era5 (np.ndarray): Source vertical coordinates.
+            var_era5 (np.ndarray): Source variable.
+
+        Returns:
+            np.ndarray: Interpolated variable.
+        """
         # Use argsort to guarantee strictly ascending coordinates
         sort_idx = jnp.argsort(z_era5, axis=-1)
         z_era5_sorted = jnp.take_along_axis(z_era5, sort_idx, axis=-1)
@@ -129,6 +222,12 @@ class BoundaryProcessor:
         """
         Calculates the net mass flux through the four lateral boundaries and 
         applies a barotropic correction to ensure exact global mass conservation.
+
+        Args:
+            state (dict): The atmospheric state dictionary.
+
+        Returns:
+            dict: The mass-balanced atmospheric state.
         """
         # Approximate density on the boundaries (using the outermost interior cells)
         rho_w = state['rho'][0, :, :]
@@ -184,9 +283,19 @@ class BoundaryProcessor:
         return state
 
     def process(self, stitched_era5_state):
-        """
-        Takes the raw numpy arrays from the ERA5Processor, applies horizontal regridding, 
-        thermodynamic conversion, and vertical interpolation, returning a model-ready state.
+        r"""
+        Executes the full transformation pipeline.
+
+        Includes strict hydrostatic reconstruction of the Exner pressure field 
+        to prevent spurious acoustic initialization shocks over steep terrain:
+
+        $$ \frac{\partial \pi}{\partial z} = -\frac{g}{c_p \theta_v} $$
+
+        Args:
+            stitched_era5_state (dict): The raw ERA5 state dictionary.
+
+        Returns:
+            dict: The processed model state ready for initialization.
         """
         # Horizontal Regridding 
         # We must regrid the ERA5 heights to the staggered locations so the 

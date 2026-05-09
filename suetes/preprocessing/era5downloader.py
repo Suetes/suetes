@@ -1,8 +1,19 @@
+"""
+Automated Data Acquisition Module.
+
+Interfaces with the Copernicus Climate Data Store (CDS) API to calculate required 
+geographic bounding boxes and download ERA5 reanalysis data for model initialization 
+and lateral boundary forcing.
+"""
+
 import os
 import math
 import cdsapi
 
 class ERA5Manager:
+    """
+    Manages the downloading and local caching of ERA5 NetCDF files.
+    """
     def __init__(self, data_dir="suetes/data"):
         self.data_dir = data_dir
         self.client = cdsapi.Client()
@@ -12,9 +23,26 @@ class ERA5Manager:
 
     @staticmethod
     def calculate_required_bbox(lat_c, lon_c, nx, ny, dx, dy, buffer_deg=2.0):
-        """
-        Calculates the minimal ERA5 bounding box required to cover the physical grid.
-        Returns: [North, West, South, East] in degrees.
+        r"""
+        Calculates the minimal geographic bounding box required to encompass the physical grid.
+
+        Because longitude lines converge at the poles, the required longitudinal 
+        width in degrees increases as latitude increases. The formula evaluates 
+        the physical width at the highest absolute latitude within the domain:
+
+        $$ \Delta \lambda = \frac{L_x / 2}{R \cos(|\phi_{max}|)} \times \frac{180}{\pi} $$
+
+        Args:
+            lat_c (float): Central latitude in degrees.
+            lon_c (float): Central longitude in degrees.
+            nx (int): Number of grid cells in x.
+            ny (int): Number of grid cells in y.
+            dx (float): Grid spacing in x [m].
+            dy (float): Grid spacing in y [m].
+            buffer_deg (float): Extra safety margin added to the edges [degrees].
+
+        Returns:
+            list: The bounding box `[North, West, South, East]` formatted for the CDS API.
         """
         R = 6371000.0  # Earth radius in meters
         
@@ -40,14 +68,25 @@ class ERA5Manager:
         ]
 
     def download_regional_subset(self, year, month, days, area, prefix="test_case"):
-        """
+        r"""
         Downloads ERA5 single and pressure level data if it doesn't already exist.
         
-        :param year: str, e.g., "2026"
-        :param month: str, e.g., "03"
-        :param days: list of str, e.g., ["01", "02", "03", ...]
-        :param area: list of floats [North, West, South, East] 
-        :param prefix: str, name of the file prefix for caching
+        The download is cached locally. If a file with the specified prefix already
+        exists in `self.data_dir`, the download is skipped.
+        
+        The requested data is a combination of:
+        - Single Levels: Surface fields required for prognostic variables (T, q, u, v, $\pi$).
+        - Pressure Levels: Upper-air fields required for hydrostatic consistency and geopotential.
+
+        Args:
+            year (str): Year of the data (e.g., "2026").
+            month (str): Month (e.g., "03").
+            days (list): List of days to download (e.g., ["01", "02", "03", ...]).
+            area (list): Geographic bounding box `[North, West, South, East]`.
+            prefix (str): Naming prefix for the cache file.
+
+        Returns:
+            tuple: (single_level_filepath, pressure_level_filepath)
         """
         
         # Define the file paths for the cache

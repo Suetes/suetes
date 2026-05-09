@@ -3,22 +3,35 @@ site_name: Suetes Documentation
 theme:
   name: material
   palette:
-    scheme: slate # Gives you a nice dark mode for code!
+    scheme: slate 
 
-# This tells MkDocs to parse your Python files
 plugins:
   - search
   - mkdocstrings:
       handlers:
         python:
-          paths: ["."] # Tells it to look in your root folder for the 'suetes' package
+          paths: ["."] 
 
-# This enables LaTeX math rendering
 markdown_extensions:
   - pymdownx.arithmatex:
       generic: true
 
-# This injects the MathJax engine to render the equations
 extra_javascript:
   - https://polyfill.io/v3/polyfill.min.js?features=es6
   - https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js
+
+# NEW: Define the sidebar navigation structure
+nav:
+  - Home: index.md
+  - Regional 3D Model:
+    - Geometry & Grid: geometry.md
+    - Dynamical Core (Euler): euler.md
+    - Steppers & Advection: steppers.md
+    - Spatial Operators: operators.md
+    - Grid Diffusion: diffusion.md
+    - Lateral Boundaries: boundaries.md
+  - Data & Preprocessing:
+    - ERA5 Downloader: era5downloader.md
+    - Data Processor: processor.md
+    - Topography Blending: topography.md
+    - ERA5 to Suetes (Bridge): era2suetes.md

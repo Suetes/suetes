@@ -1,3 +1,5 @@
+import os
+
 import jax
 jax.config.update("jax_enable_x64", True)
 import jax.numpy as jnp
@@ -7,6 +9,9 @@ from suetes.slice2d.grids import StaggeredGrid
 from suetes.slice2d.euler import VerticalSlice
 from suetes.slice2d.steppers import SISLStepper
 from suetes.shared.driver import Simulation
+
+output_dir = "suetes/plots/benchmarks"
+os.makedirs(output_dir, exist_ok=True)
 
 # ====================================================================
 # 1. SETUP GRID & PHYSICS
@@ -86,5 +91,5 @@ plt.title(f"SISL Rising Bubble: $\Delta \\theta$ at T={t_end}s (dt={dt}s)")
 plt.xlabel("x (km)")
 plt.ylabel("z (km)")
 plt.colorbar(label="Temperature Perturbation (K)")
-plt.savefig('rising_bubble_2d.png', dpi=150)
+plt.savefig(f'{output_dir}/rising_bubble_2d_{t_end}s.png', dpi=150, bbox_inches='tight')
 print("Saved rising_bubble_2d.png")

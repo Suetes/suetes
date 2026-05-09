@@ -14,10 +14,16 @@ Welcome to the **Suetes** documentation.
 
 ## Contents
 
-*   [Geometry](geometry.md): Detailed information about the 3D regional grid construction and map projections.
-*   [Operators](operators.md): Detailed information about the finite difference stencils and interpolators.
-*   [Euler](euler.md): Detailed information about the dynamical core.
-*   [Steppers](steppers.md): Detailed information about the time integration and advection.
-*   [Diffusion](diffusion.md): Detailed information about the spatial filters and turbulence models.
-*   [Boundaries](boundaries.md): Detailed information about the relaxation zones and external forcing.
+*   **Preprocessing**:
+    *   [ERA5 Downloader](era5downloader.md): Downloads ERA5 data from the Copernicus Climate Data Store.
+    *   [Data Processor](processor.md): Stitches single-level surface data with pressure-level upper-air data.
+    *   [Topography](topography.md): Merges high-resolution internal topography (GEBCO) with external boundary topography (ERA5).
+    *   [ERA2Suetes Bridge](era2suetes.md): The data transformation pipeline, handling regridding, vector rotation, and hydrostatic reconstruction.
+*   **Regional3d**:
+    * [Geometry](geometry.md): Detailed information about the 3D regional grid construction and map projections.
+    * [Operators](operators.md): Detailed information about the finite difference stencils and interpolators.
+    * [Euler](euler.md): Detailed information about the dynamical core.
+    * [Steppers](steppers.md): Detailed information about the time integration and advection.
+    * [Diffusion](diffusion.md): Detailed information about the spatial filters and turbulence models.
+    * [Boundaries](boundaries.md): Detailed information about the relaxation zones and external forcing.
 

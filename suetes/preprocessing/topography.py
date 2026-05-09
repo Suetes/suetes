@@ -1,3 +1,10 @@
+"""
+Topography Blending Module.
+
+Merges high-resolution GEBCO surface elevation data for the model interior with 
+the low-resolution ERA5 topography at the lateral boundaries.
+"""
+
 import xarray as xr
 import numpy as np
 from scipy.interpolate import RegularGridInterpolator
@@ -6,13 +13,36 @@ import jax.scipy.ndimage as jnd
 import scipy.ndimage as ndimage
 
 class TopographyProcessor:
+    """
+    Processes and blends topography data for the computational domain.
+    
+    This class handles the interpolation of high-resolution GEBCO global 
+    topography onto the computational grid and merges it with low-resolution 
+    ERA5 topography at the boundaries using a smooth cosine taper (sponge).
+    """
+    
     def __init__(self, era5_sl_path, gebco_path):
-        """Loads the raw datasets for topography processing."""
+        """
+        Initializes the topography processor.
+
+        Args:
+            era5_sl_path (str): File path to ERA5 single-level data.
+            gebco_path (str): File path to GEBCO topography data.
+        """
         self.ds_era5 = xr.open_dataset(era5_sl_path)
         self.ds_gebco = xr.open_dataset(gebco_path)
 
     def _get_era5_topo(self):
-        """Extracts the first timestep of ERA5 topography and converts to meters."""
+        """
+        Extracts the first timestep of ERA5 topography and converts to meters.
+
+        ERA5 provides geopotential height ($Z$) in $m^2/s^2$. This is converted
+        to geometric height ($h$) by dividing by the standard acceleration due to
+        gravity, $g \approx 9.81 \, m/s^2$.
+
+        Returns:
+            tuple: (lats, lons, z_era5_m)
+        """
         time_dim = 'valid_time' if 'valid_time' in self.ds_era5.dims else 'time'
         # z is geopotential [m^2/s^2]. Divide by g (9.81) for geometric height.
         z_era5 = self.ds_era5['z'].isel({time_dim: 0}).values / 9.81
@@ -27,7 +57,18 @@ class TopographyProcessor:
         return lats, lons, z_era5
 
     def _get_gebco_topo(self, min_lat, max_lat, min_lon, max_lon):
-        """Subsets and extracts GEBCO topography."""
+        """
+        Extracts a subset of GEBCO topography for the required region.
+
+        Args:
+            min_lat (float): Minimum latitude for the subset.
+            max_lat (float): Maximum latitude for the subset.
+            min_lon (float): Minimum longitude for the subset.
+            max_lon (float): Maximum longitude for the subset.
+
+        Returns:
+            tuple: (lats, lons, z_gebco_m)
+        """
         lat_slice = slice(min_lat, max_lat) if self.ds_gebco.lat[0] < self.ds_gebco.lat[-1] else slice(max_lat, min_lat)
         lon_slice = slice(min_lon, max_lon)
         
@@ -44,9 +85,21 @@ class TopographyProcessor:
         return lats, lons, z_gebco
 
     def _create_blending_mask(self, nx, ny, depth):
-        """
-        Creates a 2D mask identical to the DaviesSponge.
-        1.0 at the boundaries (100% ERA5), 0.0 in the interior (100% GEBCO).
+        r"""
+        Creates a cosine-tapered blending mask matching the Davies Sponge layer.
+
+        $$ M(d) = \cos^2\left(\frac{\pi}{2} \frac{d}{D}\right) $$
+        
+        where $d$ is distance to the boundary, returning 1.0 (ERA5) at the edge 
+        and 0.0 (GEBCO) in the interior.
+
+        Args:
+            nx (int): Number of grid points in the x-direction.
+            ny (int): Number of grid points in the y-direction.
+            depth (int): Width of the sponge layer in grid cells.
+
+        Returns:
+            np.ndarray: The 2D blending mask.
         """
         X, Y = np.meshgrid(np.arange(nx), np.arange(ny), indexing='ij')
         
@@ -61,6 +114,26 @@ class TopographyProcessor:
         return mask
 
     def process_and_blend(self, grid, sponge_depth=30, smooth_sigma=1.0):
+        """
+        Main processing pipeline.
+
+        1. Generates the target latitude/longitude grid from the model's 
+           Cartesian coordinates.
+        2. Interpolates the high-resolution GEBCO data onto this grid.
+        3. Interpolates the lower-resolution ERA5 topography onto the grid.
+        4. Blends the two datasets using a cosine taper (Davies Sponge).
+        5. Generates a continuous, differentiable height function for the 
+           dynamical core.
+
+        Args:
+            grid (BareGrid or Grid): The computational grid object.
+            sponge_depth (int): Width of the boundary sponge layer [cells]. Defaults to 30.
+            smooth_sigma (float): Standard deviation for Gaussian smoothing [cells].
+                                   Defaults to 1.0. Set to 0.0 to disable.
+
+        Returns:
+            np.ndarray: The final 2D array of blended heights $H$ [m].
+        """
         print("Generating target Lat/Lon grid...")
         Xi_m, Yi_m = np.meshgrid(np.array(grid.x_m), np.array(grid.y_m), indexing='ij')
         target_lat, target_lon = grid.proj.get_lat_lon(Xi_m, Yi_m)

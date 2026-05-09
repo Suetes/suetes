@@ -1,10 +1,30 @@
+"""
+Raw Data Extraction Module.
+
+Reads the downloaded NetCDF files and prepares the 3D data arrays by stitching 
+surface variables onto the bottom of the upper-air pressure levels.
+"""
+
 import xarray as xr
 import numpy as np
 import jax.numpy as jnp
 
 class ERA5Processor:
+    """
+    Processes raw ERA5 data to prepare it for the dynamical core.
+    
+    This class handles the "stitching" of surface data (2D) onto the 
+    pressure levels (3D) to create a complete atmospheric state vector.
+    """
+    
     def __init__(self, pl_path, sl_path):
-        """Loads and holds the pressure level and single level datasets."""
+        """
+        Initializes the processor and loads the dataset files.
+
+        Args:
+            pl_path (str): File path to the ERA5 pressure-level data.
+            sl_path (str): File path to the ERA5 single-level data.
+        """
         self.ds_pl = xr.open_dataset(pl_path)
         self.ds_sl = xr.open_dataset(sl_path)
 
@@ -12,6 +32,16 @@ class ERA5Processor:
         """
         Extracts arrays, broadcasts pressure, and stitches the surface 
         to the bottom of the pressure levels for a given timestep.
+        
+        The vertical dimension of the output is (k_vertical + 1), where k_vertical
+        is the number of pressure levels.
+        
+        Args:
+            time_idx (int): The index of the timestep to extract.
+
+        Returns:
+            dict: A dictionary containing the atmospheric state variables,
+                  ready for conversion to JAX arrays.
         """
         time_dim = 'valid_time' if 'valid_time' in self.ds_pl.dims else 'time'
         

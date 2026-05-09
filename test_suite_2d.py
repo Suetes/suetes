@@ -12,6 +12,9 @@ from suetes.shared.driver import Simulation
 
 CONSTANTS = {'g': 9.81, 'cp': 1004.0, 'cvd': 717.0, 'Rd': 287.0, 'p0': 100000.0}
 
+output_dir = "suetes/plots/benchmarks"
+os.makedirs(output_dir, exist_ok=True)
+
 def get_base_state(grid, physics, u_0=0.0):
     """Helper to generate the standard balanced background state."""
     state = {
@@ -145,7 +148,7 @@ def test_pure_advection():
     plt.title(f"Test 2: Advection (SLEVE) T={num_steps*dt}s")
     plt.xlabel("x (km)")
     plt.ylabel("z (km)")
-    plt.savefig('test2_pure_advection.png', dpi=150)
+    plt.savefig(f'{output_dir}/test2_pure_advection_{num_steps*dt}.png', dpi=150, bbox_inches='tight')
     print("\n>>> Saved test2_pure_advection.png")
 
 # ====================================================================
@@ -161,8 +164,11 @@ def test_gravity_waves():
     grid = StaggeredGrid(nx, nz, Lx, Lz, h_func=lambda x: 0.0)
     grid.periodic_x = True
     
-    physics = VerticalSlice(grid, CONSTANTS, damp_height=Lz, N_bv=0.01)
     dt = 12.0
+    tfinal = 3000.0
+    num_steps = int(tfinal/dt)
+
+    physics = VerticalSlice(grid, CONSTANTS, damp_height=Lz, N_bv=0.01)
     stepper = SISLStepper(physics, dt)
     
     state = get_base_state(grid, physics, u_0=20.0)
@@ -177,7 +183,7 @@ def test_gravity_waves():
                    (state['pi'] ** (physics.c['cvd'] / physics.c['Rd']))
     
     sim = Simulation(stepper, forcing_fn=None, bc_fn=boundary_conditions)
-    final_state = sim.run(state, 0.0, 3000.0, dt, chunk_steps=50)
+    final_state = sim.run(state, 0.0, tfinal, dt, chunk_steps=50)
     
     plt.figure(figsize=(10, 4))
     th_prime_final = final_state['th_v'] - physics.theta_bg
@@ -186,7 +192,7 @@ def test_gravity_waves():
     plt.title("Test 3: Non-hydrostatic Gravity Waves (T=3000s)")
     plt.xlabel("x (km)")
     plt.ylabel("z (km)")
-    plt.savefig('test3_gravity_waves.png', dpi=150)
+    plt.savefig(f'{output_dir}/test3_gravity_waves_{num_steps*dt}.png', dpi=150, bbox_inches='tight')
     print("\n>>> Saved test3_gravity_waves.png")
     print(">>> Check: Ensure the bubble has split into symmetric, clean waves.")
 
@@ -210,8 +216,11 @@ def test_linear_mountain(run_long=False):
     grid.periodic_x = True # Or False, depending on your domain boundaries
     
     # Sponge layer active in the top 10km (25km to 35km)
-    physics = VerticalSlice(grid, CONSTANTS, damp_height=25000.0, N_bv=0.01)
     dt = 5.0
+    t_end = 15000.0 if run_long else 4500.0
+    num_steps = int(t_end/dt)
+    
+    physics = VerticalSlice(grid, CONSTANTS, damp_height=Lz, N_bv=0.01)
     stepper = SISLStepper(physics, dt)
     
     state = get_base_state(grid, physics, u_0=10.0)
@@ -229,8 +238,6 @@ def test_linear_mountain(run_long=False):
         return st
         
     sim = Simulation(stepper, forcing_fn=None, bc_fn=terrain_bc)
-    
-    t_end = 15000.0 if run_long else 4500.0
     final_state = sim.run(state, 0.0, t_end, dt, chunk_steps=100)
     
     plt.figure(figsize=(10, 4))
@@ -240,7 +247,7 @@ def test_linear_mountain(run_long=False):
     plt.xlabel("x (km)")
     plt.ylabel("z (km)")
     plt.ylim(0, 20) # Only plot bottom 20km to match literature
-    plt.savefig(f'test{test_num}_mountain_wave.png', dpi=150)
+    plt.savefig(f'{output_dir}/test{test_num}_mountain_wave_{t_end}.png', dpi=150, bbox_inches='tight')
     print(f"\n>>> Saved test{test_num}_mountain_wave.png")
     
     if not run_long:
@@ -426,11 +433,11 @@ def test_extreme_topography():
 
 # Add to the bottom of test_suite_2d.py
 if __name__ == "__main__":
-    # test_topographic_null_balance()
-    # test_pure_advection()
-    # test_gravity_waves()
-    # test_linear_mountain(run_long=False)
+    test_topographic_null_balance()
+    test_pure_advection()
+    test_gravity_waves()
+    test_linear_mountain(run_long=False)
     # test_linear_mountain(run_long=True)
-    # test_autodiff_gradients()
+    test_autodiff_gradients()
     test_mass_conservation()
     test_extreme_topography()
