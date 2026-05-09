@@ -57,7 +57,7 @@ class ERA5Manager:
         # Standard time block (every hour)
         times = [f"{str(i).zfill(2)}:00" for i in range(24)]
 
-        # --- 1. SINGLE LEVELS ---
+        # SINGLE LEVELS
         if os.path.exists(sl_filepath):
             print(f"[CACHE] Single levels already exist at {sl_filepath}. Skipping download.")
         else:
@@ -82,7 +82,7 @@ class ERA5Manager:
                 sl_filepath
             )
 
-        # --- 2. PRESSURE LEVELS ---
+        # PRESSURE LEVELS
         if os.path.exists(pl_filepath):
             print(f"[CACHE] Pressure levels already exist at {pl_filepath}. Skipping download.")
         else:

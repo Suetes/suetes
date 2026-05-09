@@ -6,13 +6,12 @@ from suetes.regional3d.physics import BulkAerodynamicPBL
 class Euler3D:
     def __init__(self, grid, operators, constants, dt, initial_era5_state=None, 
                  N_bv=0.01, damp_height=20000.0, max_damp=0.5, 
-                 nu_div_factor=0.8, nu_h_factor=0.1, use_pbl=True):
+                 nu_div_factor=0.8, nu_h_factor=0.1, physics_suite=None):
         
         self.grid = grid
         self.op = operators
         self.c = constants
         self.dt = dt
-        self.use_pbl = use_pbl
         
         # Compute maximum stable explicit diffusion limits dynamically
         max_nu_div = (self.grid.dx**2) / (4.0 * self.dt)
@@ -22,6 +21,9 @@ class Euler3D:
         self.nu_div = nu_div_factor * max_nu_div
         self.nu_h = nu_h_factor * max_nu_h
         
+        # Physics suite injection
+        self.physics_suite = physics_suite
+
         # Use physical 3D height (Z_m)
         Z_m = self.grid.Z_m
         
@@ -57,9 +59,6 @@ class Euler3D:
         # Initialize the spatial filter
         self.diffusion = HyperFilter(self.grid, nu_h=self.nu_h, nu_v = 0.0)
 
-        # Planetary Boundary Layer parameterization
-        if self.use_pbl:
-            self.pbl_scheme = BulkAerodynamicPBL(self.grid, self.op)
 
     def precompute_bg(self, bg_state):
         th_v_bg, rho_bg, pi_bg = bg_state['th_v'], bg_state['rho'], bg_state['pi']
@@ -75,7 +74,8 @@ class Euler3D:
             'dz_u': self.op.avg(self.grid.dz_m_full, axis=0, from_loc='m', to_loc='u'),
             'dz_v': self.op.avg(self.grid.dz_m_full, axis=1, from_loc='m', to_loc='v'),
             'C_pi': (self.c['Rd'] / self.c['cvd']) * (pi_bg / (rho_bg * th_v_bg)),
-            'pi_bg': pi_bg
+            'pi_bg': pi_bg,
+            'th_v': th_v_bg
         }
 
     def get_tendencies(self, state_prime, bg, is_explicit=False):
@@ -148,40 +148,28 @@ class Euler3D:
 
         m_m = jnp.expand_dims(self.grid.m_factors['m'], axis=-1)
 
-        # Multiply the horizontal divergence sum by m.
-        # Vertical divergence (div_z) is unaffected by the horizontal map factor.
+        # Multiply the horizontal divergence sum by m (vertical divergence is unaffected by the horizontal map factor).
         tend_pi = -bg['C_pi'] * (m_m * (div_x + div_y) + div_z)
 
-        # Diffusion is only done in the explicit part
+        # Diffusion and physics are only done in the explicit part
         if is_explicit:
-            # # Targeted filter to kill 2dx acoustic checkerboarding
-            # du_dx = self.op.diff(u, axis=0, from_loc='u', to_loc='m') 
-            # dv_dy = self.op.diff(v, axis=1, from_loc='v', to_loc='m') 
-            # div_h_kinematic = du_dx + dv_dy
 
-            # grad_div_x = self.op.diff(div_h_kinematic, axis=0, from_loc='m', to_loc='u') 
-            # grad_div_y = self.op.diff(div_h_kinematic, axis=1, from_loc='m', to_loc='v') 
+            # Diffusion
+            if self.nu_h > 0.0 or self.nu_div > 0.0:
+                diff_tends = self.diffusion.get_tendencies(state_prime, bg_precomputed=bg)
+                tend_u += diff_tends['u']
+                tend_v += diff_tends['v']
+                tend_w += diff_tends['w']
 
-            # tend_u += self.nu_div * grad_div_x
-            # tend_v += self.nu_div * grad_div_y
+            # Call physics suite
+            if self.physics_suite is not None:
+                phys_tends = self.physics_suite.get_explicit_tendencies(state_prime, bg)
 
-            # Explicit diffusion
-            diff_tends = self.diffusion.get_tendencies(state_prime, bg_precomputed=bg)
-
-            tend_u += diff_tends['u']
-            tend_v += diff_tends['v']
-            tend_w += diff_tends['w']
-
-            # Planetary Boundary Layer parameterization
-            if self.use_pbl: 
-                full_state = {
-                    'u': state_prime['u'],
-                    'v': state_prime['v']
-                }
-                pbl_tends = self.pbl_scheme.get_tendencies(full_state, bg)
-                tend_u += pbl_tends['u']
-                tend_v += pbl_tends['v']
-        # ---------------------------------------------------------
+                # Add them to the dynamical core's right-hand side
+                for k in phys_tends:
+                    if k == 'u': tend_u += phys_tends['u']
+                    if k == 'v': tend_v += phys_tends['v']
+                    if k == 'w': tend_w += phys_tends['w']
 
         return {'u': tend_u, 'v': tend_v, 'w': tend_w, 'pi': tend_pi}
 

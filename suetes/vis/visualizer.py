@@ -131,10 +131,10 @@ class Visualizer:
     def plot_dashboard(self, grid, state_model, z_idx=5, sponge_depth=30, fields=None, time_hours=None, save_path=None):
         if fields is None:
             fields = [
-                {'var': 'w', 'cmap': 'seismic', 'title': 'Vertical Velocity [m/s]', 'scale': 'sym'},
-                {'var': 'div', 'cmap': 'seismic', 'title': 'Horizontal Divergence [s⁻¹]', 'scale': 'sym'},
-                {'var': 'q_c', 'cmap': 'Blues', 'title': 'Cloud Water [kg/kg]', 'scale': 'linear'},
-                {'var': 'u', 'cmap': 'seismic', 'title': 'Zonal Wind [m/s]', 'scale': 'sym'} 
+                {'var': 'w', 'cmap': 'seismic', 'title': 'Vertical velocity [m/s]', 'scale': 'sym'},
+                {'var': 'div', 'cmap': 'seismic', 'title': 'Horizontal divergence [s⁻¹]', 'scale': 'sym'},
+                {'var': 'q_c', 'cmap': 'Blues', 'title': 'Cloud water [kg/kg]', 'scale': 'linear'},
+                {'var': 'u', 'cmap': 'seismic', 'title': 'Grid-X wind [m/s]', 'scale': 'sym'} 
             ]
 
         n_vars = len(fields)
@@ -172,8 +172,8 @@ class Visualizer:
         val_era5 = self._get_plot_data(grid, state_era5, variable, z_idx)
         anomaly = val_model - val_era5
 
-        fig, axes = plt.subplots(1, 3, figsize=(18, 5), subplot_kw={'projection': ccrs.PlateCarree(central_longitude=grid.lon_c)})
-        titles = ["Suetes Model", "ERA5 Target", "Anomaly (Model - ERA5)"]
+        fig, axes = plt.subplots(1, 3, figsize=(18, 6), subplot_kw={'projection': ccrs.PlateCarree(central_longitude=grid.lon_c)})
+        titles = ["Suetes model", "ERA5 target", "Anomaly (Model - ERA5)"]
         datas = [val_model, val_era5, anomaly]
         
         vmax_main = max(float(np.max(val_model)), float(np.max(val_era5)))
@@ -190,7 +190,7 @@ class Visualizer:
             fig.colorbar(im, ax=ax, orientation='horizontal', pad=0.1)
 
         plt.tight_layout()
-        if save_path: plt.savefig(save_path, dpi=200)
+        if save_path: plt.savefig(save_path, dpi=200, bbox_inches='tight')
         else: plt.show()
         plt.close()
 
@@ -267,9 +267,9 @@ class Visualizer:
         ax.axvline(x=1.0/(2*dx), color='r', linestyle=':', label=rf'$2\Delta x$ ({2*dx/1000:.1f} km)')
         ax.axvline(x=1.0/(6*dx), color='orange', linestyle=':', label=rf'$6\Delta x$ ({6*dx/1000:.1f} km)')
         
-        ax.set_title(f"Power Spectrum: {variable} at Level {z_idx}")
+        ax.set_title(f"Power spectrum: {variable} at level {z_idx}")
         ax.set_xlabel("Wavenumber $k$ [m⁻¹]")
-        ax.set_ylabel("Spectral Power Density")
+        ax.set_ylabel("Spectral power density")
         ax.grid(True, which="both", ls="--", alpha=0.5)
         ax.legend()
         

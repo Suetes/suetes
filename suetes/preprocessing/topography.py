@@ -61,12 +61,12 @@ class TopographyProcessor:
         return mask
 
     def process_and_blend(self, grid, sponge_depth=30, smooth_sigma=1.0):
-        print("1. Generating target Lat/Lon grid...")
+        print("Generating target Lat/Lon grid...")
         Xi_m, Yi_m = np.meshgrid(np.array(grid.x_m), np.array(grid.y_m), indexing='ij')
         target_lat, target_lon = grid.proj.get_lat_lon(Xi_m, Yi_m)
         target_lon = (target_lon + 180.0) % 360.0 - 180.0
 
-        print("2. Interpolating GEBCO Topography...")
+        print("Interpolating GEBCO topography...")
         min_lat, max_lat = float(target_lat.min()) - 2.0, float(target_lat.max()) + 2.0
         min_lon, max_lon = float(target_lon.min()) - 2.0, float(target_lon.max()) + 2.0
 
@@ -76,11 +76,10 @@ class TopographyProcessor:
         pts = np.stack([target_lat, target_lon], axis=-1)
         z_base = np.maximum(interp_gebco(pts), 0.0)
 
-        print("3. Smoothing Topography...")
-        import scipy.ndimage as ndimage
+        print("Smoothing topography...")
         z_interior = ndimage.gaussian_filter(z_base, sigma=smooth_sigma) if smooth_sigma > 0 else z_base
         
-        # --- NEW: Retrieve and interpolate ERA5 topography ---
+        # Retrieve and interpolate ERA5 topography
         era5_lat, era5_lon, z_era5 = self._get_era5_topo()
         
         # Handle potential ERA5 [0, 360] longitude format to match target_lon
@@ -99,7 +98,7 @@ class TopographyProcessor:
         
         H_array = jnp.array(z_final)
         
-        print("4. Generating continuous h_func for JAX Geometry...")
+        print("Generating continuous h_func for dynamical core...")
         def h_func(x, y):
             idx_x = (x - grid.x_m[0]) / grid.dx
             idx_y = (y - grid.y_m[0]) / grid.dy

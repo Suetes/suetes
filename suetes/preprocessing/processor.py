@@ -18,7 +18,7 @@ class ERA5Processor:
         pl = self.ds_pl.isel({time_dim: time_idx})
         sl = self.ds_sl.isel({time_dim: time_idx})
 
-        # 1. Expand Single Levels (2D -> 3D)
+        # Expand Single Levels (2D -> 3D)
         z_surf = np.expand_dims(sl['z'].values, axis=0)
         p_surf = np.expand_dims(sl['sp'].values, axis=0)
         t_surf = np.expand_dims(sl['t2m'].values, axis=0)
@@ -28,7 +28,7 @@ class ERA5Processor:
         q_surf = np.zeros_like(p_surf) 
         omega_surf = np.zeros_like(p_surf)
 
-        # 2. Extract and format Pressure Levels
+        # Extract and format Pressure Levels
         z_pl = pl['z'].values
         t_pl = pl['t'].values
         q_pl = pl['q'].values
@@ -42,7 +42,7 @@ class ERA5Processor:
         p_1d = pl[level_dim].values * 100.0 
         p_pl = np.broadcast_to(p_1d[:, None, None], t_pl.shape)
 
-        # 3. Stitch them together
+        # Stitch them together
         stitched_state = {
             'geopotential': jnp.array(np.concatenate([z_pl, z_surf], axis=0)),
             'p': jnp.array(np.concatenate([p_pl, p_surf], axis=0)),

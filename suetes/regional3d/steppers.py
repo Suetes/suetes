@@ -277,17 +277,14 @@ class FluxFormAdvector:
 
 
 class SISLStepper3D:
-    def __init__(self, physics, dt, tracer_keys=None, use_moisture=True):
+    def __init__(self, physics, dt):
         self.physics, self.dt = physics, dt
-        self.tracer_keys = tracer_keys if tracer_keys is not None else []
         self.advector = SemiLagrangianAdvector3D(physics.grid, physics, dt)
         self.ffsl_advector = FluxFormAdvector(physics.grid, dt)
         self.implicit_solver = SemiImplicitSolver3D(physics, dt)
         
-        # Handle optional moisture physics
-        self.use_moisture = use_moisture
-        if self.use_moisture:
-            self.microphysics = SimpleMicrophysics(physics.c)
+        # Ask the physics suite for the active tracers
+        self.tracer_keys = self.physics.physics_suite.tracer_keys if self.physics.physics_suite is not None else []
 
     def integrate(self, state, t_start, num_steps, forcing, bc_fn):
         """Wraps the step function in a JAX scan loop for fast execution."""
@@ -322,7 +319,7 @@ class SISLStepper3D:
         th_v_prime_n = state['th_v'] - self.physics.theta_bg
         
         state_prime_n = {
-            'u': state['u'], 'v': state['v'], 'w': state['w'], 
+            'u': state['u'], 'v': state['v'], 'w': state['w'], 'th_v': state['th_v'],
             'pi': state['pi'] - self.physics.pi_bg, 'eta_dot': state['eta_dot'],
             'th_v_prime_u': self.physics.op.avg(th_v_prime_n, axis=0, from_loc='m', to_loc='u'),
             'th_v_prime_v': self.physics.op.avg(th_v_prime_n, axis=1, from_loc='m', to_loc='v'),
@@ -442,13 +439,10 @@ class SISLStepper3D:
         state_next['v'] += self.physics.nu_div * self.dt * grad_div_y
 
         # =====================================================================
-        # 4c. MICROPHYSICS (SATURATION ADJUSTMENT)
+        # 4c. PHYSICAL STATE UPDATES (e.g., Saturation Adjustment)
         # =====================================================================
-        if self.use_moisture and 'q' in state_next:
-            moist_updates = self.microphysics.saturation_adjustment(state_next, state_next['pi'])
-            state_next['q'] = moist_updates['q']
-            state_next['q_c'] = moist_updates['q_c']
-            state_next['th_v'] = moist_updates['th_v']
+        if self.physics.physics_suite is not None:
+            state_next = self.physics.physics_suite.apply_state_updates(state_next)
 
         # =====================================================================
         # 5. APPLY BOUNDARY CONDITIONS
