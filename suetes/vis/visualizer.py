@@ -1,3 +1,11 @@
+"""
+Diagnostics and Visualization Module.
+
+Provides a comprehensive suite for analyzing and mapping the dynamical core's 
+prognostic variables. Uses Cartopy for geographic map projections, SciPy for 
+spectral analysis, and Matplotlib for multi-panel dashboards.
+"""
+
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
 import cartopy.crs as ccrs
@@ -6,7 +14,9 @@ import numpy as np
 import scipy.signal as signal
 
 class Visualizer:
-    
+    """
+    Handles the post-processing and plotting of 3D fluid states.
+    """
     def _get_plot_data(self, grid, state, variable, z_idx, constants=None):
         """Helper to extract data, compute derived fields, and interpolate to mass points."""
         if variable == 'div':
@@ -59,8 +69,10 @@ class Visualizer:
 
     def plot_2d_field(self, grid, state, variable, z_idx=5, sponge_depth=30, constants=None, 
                       cmap='viridis', vmin=None, vmax=None, scale='linear', title=None, ax=None, save_path=None, plot_data=None):
-    
-        # Use the explicitly passed data if available, otherwise extract it from the state
+        """
+        Plots a horizontal cross-section of a 3D field on a geographic map projection.
+        Includes an automatic antimeridian wrap fix for domains crossing the dateline.
+        """
         data = plot_data if plot_data is not None else self._get_plot_data(grid, state, variable, z_idx, constants)
         
         Xi, Yi = np.meshgrid(grid.x_m, grid.y_m, indexing='ij')
@@ -127,14 +139,76 @@ class Visualizer:
             plt.close()
             
         return im
+    
+    def plot_quiver_field(self, grid, state, bg_var='pi', u_var='u', v_var='v', z_idx=5, 
+                          sponge_depth=30, constants=None, cmap='coolwarm', 
+                          title=None, ax=None, save_path=None, stride=15):
+        """Plots a contoured background field with a geographic wind quiver overlay."""
+        
+        bg_data = self._get_plot_data(grid, state, bg_var, z_idx, constants)
+        u_grid = self._get_plot_data(grid, state, u_var, z_idx, constants)
+        v_grid = self._get_plot_data(grid, state, v_var, z_idx, constants)
+        
+        Xi, Yi = np.meshgrid(grid.x_m, grid.y_m, indexing='ij')
+        lats, lons = grid.proj.get_lat_lon(Xi, Yi)
+        
+        # Dateline fix
+        if lons.max() - lons.min() > 180.0:
+            lons = np.where(lons < 0, lons + 360.0, lons)
+            
+        extent = [float(lons.min()) - 0.5, float(lons.max()) + 0.5, float(lats.min()) - 0.5, float(lats.max()) + 0.5]
+
+        show_plot = False
+        if ax is None:
+            fig, ax = plt.subplots(1, 1, figsize=(10, 6), subplot_kw={'projection': ccrs.PlateCarree(central_longitude=grid.lon_c)})
+            show_plot = True
+
+        ax.add_feature(cfeature.COASTLINE, linewidth=1.2, edgecolor='black')
+        ax.add_feature(cfeature.BORDERS, linewidth=0.8, linestyle=':', edgecolor='gray')
+
+        # Background Contour Plot
+        im = ax.contourf(lons, lats, bg_data, levels=100, transform=ccrs.PlateCarree(), cmap=cmap, alpha=0.85)
+        
+        # Wind Vector Geographic Rotation
+        # The U/V in the model state are grid-relative. We MUST rotate them back to 
+        # Earth-relative (North/East) before plotting them on a map projection!
+        gamma = np.array(grid.proj.get_convergence_angle(Xi, Yi))
+        u_geo = u_grid * np.cos(gamma) - v_grid * np.sin(gamma)
+        v_geo = u_grid * np.sin(gamma) + v_grid * np.cos(gamma)
+
+        # Quiver Overlay
+        # Slice the arrays to prevent dense black blobs
+        s = stride
+        q = ax.quiver(lons[::s, ::s], lats[::s, ::s], u_geo[::s, ::s], v_geo[::s, ::s], 
+                      transform=ccrs.PlateCarree(), pivot='middle', color='black', 
+                      width=0.003, headwidth=4, headlength=5)
+        
+        self._draw_domain_and_sponge(ax, lons, lats, sponge_depth)
+        
+        ax.set_title(title or f"{bg_var.upper()} and Wind Vectors at Level {z_idx}", fontsize=14)
+        ax.set_extent(extent, crs=ccrs.PlateCarree())
+        ax.gridlines(draw_labels=show_plot, linewidth=0.5, color='gray', alpha=0.5, linestyle='--')
+
+        # Add a reference arrow for magnitude
+        ax.quiverkey(q, X=0.9, Y=1.05, U=15, label='15 m/s', labelpos='E', coordinates='axes')
+
+        if show_plot:
+            cbar = plt.colorbar(im, ax=ax, orientation='horizontal', pad=0.1)
+            plt.tight_layout()
+            if save_path: plt.savefig(save_path, dpi=200)
+            else: plt.show()
+            plt.close()
+            
+        return im
 
     def plot_dashboard(self, grid, state_model, z_idx=5, sponge_depth=30, fields=None, time_hours=None, save_path=None):
+        """Generates a multi-panel overview of the model state."""
         if fields is None:
             fields = [
                 {'var': 'w', 'cmap': 'seismic', 'title': 'Vertical velocity [m/s]', 'scale': 'sym'},
                 {'var': 'div', 'cmap': 'seismic', 'title': 'Horizontal divergence [s⁻¹]', 'scale': 'sym'},
-                {'var': 'q_c', 'cmap': 'Blues', 'title': 'Cloud water [kg/kg]', 'scale': 'linear'},
-                {'var': 'u', 'cmap': 'seismic', 'title': 'Grid-X wind [m/s]', 'scale': 'sym'} 
+                {'var': 'th_v', 'cmap': 'RdBu_r', 'title': 'Potential temperature [K]', 'scale': 'linear'},
+                {'type': 'quiver', 'bg_var': 'pi', 'cmap': 'coolwarm', 'title': 'Exner pressure & wind field'} 
             ]
 
         n_vars = len(fields)
@@ -145,15 +219,28 @@ class Visualizer:
         axes = np.atleast_1d(axes).flatten()
         
         for i, field_def in enumerate(fields):
-            scale = field_def.get('scale', 'linear')
-            im = self.plot_2d_field(grid, state_model, field_def['var'], z_idx, sponge_depth, 
-                                    cmap=field_def.get('cmap', 'viridis'), scale=scale, 
-                                    title=field_def['title'], ax=axes[i])
-                                    
-            # Extract the extend parameter from the mappable so subplots show arrows correctly
-            extend = im.cmap.name if hasattr(im, 'extend') else 'neither' 
-            # (Note: pcolormesh doesn't strictly store extend, but colorbar handles out-of-bounds automatically if limits are set)
-            fig.colorbar(im, ax=axes[i], orientation='horizontal', pad=0.05, fraction=0.046, extend='both' if scale == 'sym' else 'neither')
+            if field_def.get('type') == 'quiver':
+                # Route to the quiver method
+                im = self.plot_quiver_field(
+                    grid, state_model, 
+                    bg_var=field_def.get('bg_var', 'pi'),
+                    u_var=field_def.get('u_var', 'u'),
+                    v_var=field_def.get('v_var', 'v'),
+                    z_idx=z_idx, sponge_depth=sponge_depth, 
+                    cmap=field_def.get('cmap', 'coolwarm'), 
+                    title=field_def['title'], ax=axes[i], stride=12
+                )
+                fig.colorbar(im, ax=axes[i], orientation='horizontal', pad=0.05, fraction=0.046)
+            else:
+                # Standard pcolormesh
+                scale = field_def.get('scale', 'linear')
+                im = self.plot_2d_field(
+                    grid, state_model, field_def['var'], z_idx, sponge_depth, 
+                    cmap=field_def.get('cmap', 'viridis'), scale=scale, 
+                    title=field_def['title'], ax=axes[i]
+                )
+                extend = 'both' if scale == 'sym' else 'neither'
+                fig.colorbar(im, ax=axes[i], orientation='horizontal', pad=0.05, fraction=0.046, extend=extend)
 
         for j in range(i + 1, len(axes)):
             axes[j].axis('off')
@@ -167,7 +254,7 @@ class Visualizer:
         plt.close()
 
     def plot_comparison(self, grid, state_model, state_era5, variable, z_idx=5, sponge_depth=30, save_path=None):
-        """Plots Model, ERA5, and the Anomaly (Difference)."""
+        """Plots the Model field, the target ERA5 field, and their discrete difference (Anomaly)."""
         val_model = self._get_plot_data(grid, state_model, variable, z_idx)
         val_era5 = self._get_plot_data(grid, state_era5, variable, z_idx)
         anomaly = val_model - val_era5
@@ -184,7 +271,6 @@ class Visualizer:
             cmap = 'seismic' if 'Anomaly' in title else 'viridis'
             vmin, vmax = (-vmax_anom, vmax_anom) if 'Anomaly' in title else (vmin_main, vmax_main)
 
-            # Pass the pre-calculated 'data' array into plot_data
             im = self.plot_2d_field(grid, state_model, variable, z_idx, sponge_depth, 
                                     cmap=cmap, vmin=vmin, vmax=vmax, title=title, ax=ax, plot_data=data)
             fig.colorbar(im, ax=ax, orientation='horizontal', pad=0.1)
@@ -195,7 +281,10 @@ class Visualizer:
         plt.close()
 
     def plot_cross_section(self, grid, state, variable, y_idx, sponge_depth=30, overlay_isentropes=False, save_path=None):
-        """Generalized vertical cross-section plotting."""
+        """
+        Generates a vertical cross-section plot along the X-axis.
+        Displays the physical terrain elevation and boundary layer sponge shading.
+        """
         x_coords = grid.x_m / 1000.0  
         Z_slice = grid.Z_w[:, y_idx, :] if variable == 'w' else grid.Z_m[:, y_idx, :]
         data_slice = state[variable][:, y_idx, :]
@@ -242,7 +331,15 @@ class Visualizer:
         plt.close()
 
     def plot_energy_spectrum(self, grid, state_model, variable='w', z_idx=5, sponge_depth=30, save_path=None):
-        """Computes and plots the 1D spatial power spectrum."""
+        r"""
+        Computes and plots the 1D spatial power spectrum using FFT.
+
+        A fundamental check for the physical accuracy of the dynamical core's 
+        dissipation schemes is comparing the resolved kinetic energy spectrum 
+        against the theoretical Kolmogorov isotropic turbulence cascade:
+
+        $$ E(k) \propto k^{-5/3} $$
+        """
         data_2d = state_model[variable][:, :, z_idx]
         if sponge_depth > 0:
             data_inner = data_2d[sponge_depth:-sponge_depth, sponge_depth:-sponge_depth]

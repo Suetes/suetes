@@ -26,4 +26,5 @@ Welcome to the **Suetes** documentation.
     * [Steppers](steppers.md): Detailed information about the time integration and advection.
     * [Diffusion](diffusion.md): Detailed information about the spatial filters and turbulence models.
     * [Boundaries](boundaries.md): Detailed information about the relaxation zones and external forcing.
-
+*   **Visualization**:
+    *   [Visualizer](visualizer.md): Detailed information about the visualization tools.

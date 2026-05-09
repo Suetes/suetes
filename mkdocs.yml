@@ -35,3 +35,5 @@ nav:
     - Data Processor: processor.md
     - Topography Blending: topography.md
     - ERA5 to Suetes (Bridge): era2suetes.md
+  - Visualization:
+    - Visualizer: visualizer.md

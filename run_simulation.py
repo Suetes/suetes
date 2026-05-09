@@ -59,7 +59,7 @@ def main():
     sponge_depth = 30
     
     dt = 30.0 # timestep (in seconds)
-    sim_hours = 6
+    sim_hours = 1
     
     sim_time_seconds = sim_hours * 3600.0
     num_steps = int(sim_time_seconds / dt)
@@ -206,13 +206,7 @@ def main():
     visualizer.plot_energy_spectrum(grid, final_state, 'w', z_idx=5, sponge_depth=sponge_depth, 
                                     save_path=os.path.join(output_dir, f"{ACTIVE_DOMAIN}_energy_{sim_hours}h.png"))
 
-    fields_to_plot = [
-        {'var': 'w', 'cmap': 'seismic', 'title': 'Vertical velocity [m/s]', 'scale': 'sym'},
-        {'var': 'div', 'cmap': 'seismic', 'title': 'Horizontal divergence [s⁻¹]', 'scale': 'sym'},
-        {'var': 'u', 'cmap': 'seismic', 'title': 'Grid-x wind [m/s]', 'scale': 'sym'},
-        {'var': 'v', 'cmap': 'seismic', 'title': 'Grid-y wind [m/s]', 'scale': 'sym'}
-    ]
-    visualizer.plot_dashboard(grid, final_state, z_idx=5, sponge_depth=sponge_depth, fields=fields_to_plot, 
+    visualizer.plot_dashboard(grid, final_state, z_idx=5, sponge_depth=sponge_depth, 
                               time_hours=sim_hours, save_path=os.path.join(output_dir, f"{ACTIVE_DOMAIN}_dash_{sim_hours}h.png"))
 
     # Slices
