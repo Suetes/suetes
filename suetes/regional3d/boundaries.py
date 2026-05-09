@@ -1,7 +1,35 @@
+"""
+Lateral Boundary Conditions Module.
+
+Implements relaxation zones (sponge layers) near the lateral boundaries of the 
+regional domain to smoothly blend internal prognostic variables with external 
+large-scale forcing (e.g., from ERA5).
+"""
+
 import jax.numpy as jnp
 
 class DaviesSponge:
+    r"""
+    Implements a Davies-style lateral boundary relaxation sponge.
+
+    The sponge forces the prognostic variables towards a specified external state 
+    over a boundary zone of width $D$. The relaxation weight follows a cosine-squared 
+    profile, ensuring a smooth transition from the boundary (where the external state 
+    dominates) to the interior (where the model state evolves freely).
+    """
     def __init__(self, grid, operators, sponge_depth=30, dt=30.0, tau_bndy_factor=10.0, outflow_factor=0.01):
+        """
+        Initializes the sponge layer masks and relaxation timescales.
+
+        Args:
+            grid (RegionalGrid3D): The grid geometry object.
+            operators (CGridOperator3D): Spatial operators for grid staggering.
+            sponge_depth (int): The width of the sponge zone in grid cells ($D$).
+            dt (float): The integration time step [s].
+            tau_bndy_factor (float): The boundary relaxation timescale relative to `dt`.
+            outflow_factor (float): Scaling factor applied to the relaxation weight 
+                where the flow is directed out of the domain (reduces wave reflection).
+        """
         self.grid = grid
         self.op = operators # Save the operators here
         self.depth = sponge_depth
@@ -18,7 +46,31 @@ class DaviesSponge:
         }
 
     def _compute_directional_masks(self, nx, ny, depth, loc='m'):
-        """Computes four separate masks (West, East, South, North)."""
+        r"""
+        Computes the spatial relaxation weights for the four lateral boundaries.
+
+        The spatial weight profile $W(d)$ is defined as:
+
+        $$
+        W(d) = 
+        \begin{cases} 
+        \cos^2\left(\frac{\pi}{2} \frac{d}{D}\right) & \text{if } d \le D \\
+        0 & \text{if } d > D 
+        \end{cases}
+        $$
+
+        where $d$ is the distance from the boundary in grid cells, and $D$ is the 
+        `sponge_depth`.
+
+        Args:
+            nx (int): Number of grid points in x.
+            ny (int): Number of grid points in y.
+            depth (int): Sponge depth $D$.
+            loc (str): Grid staggering location ('m', 'u', or 'v').
+
+        Returns:
+            dict: Directional masks ('west', 'east', 'south', 'north') as 3D arrays.
+        """
         nx_pts = nx + 1 if loc == 'u' else nx
         ny_pts = ny + 1 if loc == 'v' else ny
         
@@ -48,6 +100,25 @@ class DaviesSponge:
         }
 
     def blend(self, intermediate_state, external_state):
+        r"""
+        Blends the internally integrated state with the external boundary state.
+
+        The final blended state $\phi_{next}$ is computed as:
+
+        $$ \phi_{next} = (1 - C)\phi_{int} + C\phi_{ext} $$
+
+        where the total relaxation coefficient $C$ dynamically accounts for inflow 
+        and outflow conditions to prevent spurious wave reflection:
+
+        $$ C = \max(W_{inflow}, \alpha_{out} W_{outflow}) $$
+
+        Args:
+            intermediate_state (dict): The model state predicted by the dynamical core.
+            external_state (dict): The target boundary state (e.g., from ERA5).
+
+        Returns:
+            dict: The relaxed state dictionary.
+        """
         blended = {}
         # Strictly exclude w and eta_dot to preserve the local kinematic boundary condition
         blend_vars = ['u', 'v', 'th_v', 'q', 'pi']

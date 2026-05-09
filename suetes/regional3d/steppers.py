@@ -1,3 +1,12 @@
+"""
+Time Integration and Advection Module.
+
+Implements a Semi-Implicit Semi-Lagrangian (SISL) integration scheme. 
+This scheme bypasses the severe CFL restrictions of explicit Eulerian models by:
+1. Treating advection purely geometrically (tracing parcels backward in time).
+2. Treating stiff acoustic and gravity waves implicitly via a GMRES solver.
+"""
+
 import jax
 from jax import vmap
 import jax.numpy as jnp
@@ -9,6 +18,17 @@ from suetes.regional3d.operators import tensor_product_interp_3d
 from suetes.regional3d.physics import SimpleMicrophysics
 
 class VerticalPreconditioner:
+    r"""
+    Solves the 1D vertical Helmholtz equation to precondition the 3D implicit solver.
+
+    By analytically eliminating the horizontal wave propagation, we reduce the 
+    linearized acoustic system to a vertically implicit tridiagonal matrix:
+    
+    $$ -\mathcal{L}_{\pi} P_{k-1} \pi'_{k-1} + (1 - \mathcal{L}_{\pi} P_k) \pi'_k - \mathcal{L}_{\pi} P_{k+1} \pi'_{k+1} = \text{RHS} $$
+
+    This provides an excellent initial guess for the GMRES solver, dramatically 
+    reducing the number of required iterations to resolve sound waves.
+    """
     def __init__(self, physics, dt, alpha=0.55):
         self.physics = physics
         self.dt = dt
@@ -41,6 +61,14 @@ class VerticalPreconditioner:
         self.main  = 1.0 - self.lower - self.upper
 
     def __call__(self, rhs_scaled):
+        r"""
+        Applies the preconditioner to the scaled RHS vector.
+
+        This function performs the core implicit logic:
+        1. Subtracts the non-linear (advection) terms from the RHS.
+        2. Solves the vertical helmholtz equation for $\pi'$ using the banded solver.
+        3. Back-substitutes the pressure gradient to find the corrected vertical velocity $w$.
+        """
         # Unscale for physical math
         pi_scale = 100000.0
         rhs_pi_phys = rhs_scaled['pi'] / pi_scale
@@ -98,6 +126,16 @@ class VerticalPreconditioner:
         }
 
 class SemiLagrangianAdvector3D:
+    r"""
+    Computes fluid parcel trajectories and interpolates scalar quantities.
+
+    The advection scheme traces the arrival point $\mathbf{x}_a$ backward in time 
+    to find the departure point $\mathbf{x}_d$:
+    
+    $$ \mathbf{x}_d = \mathbf{x}_a - \Delta t \, \mathbf{v}(\mathbf{x}_{mid}, t_{mid}) $$
+
+    This allows stable integration even when the Courant number $C = \frac{u \Delta t}{\Delta x} > 1$.
+    """
     def __init__(self, grid, physics, dt):
         self.grid, self.physics, self.dt, self.op = grid, physics, dt, physics.op
 
@@ -131,6 +169,7 @@ class SemiLagrangianAdvector3D:
         return u_idx_sec, v_idx_sec, w_idx_sec
 
     def compute_departure_indices(self, state, loc='m', iterations=2):
+        """Iteratively solves the implicit trajectory equation for the departure point."""
         u_idx_sec, v_idx_sec, w_idx_sec = self._get_index_velocities(state['u'], state['v'], state['eta_dot'], loc)
         
         nx, ny, nz = self.grid.nx, self.grid.ny, self.grid.nz
@@ -172,6 +211,13 @@ class SemiLagrangianAdvector3D:
 
 
 class SemiImplicitSolver3D:
+    r"""
+    Solves the linear acoustic and gravity wave matrix system $\mathcal{A}\mathbf{x} = \mathbf{b}$.
+
+    Uses the Generalized Minimal Residual Method (GMRES) combined with the 
+    `VerticalPreconditioner` to solve for the implicit adjustments needed to 
+    stabilize high-frequency waves.
+    """
     def __init__(self, physics, dt):
         self.physics = physics
         self.dt = dt
@@ -220,12 +266,25 @@ class SemiImplicitSolver3D:
         }
 
 class FluxFormAdvector:
+    r"""
+    Implements a Flux-Form Semi-Lagrangian (FFSL) scheme.
+
+    Standard Semi-Lagrangian advection is not strictly conservative. The FFSL scheme 
+    ensures global mass conservation by advecting volumetric density exactly:
+    
+    $$ \frac{\partial \rho}{\partial t} + \nabla \cdot (\rho \mathbf{v}) = 0 $$
+    """
     def __init__(self, grid, dt):
         self.grid = grid
         self.dt = dt
 
     def advect_1d(self, scalar_1d, cfl_inter_1d):
-        """Advects a 1D scalar using interface Courant numbers."""
+        r"""
+        Advects a 1D scalar using interface Courant numbers.
+
+        The algorithm calculates the departure indices $\xi_i = i - \Delta t \cdot v_i$
+        and interpolates the cumulative mass function $M$ back to the departure points.
+        """
         N = scalar_1d.shape[0]
         
         # scalar_1d acts as the logical mass in the grid cell
@@ -242,6 +301,17 @@ class FluxFormAdvector:
         return M_dep[1:] - M_dep[:-1]
 
     def advect_3d_split(self, field, state, bg_precomputed):
+        r"""
+        Split-step advection in x, y, then z.
+
+        Args:
+            field (jnp.ndarray): Volumetric field to advect (e.g., density or tracer).
+            state (dict): Model state containing $u, v, \eta_{\dot{t}}$.
+            bg_precomputed (dict): Precomputed background state for metrics.
+        
+        Returns:
+            jnp.ndarray: The advected field.
+        """
         # Calculate true Courant numbers (index crossing rates)
         m_u = self.grid.m_factors['u'][..., None]
         m_v = self.grid.m_factors['v'][..., None]
@@ -277,6 +347,17 @@ class FluxFormAdvector:
 
 
 class SISLStepper3D:
+    """
+    Coordinates the full SISL integration cycle.
+    
+    Flow:
+    1. Departure point calculation.
+    2. Explicit physics and nonlinear dynamics.
+    3. Semi-Lagrangian Advection.
+    4. Implicit GMRES solve for stiff waves.
+    5. Divergence damping and state assembly.
+    6. Boundary conditions blending.
+    """
     def __init__(self, physics, dt):
         self.physics, self.dt = physics, dt
         self.advector = SemiLagrangianAdvector3D(physics.grid, physics, dt)
@@ -297,6 +378,15 @@ class SISLStepper3D:
         return final_state
 
     def step(self, state, t, forcing, bc_fn):
+        r"""
+        Single SISL time step.
+
+        Performs the full cycle: advection -> explicit physics -> implicit correction.
+
+        The core equation is an implicit discretization of the horizontal momentum and 2D divergence equations:
+
+        $$ \begin{cases} \frac{\pi^* - \pi}{\Delta t} + \nabla \cdot (\pi^* \mathbf{v}^n) = -\mathcal{L}_{z} \frac{w^{n+1/2}}{2} + \dots \\ \frac{w^{n+1/2} - w^{n-1/2}}{\Delta t} + \frac{\pi^n}{\pi^0} \nabla_h \cdot (\mathbf{u}^{n+1/2}) = \mathcal{L}_{w} \end{cases} $$
+        """
 
         alpha = 0.55
 

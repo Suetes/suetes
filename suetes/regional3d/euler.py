@@ -1,13 +1,56 @@
+"""
+Dynamical Core Module.
+
+Evaluates the right-hand side (RHS) tendencies for the 3D fully compressible, 
+non-hydrostatic Euler equations. Formulated using Exner pressure ($\pi$) and 
+virtual potential temperature ($\theta_v$) on a terrain-following Arakawa C-grid.
+"""
+
 import jax
 import jax.numpy as jnp
 from suetes.regional3d.diffusion import HyperFilter
 from suetes.regional3d.physics import BulkAerodynamicPBL
 
 class Euler3D:
+    r"""
+    The 3D Euler Equation solver.
+
+    Computes the tendencies for velocity $(u, v, w)$ and Exner pressure perturbation 
+    $(\pi')$. The system isolates acoustic and gravity wave modes by splitting 
+    thermodynamic variables into a hydrostatic background state and a prognostic 
+    perturbation:
+    
+    $$ 
+    \\begin{aligned}
+    \\pi &= \\bar{\\pi}(z) + \\pi'(x, y, z, t) \\
+    \\theta_v &= \\bar{\\theta}_v(z) + \\theta_v'(x, y, z, t)
+    \\end{aligned}
+    $$ 
+    
+    Where $\\pi$ is the Exner pressure, $\\theta_v$ is the virtual potential temperature,
+    and $\bar{\pi}$ and $\bar{\theta}_v$ are the hydrostatic background states.
+    """
     def __init__(self, grid, operators, constants, dt, initial_era5_state=None, 
                  N_bv=0.01, damp_height=20000.0, max_damp=0.5, 
                  nu_div_factor=0.8, nu_h_factor=0.1, physics_suite=None):
-        
+        """
+        Initializes the dynamical core, calculating explicit diffusion limits 
+        and building the 1D thermodynamic reference state.
+
+        Args:
+            grid (RegionalGrid3D): The 3D geometry and metric tensor object.
+            operators (CGridOperator3D): Spatial finite-difference operators.
+            constants (dict): Physical constants (e.g., $g$, $R_d$, $c_p$).
+            dt (float): Integration time step [s].
+            initial_era5_state (dict, optional): 3D state used to compute the 
+                horizontal-mean reference state. If None, uses an analytical profile.
+            N_bv (float): Brunt-Väisälä frequency for the analytical profile [$s^{-1}$].
+            damp_height (float): Altitude where the Rayleigh sponge layer begins [m].
+            max_damp (float): Maximum damping coefficient at the model top.
+            nu_div_factor (float): Divergence damping scale factor (0.0 to 1.0).
+            nu_h_factor (float): Hyperdiffusion scale factor (0.0 to 1.0).
+            physics_suite (PhysicsSuite, optional): Configured subgrid physics.
+        """
         self.grid = grid
         self.op = operators
         self.c = constants
@@ -61,6 +104,12 @@ class Euler3D:
 
 
     def precompute_bg(self, bg_state):
+        """
+        Maps the hydrostatic background state onto the staggered C-grid faces.
+        
+        Precomputing these fields saves significant redundant averaging operations 
+        during the inner loops of the GMRES implicit solver.
+        """
         th_v_bg, rho_bg, pi_bg = bg_state['th_v'], bg_state['rho'], bg_state['pi']
         return {
             'th_v_u': self.op.avg(th_v_bg, axis=0, from_loc='m', to_loc='u'),
@@ -79,6 +128,34 @@ class Euler3D:
         }
 
     def get_tendencies(self, state_prime, bg, is_explicit=False):
+        r"""
+        Evaluates the RHS tendencies for the momentum and pressure equations.
+
+        Horizontal Momentum Equations:
+        $$ 
+        \begin{aligned}
+        \frac{\partial u}{\partial t} &= -c_p \theta_v m_u \frac{\partial \pi'}{\partial x} + fv + D_u \\
+        \frac{\partial v}{\partial t} &= -c_p \theta_v m_v \frac{\partial \pi'}{\partial y} - fu + D_v
+        \end{aligned}
+        $$
+
+        Vertical Momentum Equation:
+        $$ 
+        \frac{\partial w}{\partial t} = -c_p \theta_v \frac{\partial \pi'}{\partial z} + g \left( \frac{\theta_v'}{\bar{\theta}_v} \right) + D_w 
+        $$
+
+        Continuity / Exner Pressure Equation:
+        $$ \frac{\partial \pi'}{\partial t} = - C_\pi \left( m^2 \nabla_h \cdot (\bar{\rho} \bar{\theta}_v \mathbf{v}_h) + \frac{\partial}{\partial z}(\bar{\rho} \bar{\theta}_v w) \right) $$
+
+        Args:
+            state_prime (dict): Prognostic variables (perturbations for thermodynamics).
+            bg (dict): Precomputed background state fields.
+            is_explicit (bool): Whether to include non-linear terms like buoyancy 
+                and diffusion. False when called from within the linear GMRES solver.
+
+        Returns:
+            dict: The discrete tendencies for $u, v, w, \pi$.
+        """
         u, v, w, pi_prime, eta_dot = state_prime['u'], state_prime['v'], state_prime['w'], state_prime['pi'], state_prime['eta_dot']
         
         th_v_u = bg['th_v_u'] + state_prime.get('th_v_prime_u', 0.0)
@@ -174,6 +251,21 @@ class Euler3D:
         return {'u': tend_u, 'v': tend_v, 'w': tend_w, 'pi': tend_pi}
 
     def linear_operator(self, state_prime, bg, dt):
+        r"""
+        The linear operator $\mathcal{L}(\mathbf{x})$ used within the implicit GMRES solver.
+
+        Evaluates the residual of the implicit system:
+        $$ L(\mathbf{x}) = \mathbf{x} - \alpha \Delta t \mathcal{T}(\mathbf{x}) $$
+        where $\mathcal{T}$ represents the linear tendencies (acoustic and gravity waves).
+
+        Args:
+            state_prime (dict): Current guess for the implicit state $\mathbf{x}$.
+            bg (dict): Precomputed background state.
+            dt (float): Timestep [s].
+
+        Returns:
+            dict: The evaluated residual components.
+        """
         tends = self.get_tendencies(state_prime, bg, is_explicit=False)
         
         alpha = 0.55 

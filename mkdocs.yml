@@ -1,0 +1,24 @@
+site_name: Suetes Documentation
+
+theme:
+  name: material
+  palette:
+    scheme: slate # Gives you a nice dark mode for code!
+
+# This tells MkDocs to parse your Python files
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: ["."] # Tells it to look in your root folder for the 'suetes' package
+
+# This enables LaTeX math rendering
+markdown_extensions:
+  - pymdownx.arithmatex:
+      generic: true
+
+# This injects the MathJax engine to render the equations
+extra_javascript:
+  - https://polyfill.io/v3/polyfill.min.js?features=es6
+  - https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js

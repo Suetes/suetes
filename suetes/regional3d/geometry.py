@@ -57,9 +57,13 @@ class ObliqueStereographic:
         sphere $(\phi, \lambda)$ using the central point $(\phi_c, \lambda_c)$ 
         and the angular distance $c$:
 
-        $$ \\rho = \\sqrt{x^2 + y^2} $$
-        $$ c = 2 \\arctan\\left(\\frac{\\rho}{2R}\\right) $$
-        $$ \\phi = \\arcsin\\left(\\cos(c)\\sin(\\phi_c) + \\frac{y \\sin(c) \\cos(\\phi_c)}{\\rho}\\right) $$
+        $$
+        \\begin{aligned}
+        \\rho &= \\sqrt{x^2 + y^2} \\\\
+        c &= 2 \\arctan\\left(\\frac{\\rho}{2R}\\right) \\\\
+        \\phi &= \\arcsin\\left(\\cos(c)\\sin(\\phi_c) + \\frac{y \\sin(c) \\cos(\\phi_c)}{\\rho}\\right)
+        \\end{aligned}
+        $$
 
         Args:
             x (jnp.ndarray): Cartesian x-coordinates [m].
