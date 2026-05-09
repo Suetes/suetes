@@ -59,7 +59,7 @@ def main():
     sponge_depth = 30
     
     dt = 30.0 # timestep (in seconds)
-    sim_hours = 1
+    sim_hours = 6
     
     sim_time_seconds = sim_hours * 3600.0
     num_steps = int(sim_time_seconds / dt)
