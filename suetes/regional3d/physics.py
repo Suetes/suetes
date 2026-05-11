@@ -1,11 +1,27 @@
+"""
+Subgrid-Scale Physics and Parameterizations Module.
+
+Contains the physical closures required to model processes that occur at scales 
+smaller than the grid resolution ($\Delta x$), including turbulence, surface 
+friction, and moist microphysics.
+"""
+
 import jax.numpy as jnp
 
 class PhysicsSuite:
-    """Unified API for executing all physics parameterizations."""
+    """
+    Unified API for orchestrating all physics parameterizations.
+    
+    The suite separates physics into two categories:
+    1. `tendency_schemes`: Continuous processes (like turbulence) evaluated alongside 
+       the dynamical core to produce $\partial / \partial t$ tendencies.
+    2. `update_schemes`: Instantaneous adjustments (like condensation) applied at 
+       the end of the timestep to strictly enforce physical limits.
+    """
     def __init__(self):
         self.tendency_schemes = []
         self.update_schemes = []
-        self.tracer_keys = []  # Let the physics module own the tracers
+        self.tracer_keys = []  
 
     def add_tendency_scheme(self, scheme):
         self.tendency_schemes.append(scheme)
@@ -18,6 +34,7 @@ class PhysicsSuite:
             self.tracer_keys.append(key)
 
     def get_explicit_tendencies(self, state, bg):
+        """Aggregates continuous momentum and thermodynamic tendencies from all schemes."""
         tends_total = {'u': jnp.zeros_like(state['u']), 
                        'v': jnp.zeros_like(state['v']), 
                        'w': jnp.zeros_like(state['w'])}
@@ -33,15 +50,39 @@ class PhysicsSuite:
         """Sequentially applies instantaneous thermodynamic adjustments."""
         updated_state = state.copy()
         for scheme in self.update_schemes:
-            # Each scheme returns a dictionary of updated variables
             updates = scheme.apply_update(updated_state)
             updated_state.update(updates)
         return updated_state
 
 
 class SmagorinskyLillySGS:
-    """3D Subgrid-Scale Turbulence Closure using the Smagorinsky-Lilly model."""
+    r"""
+    3D Subgrid-Scale Turbulence Closure using the Smagorinsky-Lilly model.
+
+    This scheme calculates a localized eddy viscosity $\nu_t$ based on the magnitude 
+    of the resolved strain rate tensor $|S|$ and the local atmospheric stability 
+    (Richardson number, $Ri$). The resulting turbulent mixing is modeled as Fickian diffusion:
+
+    $$ \frac{\partial \mathbf{v}}{\partial t} = \nabla \cdot (\nu_t \nabla \mathbf{v}) $$
+
+    The eddy viscosity is parameterized as:
+    $$
+    \begin{align}
+        \nu_t &= (C_s \Delta)^2 |S| f(Ri) \\
+        f(Ri) &= \sqrt{\max\left(0, 1 - \frac{Ri}{Ri_c}\right)}
+    \end{align}
+    $$
+    """
     def __init__(self, grid, operators, constants, Cs=0.15, Pr_t=1.0, critical_Ri=0.25):
+        """
+        Args:
+            grid (RegionalGrid3D): The computational grid.
+            operators (CGridOperator3D): Spatial finite-difference operators.
+            constants (dict): Physical constants.
+            Cs (float): The Smagorinsky constant (typically 0.1 to 0.2).
+            Pr_t (float): Turbulent Prandtl number.
+            critical_Ri (float): Critical Richardson number $Ri_c$ where turbulence ceases.
+        """
         self.grid = grid
         self.op = operators
         self.c = constants
@@ -50,6 +91,13 @@ class SmagorinskyLillySGS:
         self.Ri_c = critical_Ri
 
     def get_tendencies(self, state, bg):
+        r"""
+        Computes the turbulent diffusion tendencies for the momentum field.
+        
+        Evaluates the full symmetric strain rate tensor $D_{ij} = \frac{1}{2}\left(\frac{\partial u_i}{\partial x_j} + \frac{\partial u_j}{\partial x_i}\right)$ 
+        to find its magnitude:
+        $$ |S| = \sqrt{2(D_{11}^2 + D_{22}^2 + D_{33}^2) + D_{12}^2 + D_{13}^2 + D_{23}^2} $$
+        """
         u, v, w, th_v = state['u'], state['v'], state['w'], state['th_v']
         
         # Calculate Diagonal Strains natively (saves 6 expensive 3D averages)
@@ -115,12 +163,24 @@ class SmagorinskyLillySGS:
         return {'u': tend_u, 'v': tend_v, 'w': tend_w}
 
 class BulkAerodynamicPBL:
+    r"""
+    Models the frictional deceleration of the wind at the Earth's surface.
+
+    Applies a bulk aerodynamic drag formula exclusively to the lowest model layer:
+    $$ \left(\frac{\partial \mathbf{v}_h}{\partial t}\right)_{surf} = -C_d \frac{|\mathbf{v}_h| \mathbf{v}_h}{\Delta z} $$
+    """
     def __init__(self, grid, operators, Cd_land=0.005, Cd_ocean=0.001):
+        """
+        Args:
+            grid (RegionalGrid3D): The computational grid.
+            operators (CGridOperator3D): Spatial finite-difference operators.
+            Cd_land (float): Drag coefficient over land.
+            Cd_ocean (float): Drag coefficient over ocean.
+        """
         self.grid = grid
         self.op = operators
         
-        # For now, we use a uniform drag coefficient (Later, we can map Cd_land and Cd_ocean based on the topography/land-mask)
-        self.Cd = Cd_ocean 
+        self.Cd = Cd_ocean  # This one is still experimental, so we need to implement this properly
 
     def get_tendencies(self, state, bg):
         """
@@ -158,17 +218,30 @@ class BulkAerodynamicPBL:
 
 
 class SimpleMicrophysics:
+    r"""
+    A fast saturation adjustment microphysics scheme.
+
+    Converts excess water vapor ($q_v$) into cloud water ($q_c$) when the air 
+    becomes supersaturated, releasing latent heat back into the thermodynamic field.
+
+    The condensation amount is approximated via a Taylor series expansion of the 
+    Clausius-Clapeyron equation:
+    $$ \delta q = \frac{q_v - q_s}{1 + \frac{L_v^2 q_s}{c_p R_v T^2}} $$
+
+    The resulting temperature increase is:
+    $$ \Delta T = \frac{L_v}{c_p} \delta q $$
+    """
     def __init__(self, constants):
+        """
+        Args:
+            constants (dict): Physical constants.
+        """
         self.c = constants
         self.Lv = 2.5e6  # Latent heat of vaporization [J/kg]
         self.Rv = 461.5  # Gas constant for water vapor [J/(kg K)]
         self.epsilon = constants.get('epsilon', 0.622)
 
-        # =====================================================================
-        # PRE-COMPUTED LOOKUP TABLE (LUT)
-        # =====================================================================
-        # We compute the expensive Tetens exponent once during initialization
-        # over the realistic atmospheric temperature range (150K to 330K).
+        # Pre-computed lookup table for the expensive Tetens exponent
         self.T_table = jnp.linspace(150.0, 330.0, 2000)
         self.es_table = 611.2 * jnp.exp(17.67 * (self.T_table - 273.15) / (self.T_table - 29.65))
 
@@ -180,8 +253,20 @@ class SimpleMicrophysics:
         return {}
 
     def saturation_adjustment(self, state, pi_full):
-        """
-        Fast saturation adjustment using a linear interpolation LUT.
+        r"""
+        Computes the instantaneous thermodynamic adjustments due to condensation/evaporation.
+        
+        Calculates the saturation specific humidity ($q_s$) using the Tetens formula, 
+        determines the moisture adjustment $\delta q$, and updates the temperature 
+        (latent heat release) and humidity fields:
+        
+        $$
+        \begin{align}
+            q_c &= q_c + \delta q \\
+            q_v &= q_v - \delta q \\
+            T &= T + \frac{L_v}{c_p} \delta q 
+        \end{align}
+        $$
         """
         th_v = state['th_v']
         qv = state['q']

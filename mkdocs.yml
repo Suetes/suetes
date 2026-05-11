@@ -30,6 +30,7 @@ nav:
     - Spatial Operators: operators.md
     - Grid Diffusion: diffusion.md
     - Lateral Boundaries: boundaries.md
+    - Physics & Parameterizations: physics.md
   - Data & Preprocessing:
     - ERA5 Downloader: era5downloader.md
     - Data Processor: processor.md

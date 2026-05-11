@@ -4,8 +4,11 @@ Topography Blending Module.
 Merges high-resolution GEBCO surface elevation data for the model interior with 
 the low-resolution ERA5 topography at the lateral boundaries.
 """
-
+import os
+import urllib.request
+import zipfile
 import xarray as xr
+
 import numpy as np
 from scipy.interpolate import RegularGridInterpolator
 import jax.numpy as jnp
@@ -29,8 +32,47 @@ class TopographyProcessor:
             era5_sl_path (str): File path to ERA5 single-level data.
             gebco_path (str): File path to GEBCO topography data.
         """
+        self._ensure_gebco(gebco_path)
         self.ds_era5 = xr.open_dataset(era5_sl_path)
         self.ds_gebco = xr.open_dataset(gebco_path)
+
+    def _ensure_gebco_data(self, gebco_path):
+        """Downloads and extracts GEBCO data if it doesn't already exist."""
+        if os.path.exists(gebco_path):
+            return
+            
+        print(f"[DOWNLOAD] GEBCO data not found. Downloading to {gebco_path}...")
+        print("Note: This is a very large file (~8GB) and may take a while depending on your connection.")
+        
+        url = "https://dap.ceda.ac.uk/bodc/gebco/global/gebco_2026/ice_surface_elevation/netcdf/GEBCO_2026.zip?download=1"
+        zip_path = gebco_path.replace(".nc", ".zip")
+        
+        # Ensure the target directory exists (e.g., suetes/data/)
+        os.makedirs(os.path.dirname(gebco_path), exist_ok=True)
+        
+        try:
+            # Download the zip archive
+            urllib.request.urlretrieve(url, zip_path)
+            
+            print("[EXTRACT] Download complete. Extracting NetCDF file...")
+            with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+                # Dynamically find the .nc file inside the zip archive
+                nc_files = [f for f in zip_ref.namelist() if f.endswith('.nc')]
+                if not nc_files:
+                    raise FileNotFoundError("No .nc file found in the downloaded GEBCO zip.")
+                
+                # Extract the file to the data directory
+                extracted_file_path = zip_ref.extract(nc_files[0], path=os.path.dirname(gebco_path))
+                
+                # Rename the extracted file to exactly match what the user requested ('gebco_data.nc')
+                os.rename(extracted_file_path, gebco_path)
+                
+            print("[SUCCESS] GEBCO data extracted and ready for the model!")
+            
+        finally:
+            # Clean up the zip file to save disk space, even if an error occurs
+            if os.path.exists(zip_path):
+                os.remove(zip_path)
 
     def _get_era5_topo(self):
         """
