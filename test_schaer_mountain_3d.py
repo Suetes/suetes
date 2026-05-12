@@ -25,7 +25,8 @@ def schaer_mountain(x, y):
 nx, ny, nz = 200, 3, 50
 dx, dy, dz = 500.0, 500.0, 400.0  
 
-#Time step of simulation
+# Simulation end time and time step
+t_end = 7200.0 
 dt = 4.0
 
 grid = RegionalGrid3D(nx, ny, nz, dx, dy, dz, lat_center=45.0, lon_center=0.0, h_func=schaer_mountain)
@@ -87,28 +88,38 @@ def bc_fn(state_in, forcing):
             blended[k] = state_in[k]
     return blended
 
-def forcing_fn(state, t):
-    return state
 
-# Use the SISLStepper3D
 stepper = SISLStepper3D(physics, dt)
-sim = Simulation(stepper, forcing_fn, bc_fn)
+
+def step_fn(curr_state, step_idx):
+    t_curr = step_idx * dt
+    # Advance the state. Pass None for forcing if there is no external source.
+    next_state = stepper.step(curr_state, t_curr, forcing=None, bc_fn=bc_fn)
+    
+    # Track the maximum vertical velocity for diagnostics
+    max_w = jnp.max(jnp.abs(next_state['w']))
+    return next_state, max_w
+
+sim = Simulation(step_fn=step_fn, dt=dt)
 
 # --- 5. RUN SIMULATION ---
-t_end = 7200.0 
 print("\nLaunching Schär Mountain Benchmark...")
-final_state = sim.run(state, t_start=0.0, t_end=t_end, dt=dt, chunk_steps=50)
+final_state = sim.run(state, t_start=0.0, t_end=t_end, chunk_steps=50)
 
 # --- 6. VISUALIZE RESULTS ---
 print("\nPlotting final state...")
-w_slice = final_state['w'][:, 1, :-1] 
+# Vertical velocity at the mid-level in the vertical (index 1)
+w_slice = final_state['w'][:, 1, :] 
 
 x_start_idx = (nx // 4)
 x_end_idx = 3 * (nx // 4)
 x_plot_1d = grid.x_m[x_start_idx:x_end_idx] / 1000.0 
 
-X_plot, _ = jnp.meshgrid(x_plot_1d, grid.z_m, indexing='ij')
-Z_plot = grid.Z_m[x_start_idx:x_end_idx, 1, :] / 1000.0 
+# Use a dummy array of size nz+1 to get the right shape for X_plot
+X_plot, _ = jnp.meshgrid(x_plot_1d, jnp.arange(nz + 1), indexing='ij')
+
+# Use the terrain-following W-grid heights!
+Z_plot = grid.Z_w[x_start_idx:x_end_idx, 1, :] / 1000.0 
 
 plt.figure(figsize=(12, 6))
 contour = plt.contourf(X_plot, Z_plot, w_slice[x_start_idx:x_end_idx, :], 

@@ -5,7 +5,7 @@ jax.config.update("jax_enable_x64", True)
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
 
-from suetes.slice2d.grids import StaggeredGrid
+from suetes.slice2d.geometry import StaggeredGrid
 from suetes.slice2d.euler import VerticalSlice
 from suetes.slice2d.steppers import SISLStepper
 from suetes.shared.driver import Simulation
@@ -58,28 +58,30 @@ def get_initial_state(grid, physics):
 
 state = get_initial_state(grid, physics)
 
-# ====================================================================
+#====================================================================
 # 3. RUN SIMULATION
 # ====================================================================
 dt = 0.5
 stepper = SISLStepper(physics, dt)
 
 def boundary_conditions(st, forcing):
-    # Rigid wall at top and bottom
     st['w'] = st['w'].at[:, 0].set(0.0)
     st['w'] = st['w'].at[:, -1].set(0.0)
-    
-    # Constrain logical vertical velocity
     st['eta_dot'] = st['eta_dot'].at[:, 0].set(0.0)
     st['eta_dot'] = st['eta_dot'].at[:, -1].set(0.0)
     return st
 
-# 1000 seconds of simulation
-t_end = 1000.0
-sim = Simulation(stepper, forcing_fn=None, bc_fn=boundary_conditions)
+def unified_step_fn(curr_state, step_idx):
+    t_curr = step_idx * dt
+    next_state = stepper.step(curr_state, t_curr, forcing=None, bc_fn=boundary_conditions)
+    max_w = jnp.max(jnp.abs(next_state['w']))
+    return next_state, max_w
 
-print(f"Running SISL Bubble Test (dt={dt}s)...")
-final_state = sim.run(state, 0.0, t_end, dt, chunk_steps=100)
+t_end = 1000.0
+sim = Simulation(step_fn=unified_step_fn, dt=dt)
+
+print(f"[TEST 2D] Running SISL Bubble Test (dt={dt}s)...")
+final_state = sim.run(state, t_start=0.0, t_end=t_end, chunk_steps=100)
 
 # ====================================================================
 # 4. PLOTTING
@@ -87,9 +89,9 @@ final_state = sim.run(state, 0.0, t_end, dt, chunk_steps=100)
 plt.figure(figsize=(12, 5))
 th_pert = final_state['th_v'] - 300.0
 plt.contourf(grid.X_m / 1000.0, grid.Z_m / 1000.0, th_pert, levels=20, cmap='RdBu_r')
-plt.title(f"SISL Rising Bubble: $\Delta \\theta$ at T={t_end}s (dt={dt}s)")
+plt.title(fr"SISL Rising Bubble: $\Delta \theta$ at T={t_end}s (dt={dt}s)")
 plt.xlabel("x (km)")
 plt.ylabel("z (km)")
 plt.colorbar(label="Temperature Perturbation (K)")
 plt.savefig(f'{output_dir}/rising_bubble_2d_{t_end}s.png', dpi=150, bbox_inches='tight')
-print("Saved rising_bubble_2d.png")
+print("[PLOTTING]Saved rising_bubble_2d.png")

@@ -12,6 +12,7 @@ from suetes.preprocessing.topography import TopographyProcessor
 from suetes.preprocessing.era2suetes import BoundaryProcessor, TimeManager
 
 from suetes.shared.transforms import SleveSimple
+from suetes.shared.driver import Simulation
 
 from suetes.regional3d.geometry import RegionalGrid3D
 from suetes.regional3d.operators import CGridOperator3D
@@ -49,8 +50,6 @@ def main():
     ACTIVE_DOMAIN = "labrador_sea" 
     cfg = DOMAINS[ACTIVE_DOMAIN]
 
-    print(f"SuetesSelected domain: {ACTIVE_DOMAIN.upper()}")
-
     output_dir = "suetes/plots"
     os.makedirs(output_dir, exist_ok=True)
 
@@ -75,12 +74,13 @@ def main():
         buffer_deg=2.0
     )
 
-    print(f"Calculated ERA5 bounding box [N, W, S, E]: {dynamic_bbox}")
+    print(f"[CONFIG] Domain: {ACTIVE_DOMAIN.upper()}")
+    print(f"[CONFIG] ERA5 Bounding Box [N, W, S, E]: {[round(x, 2) for x in dynamic_bbox]}")
 
     # ==========================================
     # 2. DATA ACQUISITION
     # ==========================================
-    print(f"Checking ERA5 data for region: {ACTIVE_DOMAIN.upper()}...")
+    print(f"[DATA] Validating ERA5 forcing files...")
     manager = ERA5Manager(data_dir="suetes/data")
     
     # Adjust dates as needed for your specific test case
@@ -99,7 +99,7 @@ def main():
     # ==========================================
     # 3. GEOMETRY & TOPOGRAPHY
     # ==========================================
-    print(f"Initializing Suetes domain ({nx}x{ny}x{nz}) at {dx}m resolution...")
+    print(f"[GEOMETRY] Building {nx}x{ny}x{nz} terrain-following mesh (dx={dx/1000}km)...")
     base_grid = RegionalGrid3D(nx, ny, nz, dx, dy, dz, cfg["lat_c"], cfg["lon_c"])
     
     topo_proc = TopographyProcessor(
@@ -113,7 +113,7 @@ def main():
     # ==========================================
     # 4. ERA5 BOUNDARY PROCESSING
     # ==========================================
-    print(f"Processing ERA5 Boundaries for a {sim_hours}-hour simulation...")
+    print(f"[BOUNDARY] Processing lateral conditions for {sim_hours}h simulation...")
     era5_proc = ERA5Processor(pl_path=pl_file, sl_path=sl_file)
     
     suetes_bc_states = []
@@ -123,7 +123,7 @@ def main():
     bridge = BoundaryProcessor(grid, raw_t0['latitude'], raw_t0['longitude'], constants)
     
     for i in range(num_era5_states):
-        print(f"  -> Regridding ERA5 state for T={i}h")
+        print(f"[BOUNDARY] -> Regridding ERA5 state for T={i}h")
         raw_state = era5_proc.get_stitched_state(time_idx=i)
         bc_state = bridge.process(raw_state)
         
@@ -137,7 +137,7 @@ def main():
     # ==========================================
     # 5. PHYSICS, STEPPER & SPONGE INITIALIZATION
     # ==========================================
-    print("Initializing dynamical core...")
+    print(f"[DYNAMICS] Initializing dynamical core...")
     operators = CGridOperator3D(grid)
     
     # Build the Suite
@@ -164,32 +164,45 @@ def main():
     sponge = DaviesSponge(grid, operators, sponge_depth=sponge_depth, dt=dt, tau_bndy_factor=10.0)
 
     # ==========================================
-    # 6. INTEGRATION LOOP
+    # 6. INTEGRATION LOOP 
     # ==========================================
-    print(f"Starting integration: {num_steps} steps (dt={dt}s).")
+    print("-" * 60)
     
-    def scan_fn(curr_state, step_idx):
+    chunk_steps = 120  # Execute 1 hour of simulation per chunk
+    
+    def step_fn(curr_state, step_idx):
         t_curr = step_idx * dt
+        
+        # Interpolate boundaries at exactly t_curr
         bc_state_t = time_manager.get_forcing(t_curr)
         
         def bc_fn(state_next, _):
             return sponge.blend(state_next, bc_state_t)
             
         next_state = stepper.step(curr_state, t_curr, forcing=None, bc_fn=bc_fn)
-        max_w = jnp.max(jnp.abs(next_state['w']))
         
+        # Track max W for console diagnostics
+        max_w = jnp.max(jnp.abs(next_state['w']))
         return next_state, max_w 
 
+    # Initialize the centralized driver
+    sim = Simulation(step_fn=step_fn, dt=dt)
+
     start_time = time.time()
-    final_state, final_max_w_array = jax.lax.scan(scan_fn, initial_state, jnp.arange(num_steps))
-    jax.block_until_ready(final_state['u']) 
     
-    print(f"Integration complete! Wall time: {time.time() - start_time:.2f} seconds.")
+    # Run the simulation
+    final_state = sim.run(
+        initial_state, 
+        t_start=0.0, 
+        t_end=sim_time_seconds, 
+        chunk_steps=chunk_steps
+    )
 
     # ==========================================
     # 7. VISUALIZE RESULTS
     # ==========================================
-    print("Generating comparison plots...")
+    print("-" * 60)
+    print("[PLOT] Generating standard diagnostic plots...")
     visualizer = Visualizer()
     final_era5_state = suetes_bc_states[-1]
     

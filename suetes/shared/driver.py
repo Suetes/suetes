@@ -6,62 +6,68 @@ class Simulation:
     """
     Manages the time integration loop, JIT compilation, and chunking.
     """
-    def __init__(self, stepper, forcing_fn, bc_fn):
-        self.stepper = stepper
-        self.forcing_fn = forcing_fn
-        self.bc_fn = bc_fn
+    def __init__(self, step_fn, dt):
+        """
+        Args:
+            step_fn (callable): A function `fn(state, step_idx)` that returns 
+                                `(next_state, metrics_array)`.
+            dt (float): Timestep in seconds.
+        """
+        self.step_fn = step_fn
+        self.dt = dt
 
-    def run(self, state, t_start, t_end, dt, chunk_steps=500):
-        t_curr = t_start
-        curr_state = state
-        total_steps = int((t_end - t_start) / dt)
-        n_chunks = int(total_steps // chunk_steps)
+    def run(self, initial_state, t_start, t_end, chunk_steps=120):
+        total_steps = int((t_end - t_start) / self.dt)
+        n_chunks = total_steps // chunk_steps
         remainder = total_steps % chunk_steps
         
-        chunk_dt = chunk_steps * dt
-
-        print(f"\n[Simulation] Starting: T={t_start} -> T={t_end}")
-        print(f"             Total Steps: {total_steps}")
-        print(f"             Chunk Size:  {chunk_steps} steps")
+        print(f"[SIMULATION] Starting: T={t_start} -> T={t_end}")
+        print(f"[SIMULATION] Total Steps: {total_steps}")
+        print(f"[SIMULATION] Chunk Size:  {chunk_steps} steps")
         
-        print("[Simulation] Compiling kernel...")
+        @jax.jit(static_argnames=['n_steps'])
+        def run_chunk(curr_state, start_step, n_steps):
+            def scan_fn(state, step_offset):
+                step_idx = start_step + step_offset
+                next_state, metrics = self.step_fn(state, step_idx)
+                return next_state, metrics
+            
+            return jax.lax.scan(scan_fn, curr_state, jnp.arange(n_steps))
+
+        print("[SIMULATION] Compiling kernel...")
         t0 = time.time()
-        
-        @jax.jit
-        def run_chunk(s, t):
-            return self.stepper.integrate(s, t, chunk_steps, self.forcing_fn, self.bc_fn)
-
-        _ = run_chunk(curr_state, t_curr)
-        print(f"[Simulation] Compilation finished in {time.time() - t0:.2f}s")
+        _ = run_chunk(initial_state, 0, 1)
+        print(f"[SIMULATION] Compilation finished in {time.time() - t0:.2f}s")
+        print(f"[SIMULATION] JIT compiled, running simulation...")
 
         start_time = time.time()
+        state = initial_state
+        current_step = int(t_start / self.dt)
         
         for i in range(n_chunks):
-            curr_state = run_chunk(curr_state, t_curr)
-            t_curr += chunk_dt
+            chunk_start = time.time()
+            state, metrics = run_chunk(state, current_step, chunk_steps)
             
-            leaves = jax.tree_util.tree_leaves(curr_state)
+            leaves = jax.tree_util.tree_leaves(state)
             if leaves:
                 leaves[0].block_until_ready()
             
-            msg = f"    Progress: {t_curr:.1f}s / {t_end:.1f}s"
-            if isinstance(curr_state, dict) and 'w' in curr_state:
-                max_w = float(jnp.max(jnp.abs(curr_state['w'])))
-                msg += f" | Max W: {max_w:.4f} m/s"
+            current_step += chunk_steps
+            t_curr = current_step * self.dt
             
-            print(msg)
+            max_w = float(jnp.max(jnp.abs(metrics))) if metrics is not None else 0.0
+            print(f"    Progress: {t_curr:.1f}s / {t_end:.1f}s | "
+                  f"Max W: {max_w:.4f} m/s | "
+                  f"Chunk Wall Time: {time.time() - chunk_start:.2f}s")
 
         if remainder > 0:
             print(f"    Finishing remaining {remainder} steps...")
-            @jax.jit
-            def run_remainder(s, t):
-                return self.stepper.integrate(s, t, remainder, self.forcing_fn, self.bc_fn)
-                
-            curr_state = run_remainder(curr_state, t_curr)
-            t_curr = t_end
+            state, _ = run_chunk(state, current_step, remainder)
+            leaves = jax.tree_util.tree_leaves(state)
+            if leaves:
+                leaves[0].block_until_ready()
 
         total_time = time.time() - start_time
-        steps_per_sec = total_steps / (total_time + 1e-9)
-        print(f"[Simulation] Done in {total_time:.2f}s ({steps_per_sec:.1f} steps/s)\n")
+        print(f"[Simulation] Done in {total_time:.2f}s\n")
         
-        return curr_state
+        return state

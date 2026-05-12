@@ -1,6 +1,13 @@
 import jax.numpy as jnp
 
 class CGridOperator:
+    """
+    Finite difference and interpolation operators for a 2D Arakawa C-grid.
+    
+    Provides second-order and fourth-order spatial derivatives, staggered averaging,
+    and flux-limited interpolations required to solve the Navier-Stokes equations 
+    on a discretized mesh.
+    """
     def __init__(self, dx, dz, periodic_x=False):
         self.dx = dx
         self.dz = dz
@@ -31,6 +38,10 @@ class CGridOperator:
     # DIFFERENTIATION
     # ===========================================================
     def diff_x_m_to_u(self, f):
+        r"""
+        Computes the X-derivative from mass points to U-faces.
+        $$ \\frac{\\partial f}{\\partial x}\\Big|_{i+1/2} \\approx \\frac{f_{i+1} - f_i}{\\Delta x} $$
+        """
         if self.periodic_x:
             pad = jnp.pad(f, ((2, 2), (0, 0)), mode='wrap')
             grad = (27.0*(pad[2:-2]-pad[1:-3]) - (pad[3:-1]-pad[0:-4])) / (24.0 * self.dx)
@@ -38,6 +49,7 @@ class CGridOperator:
         return self._diff_centered_2nd_padded(f, 0)
 
     def diff_x_u_to_m(self, f):
+        """Computes the X-derivative from U-faces to mass points."""
         if self.periodic_x:
             pad = jnp.pad(f[:-1], ((2, 2), (0, 0)), mode='wrap')
             return (27.0*(pad[3:-1]-pad[2:-2]) - (pad[4:]-pad[1:-3])) / (24.0 * self.dx)
@@ -50,12 +62,14 @@ class CGridOperator:
     # AVERAGING & TVD
     # ===========================================================
     def avg_u_to_m(self, f):
+        r"""Averages velocity from U-faces to mass points."""
         if self.periodic_x:
             pad = jnp.pad(f[:-1], ((2, 2), (0, 0)), mode='wrap')
             return (9.0*(pad[2:-2]+pad[3:-1]) - (pad[1:-3]+pad[4:])) / 16.0
         return 0.5 * (f[1:, :] + f[:-1, :])
 
     def avg_m_to_u(self, f):
+        r"""Averages mass point values to U-faces."""
         if self.periodic_x:
             pad = jnp.pad(f, ((2, 2), (0, 0)), mode='wrap')
             avg = (9.0*(pad[2:-2]+pad[1:-3]) - (pad[3:-1]+pad[0:-4])) / 16.0
@@ -71,6 +85,17 @@ class CGridOperator:
         return jnp.pad(inner, ((0, 0), (1, 1)), mode='edge')
 
     def tvd_interp_m_to_u(self, f, u):
+        r"""
+        Total Variation Diminishing (TVD) interpolation from mass centers to U-faces.
+        
+        Combines a highly diffusive first-order upwind scheme with a dispersive 
+        second-order scheme using the van Leer flux limiter $\\Phi(r)$. 
+        This ensures bounded tracer advection without creating spurious oscillations.
+        
+        $$ f_{face} = f_{upwind} + \\frac{1}{2} \\Phi(r) (f_{downwind} - f_{upwind}) $$
+        $$ \\Phi(r) = \\frac{r + |r|}{1 + |r|} $$
+        where $r$ is the ratio of successive gradients.
+        """
         if self.periodic_x:
             f_pad = jnp.pad(f, ((2, 2), (0, 0)), mode='wrap')
         else:
@@ -89,6 +114,7 @@ class CGridOperator:
         return jnp.where(u > 0, f_L + 0.5 * lim_L, f_R - 0.5 * lim_R)
 
     def tvd_interp_m_to_w(self, f, w):
+        """TVD interpolation from mass centers to W-faces using van Leer limiter."""
         f_pad = jnp.pad(f, ((0, 0), (2, 2)), mode='edge')
         nz = f.shape[1]
         
@@ -107,6 +133,13 @@ class CGridOperator:
     # ADVECTION & GRADIENTS
     # ===========================================================
     def grad_2d_curvilinear(self, f, metrics):
+        r"""
+        Computes the physical gradient of a field embedded in a terrain-following space.
+        
+        Applies the chain rule for non-orthogonal transformations:
+        $$ \\frac{\\partial f}{\\partial z} = \\frac{1}{z_\\zeta} \\frac{\\partial f}{\\partial \\zeta} $$
+        $$ \\frac{\\partial f}{\\partial x} \\bigg|_z = \\frac{\\partial f}{\\partial \\xi} - z_\\xi \\frac{\\partial f}{\\partial z} $$
+        """
         if self.periodic_x:
             d_xi = (jnp.roll(f, -1, axis=0) - jnp.roll(f, 1, axis=0)) / (2 * self.dx)
         else:
@@ -121,6 +154,7 @@ class CGridOperator:
         return grad_x, grad_z
 
     def advect_2d(self, f, u, w, loc, metrics=None):
+        """Computes the explicit Eulerian 2D advection tendency: $-(\\mathbf{v} \\cdot \\nabla f)$."""
         if loc == 'mass':
             u_loc, w_loc = self.avg_u_to_m(u), self.avg_w_to_m(w)
         elif loc == 'u':
@@ -135,6 +169,13 @@ class CGridOperator:
     # DIFFUSION
     # ===========================================================
     def hyper_diff_2d(self, f, nu4):
+        r"""
+        Computes the explicit fourth-order horizontal/vertical hyper-diffusion $\\nabla^4 f$.
+        
+        This operator acts as a highly scale-selective low-pass filter to dampen 
+        grid-scale ($2\\Delta x$) numerical noise:
+        $$ \\nu_4 \\nabla^4 f_{i} \\approx -\\nu_4 \\frac{f_{i-2} - 4f_{i-1} + 6f_i - 4f_{i+1} + f_{i+2}}{\\Delta x^4} $$
+        """
         if nu4 == 0: return 0.0
         d4x = jnp.zeros_like(f)
         d4z = jnp.zeros_like(f)
@@ -155,6 +196,7 @@ class CGridOperator:
         return -nu4 * (d4x + d4z)
 
     def laplacian_2d(self, f, nu):
+        r"""Computes the explicit second-order diffusion $\\nu \\nabla^2 f$."""
         if nu == 0: return 0.0
         if self.periodic_x:
              if f.shape[0] % 2 != 0: 

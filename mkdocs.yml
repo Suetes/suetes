@@ -23,14 +23,19 @@ extra_javascript:
 # NEW: Define the sidebar navigation structure
 nav:
   - Home: index.md
+  - Vertical 2D Model:
+    - Geometry & Grid: geometry2d.md
+    - Spatial Operators: operators2d.md
+    - Steppers & Advection: steppers2d.md
+    - Dynamical Core (Euler): euler2d.md
   - Regional 3D Model:
     - Geometry & Grid: geometry.md
-    - Dynamical Core (Euler): euler.md
-    - Steppers & Advection: steppers.md
     - Spatial Operators: operators.md
-    - Grid Diffusion: diffusion.md
+    - Steppers & Advection: steppers.md
+    - Dynamical Core (Euler): euler.md
     - Lateral Boundaries: boundaries.md
     - Physics & Parameterizations: physics.md
+    - Diffusion: diffusion.md
   - Data & Preprocessing:
     - ERA5 Downloader: era5downloader.md
     - Data Processor: processor.md

@@ -18,7 +18,7 @@ class ObliqueStereographic:
     (i.e., $m_x = m_y = m$).
     """
     def __init__(self, lat_center, lon_center, R_earth=6371229.0):
-        """
+        r"""
         Initializes the projection around a central tangent point.
 
         Args:
@@ -31,13 +31,13 @@ class ObliqueStereographic:
         self.R = R_earth
 
     def get_map_factor(self, x, y):
-        """
+        r"""
         Computes the isotropic map scale factor $m$ at a given grid location.
 
         The map factor represents the ratio of a distance on the projection plane 
         to the corresponding distance on the sphere:
 
-        $$ m(x,y) = 1 + \\frac{x^2 + y^2}{4R^2} $$
+        $$ m(x,y) = 1 + \frac{x^2 + y^2}{4R^2} $$
 
         Args:
             x (jnp.ndarray): Cartesian x-coordinates on the projection plane [m].
@@ -50,7 +50,7 @@ class ObliqueStereographic:
         return 1.0 + rho_sq / (4.0 * self.R**2)
 
     def get_lat_lon(self, x, y):
-        """
+        r"""
         Computes the geographic latitude and longitude for a given Cartesian point.
 
         The inverse projection maps the planar coordinates $(x, y)$ back to the 
@@ -58,11 +58,11 @@ class ObliqueStereographic:
         and the angular distance $c$:
 
         $$
-        \\begin{aligned}
-        \\rho &= \\sqrt{x^2 + y^2} \\\\
-        c &= 2 \\arctan\\left(\\frac{\\rho}{2R}\\right) \\\\
-        \\phi &= \\arcsin\\left(\\cos(c)\\sin(\\phi_c) + \\frac{y \\sin(c) \\cos(\\phi_c)}{\\rho}\\right)
-        \\end{aligned}
+        \begin{aligned}
+        \rho &= \sqrt{x^2 + y^2} \\
+        c &= 2 \arctan\left(\frac{\rho}{2R}\right) \\
+        \phi &= \arcsin\left(\cos(c)\sin(\phi_c) + \frac{y \sin(c) \cos(\phi_c)}{\rho}\right)
+        \end{aligned}
         $$
 
         Args:
@@ -85,7 +85,7 @@ class ObliqueStereographic:
         return jnp.degrees(lat), jnp.degrees(lon)
 
     def get_convergence_angle(self, x, y):
-        """
+        r"""
         Computes the grid convergence angle $\gamma$ using JAX Auto-Diff.
 
         The convergence angle is the angle between True North (geographic) and 
@@ -94,7 +94,7 @@ class ObliqueStereographic:
         
         True North points in the direction of the steepest increasing latitude gradient:
         
-        $$ \\gamma = \\arctan2\\left(\\frac{\\partial \\phi}{\\partial x}, \\frac{\\partial \\phi}{\\partial y}\\right) $$
+        $$ \gamma = \arctan2\left(\frac{\partial \phi}{\partial x}, \frac{\partial \phi}{\partial y}\right) $$
 
         Args:
             x (jnp.ndarray): Cartesian x-coordinates [m].
@@ -123,16 +123,16 @@ class ObliqueStereographic:
 
 
 class RegionalGrid3D:
-    """
+    r"""
     Constructs the 3D staggered computational grid and physical metric tensors.
 
     This class defines an Arakawa C-grid in the horizontal and a Lorenz staggering 
-    in the vertical. It maps the logical Cartesian coordinates $(\\xi, \\eta, \\zeta)$ 
+    in the vertical. It maps the logical Cartesian coordinates $(\xi, \eta, \zeta)$ 
     to the physical coordinates $(x, y, z)$ using a user-specified terrain-following 
     transformation.
     """
     def __init__(self, nx, ny, nz, dx, dy, dz, lat_center, lon_center, h_func=None, transform=None):
-        """
+        r"""
         Initializes the grid geometry, map factors, Coriolis parameters, and metric tensors.
 
         Args:
@@ -144,13 +144,13 @@ class RegionalGrid3D:
             dz (float): Nominal grid spacing in the z-direction [m].
             lat_center (float): Central latitude of the domain [deg].
             lon_center (float): Central longitude of the domain [deg].
-            h_func (callable, optional): A function $h(\\xi, \\eta)$ providing the surface elevation. 
+            h_func (callable, optional): A function $h(\xi, \eta)$ providing the surface elevation. 
                 Defaults to a flat surface.
             transform (callable, optional): The terrain-following coordinate transformation. 
                 Defaults to `GalChenSigma`.
 
         Raises:
-            ValueError: If the terrain transformation results in grid tangling (negative $\\Delta z$).
+            ValueError: If the terrain transformation results in grid tangling (negative $\Delta z$).
         """
         self.shape = (nx, ny, nz)
         self.delta = (dx, dy, dz)

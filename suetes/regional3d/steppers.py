@@ -61,14 +61,6 @@ class VerticalPreconditioner:
         self.main  = 1.0 - self.lower - self.upper
 
     def __call__(self, rhs_scaled):
-        r"""
-        Applies the preconditioner to the scaled RHS vector.
-
-        This function performs the core implicit logic:
-        1. Subtracts the non-linear (advection) terms from the RHS.
-        2. Solves the vertical helmholtz equation for $\pi'$ using the banded solver.
-        3. Back-substitutes the pressure gradient to find the corrected vertical velocity $w$.
-        """
         # Unscale for physical math
         pi_scale = 100000.0
         rhs_pi_phys = rhs_scaled['pi'] / pi_scale
@@ -80,11 +72,12 @@ class VerticalPreconditioner:
         v_m = self.physics.op.avg(rhs_scaled['v'], axis=1, from_loc='v', to_loc='m')
         v_w = self.physics.op.avg(v_m, axis=2, from_loc='m', to_loc='w')
         
-        kinematic_3d = (
+        # Apply m_w to the kinematic forcing to match euler.py
+        m_w = jnp.expand_dims(self.physics.grid.m_factors['w'], axis=-1)
+        kinematic_3d = m_w * (
             u_w * self.physics.grid.z_xi_w + 
             v_w * self.physics.grid.z_eta_w
         )
-        kinematic_w = kinematic_3d[:, :, 0]
 
         # Physical preconditioner solve
         w_contra_known = (rhs_w_phys / (1.0 + self.dt * self.tau_damp)) + (rhs_scaled['eta_dot'] / self.alpha) - kinematic_3d
@@ -93,7 +86,7 @@ class VerticalPreconditioner:
         w_tilde = w_tilde.at[:, :, 0].set(0.0)
         w_tilde = w_tilde.at[:, :, -1].set(0.0)
         
-        # Multiply by dz to undo op.diff's internal division (Matches euler.py perfectly)
+        # Multiply by dz to undo op.diff's internal division
         div_w_tilde = self.physics.op.diff(w_tilde, axis=2, from_loc='w', to_loc='m') * self.physics.grid.dz
         rhs_helmholtz = rhs_pi_phys - self.L_pi * div_w_tilde
         
@@ -108,12 +101,14 @@ class VerticalPreconditioner:
         alpha, dt, cp = self.alpha, self.dt, self.physics.c['cp']
         precond_w_phys = (rhs_w_phys - alpha * dt * cp * self.th_v_w * grad_pi) / (1.0 + dt * self.tau_damp)
         
-        precond_w_phys = precond_w_phys.at[:, :, 0].set(rhs_w_phys[:, :, 0] + kinematic_w)
+        # Do not add kinematic_w. The exact RHS is the proper preconditioned value.
+        precond_w_phys = precond_w_phys.at[:, :, 0].set(rhs_w_phys[:, :, 0])
         precond_w_phys = precond_w_phys.at[:, :, -1].set(rhs_w_phys[:, :, -1])
 
         # Back-substitution for eta_dot
         precond_eta_dot = (rhs_scaled['eta_dot'] / self.alpha) + precond_w_phys - kinematic_3d
         
+        # At boundary, eta_dot is R_eta_dot * dz, because linear_operator simply evaluates W_contra
         precond_eta_dot = precond_eta_dot.at[:, :, 0].set(rhs_scaled['eta_dot'][:, :, 0] * self.dz_w_full[:, :, 0])
         precond_eta_dot = precond_eta_dot.at[:, :, -1].set(rhs_scaled['eta_dot'][:, :, -1] * self.dz_w_full[:, :, -1])
 
@@ -254,7 +249,7 @@ class SemiImplicitSolver3D:
                 'eta_dot': L_out['eta_dot'] 
             }
 
-        x_sol_scaled, info = gmres(A_fn, rhs_scaled, x0=rhs_scaled, tol=1e-6, maxiter=10, restart=10, M=M_fn)
+        x_sol_scaled, info = gmres(A_fn, rhs_scaled, x0=rhs_scaled, tol=1e-4, maxiter=5, restart=10, M=M_fn)
         
         return {
             'u': x_sol_scaled['u'], 

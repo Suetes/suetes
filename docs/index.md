@@ -19,10 +19,15 @@ Welcome to the **Suetes** documentation.
     *   [Data Processor](processor.md): Stitches single-level surface data with pressure-level upper-air data.
     *   [Topography](topography.md): Merges high-resolution internal topography (GEBCO) with external boundary topography (ERA5).
     *   [ERA2Suetes Bridge](era2suetes.md): The data transformation pipeline, handling regridding, vector rotation, and hydrostatic reconstruction.
-*   **Regional3d**:
+*   **Vertical 2D Model**:
+    * [Geometry](geometry2d.md): Detailed information about the 2D vertical grid construction.
+    * [Operators](operators2d.md): Detailed information about the finite difference stencils and interpolators.
+    * [Euler](euler2d.md): Detailed information about the dynamical core for the 2D vertical slice model.
+    * [Steppers](steppers2d.md): Detailed information about the time integration and advection.
+*   **Regional 3D Model**:
     * [Geometry](geometry.md): Detailed information about the 3D regional grid construction and map projections.
     * [Operators](operators.md): Detailed information about the finite difference stencils and interpolators.
-    * [Euler](euler.md): Detailed information about the dynamical core.
+    * [Euler](euler.md): Detailed information about the dynamical core for the 3D regional model.
     * [Steppers](steppers.md): Detailed information about the time integration and advection.
     * [Diffusion](diffusion.md): Detailed information about the spatial filters and turbulence models.
     * [Boundaries](boundaries.md): Detailed information about the relaxation zones and external forcing.

@@ -98,9 +98,9 @@ class ERA5Manager:
 
         # SINGLE LEVELS
         if os.path.exists(sl_filepath):
-            print(f"[CACHE] Single levels already exist at {sl_filepath}. Skipping download.")
+            print(f"[DATA] Single levels already exist at {sl_filepath}. Skipping download.")
         else:
-            print(f"[DOWNLOAD] Fetching Single Levels for {year}-{month}...")
+            print(f"[DATA] Fetching Single Levels for {year}-{month}...")
             self.client.retrieve(
                 "reanalysis-era5-single-levels",
                 {
@@ -123,9 +123,9 @@ class ERA5Manager:
 
         # PRESSURE LEVELS
         if os.path.exists(pl_filepath):
-            print(f"[CACHE] Pressure levels already exist at {pl_filepath}. Skipping download.")
+            print(f"[DATA] Pressure levels already exist at {pl_filepath}. Skipping download.")
         else:
-            print(f"[DOWNLOAD] Fetching Pressure Levels for {year}-{month}...")
+            print(f"[DATA] Fetching Pressure Levels for {year}-{month}...")
             self.client.retrieve(
                 "reanalysis-era5-pressure-levels",
                 {
@@ -150,5 +150,5 @@ class ERA5Manager:
                 pl_filepath
             )
             
-        print("Data is ready for the model!")
+        print("[DATA] Data is ready for the model!")
         return sl_filepath, pl_filepath

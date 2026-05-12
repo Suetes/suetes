@@ -19,7 +19,8 @@ os.makedirs(output_dir, exist_ok=True)
 nx, ny, nz = 80, 3, 80
 dx, dy, dz = 125.0, 125.0, 125.0  # 125m resolution
 
-# Time step of simulation
+# Simulation end time and time step
+t_end = 1000.0 
 dt = 2.5  
 
 grid = RegionalGrid3D(nx, ny, nz, dx, dy, dz, lat_center=0.0, lon_center=0.0)
@@ -72,20 +73,26 @@ def bc_fn(state_in, forcing):
     # Do not apply the sponge, as it will crush the narrow Y-axis!
     return state_in
 
-def forcing_fn(state, t):
-    return state
-
 # SISLStepper3D initialization
 stepper = SISLStepper3D(physics, dt)
-sim = Simulation(stepper, forcing_fn, bc_fn)
+
+def unified_step_fn(curr_state, step_idx):
+    t_curr = step_idx * dt
+    # Advance the state. Pass None for forcing if there is no external source.
+    next_state = stepper.step(curr_state, t_curr, forcing=None, bc_fn=bc_fn)
+    
+    # Track the maximum vertical velocity for diagnostics
+    max_w = jnp.max(jnp.abs(next_state['w']))
+    return next_state, max_w
+
+sim = Simulation(step_fn=unified_step_fn, dt=dt)
 
 # --- 4. RUN SIMULATION ---
-t_end = 1000.0 # Run for 10 minutes of physical time
-print("\nLaunching Warm Bubble Benchmark...")
-final_state = sim.run(state, t_start=0.0, t_end=t_end, dt=dt, chunk_steps=20)
+print(f"[TEST 3D] Launching Warm Bubble Benchmark (dt={dt}s)...")
+final_state = sim.run(state, t_start=0.0, t_end=t_end, chunk_steps=20)
 
 # --- 5. VISUALIZE RESULTS ---
-print("\nPlotting final state...")
+print("[PLOTTING] Plotting final state...")
 # Extract a 2D slice down the middle of the Y-axis
 th_v_slice = final_state['th_v'][:, 1, :]
 th_v_bg_slice = bg_ref['th_v'][:, 1, :]
@@ -99,5 +106,5 @@ plt.title(f'Warm Bubble at T = {t_end}s')
 plt.xlabel('X Distance (m)')
 plt.ylabel('Altitude (m)')
 
-plt.savefig(f'{output_dir}/bubble_3d_{t_end}.png')
-print(f"Saved plot to '{output_dir}/bubble_3d_{t_end}.png'")
+plt.savefig(f'{output_dir}/rising_bubble_3d_{t_end}.png')
+print(f"[PLOTTING] Saved plot to '{output_dir}/rising_bubble_3d_{t_end}.png'")

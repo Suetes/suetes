@@ -1,4 +1,4 @@
-"""
+r"""
 Dynamical Core Module.
 
 Evaluates the right-hand side (RHS) tendencies for the 3D fully compressible, 
@@ -132,7 +132,7 @@ Evaluates the RHS tendencies for the momentum and pressure equations.
 Horizontal momentum equations:
 $$ 
 \begin{aligned}
-\frac{\partial u}{\partial t} &= -c_p \theta_v m_u \frac{\partial \pi'}{\partial x} + fv + D_u \\\\
+\frac{\partial u}{\partial t} &= -c_p \theta_v m_u \frac{\partial \pi'}{\partial x} + fv + D_u, \\\\
 \frac{\partial v}{\partial t} &= -c_p \theta_v m_v \frac{\partial \pi'}{\partial y} - fu + D_v
 \end{aligned}
 $$

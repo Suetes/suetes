@@ -1,9 +1,36 @@
 import jax
 import jax.numpy as jnp
+
 from suetes.shared.transforms import GalChenSigma
 
 class StaggeredGrid:
+    r"""
+    Constructs a 2D (X-Z) Arakawa C-grid with a terrain-following vertical coordinate.
+    
+    In an Arakawa C-grid, thermodynamic scalars and density (mass points, 'm') are 
+    located at the cell centers, while the velocity components are staggered onto 
+    the cell faces:
+    - $u$ resides on the vertical faces (left/right).
+    - $w$ resides on the horizontal faces (top/bottom).
+    
+    The physical coordinates $(x, z)$ are mapped to a rectangular computational 
+    domain $(\xi, \zeta)$ via a vertical transformation $z = H(\xi, \zeta)$, 
+    such as the standard Gal-Chen & Somerville (1975) $\sigma_z$ mapping:
+    $$ z = h(x) + \zeta \frac{L_z - h(x)}{L_z} $$
+    where $h(x)$ is the underlying topography.
+    """
     def __init__(self, nx, nz, Lx, Lz, h_func, transform=None):
+        r"""
+        Initializes the grid domains, coordinate arrays, and topological limits.
+        
+        Parameters:
+            nx (int): Number of grid cells in the horizontal X-direction.
+            nz (int): Number of grid cells in the vertical Z-direction.
+            Lx (float): Total length of the domain in meters.
+            Lz (float): Total height of the domain in meters.
+            h_func (Callable): Function returning the terrain height $h(x)$.
+            transform (Callable, optional): The vertical coordinate mapping function.
+        """
         self.nx, self.nz = nx, nz
         self.Lx, self.Lz = Lx, Lz
         self.dx = Lx / nx
@@ -45,10 +72,18 @@ class StaggeredGrid:
             )
 
     def _apply_transform(self, xi, zeta):
+        r"""Applies the vertical coordinate transformation mapping $(\xi, \zeta) \to z$."""
         h = self.h_func(xi)
         return self.transform_op(xi, zeta, h, self.Lz)
 
     def _compute_discrete_metrics(Z_grid, dx, dz, periodic_x=False):
+        r"""
+        Calculates the discrete grid metrics necessary for the covariant/contravariant 
+        tensor transformations on the curvilinear mesh.
+        
+        Calculates the metric terms:
+        $$ z_\xi = \frac{\partial z}{\partial \xi} \quad \text{and} \quad z_\zeta = \frac{\partial z}{\partial \zeta} $$
+        """
         Z_pad_z = jnp.pad(Z_grid, ((0, 0), (1, 1)), mode='edge')
         z_zeta = (Z_pad_z[:, 2:] - Z_pad_z[:, :-2]) / (2.0 * dz)
 
