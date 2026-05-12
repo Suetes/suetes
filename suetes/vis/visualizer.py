@@ -289,15 +289,31 @@ class Visualizer:
         Z_slice = grid.Z_w[:, y_idx, :] if variable == 'w' else grid.Z_m[:, y_idx, :]
         data_slice = state[variable][:, y_idx, :]
         
+        if sponge_depth > 0:
+            interior_slice = data_slice[sponge_depth:-sponge_depth, :]
+        else:
+            interior_slice = data_slice
+            
+        cmap = 'seismic' if variable == 'w' else ('Blues' if variable == 'q_c' else 'viridis')
+        
+        # Calculate limits strictly based on the interior domain
+        if variable == 'w':
+            vmax = float(np.max(np.abs(interior_slice)))
+            vmin = -vmax
+        else:
+            vmax = float(np.max(interior_slice))
+            vmin = float(np.min(interior_slice))
+            if variable == 'q_c': vmin = 0.0
+        
+        if vmax <= vmin:
+            vmax = vmin + 1e-5
+
         fig, ax = plt.subplots(figsize=(12, 6))
         
-        cmap = 'seismic' if variable == 'w' else ('Blues' if variable == 'q_c' else 'viridis')
-        vmax = float(np.max(np.abs(data_slice))) if variable == 'w' else float(np.max(data_slice))
-        vmin = -vmax if variable == 'w' else float(np.min(data_slice))
-        if variable == 'q_c': vmin = 0.0
-        
         X_2d = np.broadcast_to(x_coords[:, None], Z_slice.shape)
-        contour = ax.contourf(X_2d, Z_slice, data_slice, levels=30, cmap=cmap, vmin=vmin, vmax=vmax)
+        levels = np.linspace(vmin, vmax, 31)
+        
+        contour = ax.contourf(X_2d, Z_slice, data_slice, levels=levels, cmap=cmap, vmin=vmin, vmax=vmax, extend='both')
         plt.colorbar(contour, ax=ax, label=variable)
         
         if overlay_isentropes and 'th_v' in state:
@@ -315,9 +331,9 @@ class Visualizer:
             ax.axvline(x=x_left, color='k', linestyle='--', linewidth=1.5)
             ax.axvline(x=x_right, color='k', linestyle='--', linewidth=1.5, label='Sponge')
             
-            # Dim the sponge zones
-            ax.axvspan(x_coords[0], x_left, color='white', alpha=0.5, zorder=4)
-            ax.axvspan(x_right, x_coords[-1], color='white', alpha=0.5, zorder=4)
+            # Use the dark shadow approach so it doesn't wash out the white center of the seismic cmap
+            ax.axvspan(x_coords[0], x_left, color='black', alpha=0.15, zorder=4)
+            ax.axvspan(x_right, x_coords[-1], color='black', alpha=0.15, zorder=4)
 
         ax.set_title(f"Cross Section: {variable} (y-index: {y_idx})", fontsize=14)
         ax.set_xlabel("X distance [km]")

@@ -444,7 +444,7 @@ class SISLStepper3D:
         rho_next = self.ffsl_advector.advect_3d_split(state['rho'], state, bg_precomputed)
         
         # Advect virtual potential temperature with tricubic SL (use limiter to suppress noise -> experiment!!!)
-        th_v_next = self.advector.advect_cubic(state['th_v'], coords_m, use_limiter=False)
+        th_v_next = self.advector.advect_cubic(state['th_v'], coords_m, use_limiter=True)
         
         # Tracers use FFSL to strictly conserve mass
         tracers_next = {}

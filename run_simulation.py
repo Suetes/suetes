@@ -47,7 +47,7 @@ def main():
     # ==========================================
     
     # --- Select your region here ---
-    ACTIVE_DOMAIN = "labrador_sea" 
+    ACTIVE_DOMAIN = "alps" 
     cfg = DOMAINS[ACTIVE_DOMAIN]
 
     output_dir = "suetes/plots"
@@ -58,7 +58,7 @@ def main():
     sponge_depth = 30
     
     dt = 30.0 # timestep (in seconds)
-    sim_hours = 6
+    sim_hours = 12
     
     sim_time_seconds = sim_hours * 3600.0
     num_steps = int(sim_time_seconds / dt)

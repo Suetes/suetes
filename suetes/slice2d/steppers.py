@@ -60,30 +60,30 @@ def tridiagonal_solve(a, b, c, d):
     return x
 
 class VerticalPreconditioner2D:
-    """
+    r"""
     Constructs and applies a vertical Helmholtz preconditioner for the Semi-Implicit solver.
     
     By ignoring horizontal derivatives, this preconditioner analytically collapses 
     the coupled linear Euler equations into a 1D tridiagonal system along the Z-axis. 
     Substituting the vertical momentum equation into the continuity equation yields 
-    a 1D Helmholtz equation for the pressure perturbation $\\pi'$:
-    $$ \\pi' - \\frac{\\partial}{\\partial z} \\left( \\mathcal{K} \\frac{\\partial \\pi'}{\\partial z} \\right) = \\mathcal{R}_{helm} $$
+    a 1D Helmholtz equation for the pressure perturbation $\pi'$:
+    $\pi' - \frac{d}{dz} \left( \mathcal{K} \frac{d \pi'}{dz} \right) = \mathcal{R}_{helm}$
     
-    Where the acoustic coefficient $\\mathcal{K}$ is defined as:
-    $$ \\mathcal{K} = \\frac{(\\beta \\Delta t)^2 c_p \\bar{\\rho} \\bar{\\theta}_v^2 C_\\pi}{1 + \\Delta t \\tau_{damp}} $$
+    Where the acoustic coefficient $\mathcal{K}$ is defined as:
+    $\mathcal{K} = \frac{(\beta \Delta t)^2 c_p \bar{\rho} \bar{\theta}_v^2 C_\pi}{1 + \Delta t \tau_{damp}}$
     
     Solving this proxy system provides an excellent initial guess for the full 2D GMRES solver, 
     massively accelerating convergence by resolving the vertically propagating sound waves analytically.
     """
     def __init__(self, physics, dt, bg_precomputed, beta=0.65):
-        """
+        r"""
         Initializes the preconditioner and pre-assembles the tridiagonal matrix coefficients.
         
         Parameters:
             physics (VerticalSlice): The 2D spatial physics object.
-            dt (float): Time step $\\Delta t$ in seconds.
+            dt (float): Time step $\Delta t$ in seconds.
             bg_precomputed (dict): Precomputed reference states and metrics.
-            beta (float): Semi-implicit off-centering parameter ($0.5 \\leq \\beta \\leq 1.0$).
+            beta (float): Semi-implicit off-centering parameter ($0.5 \leq \beta \leq 1.0$).
         """
         self.physics = physics
         self.dt = dt
@@ -261,10 +261,14 @@ class SemiLagrangianAdvector:
     """
     Handles trajectory computations for Semi-Lagrangian advection.
     
-    Calculates the departure point $\\mathbf{x}_d$ for a particle arriving at the grid node $\\mathbf{x}_a$
+    Calculates the departure point $\\mathbf{x}_d$ for a particle arriving at the grid   node $\\mathbf{x}_a$
     using an iterative midpoint scheme:
-    $$ \\mathbf{x}_{mid} = \\frac{\\mathbf{x}_a + \\mathbf{x}_d}{2} $$
-    $$ \\mathbf{x}_d = \\mathbf{x}_a - \\Delta t \\mathbf{v}(\\mathbf{x}_{mid}) $$
+    $$
+    \\begin{aligned}
+    \\mathbf{x}_{mid} &= \\frac{\\mathbf{x}_a + \\mathbf{x}_d}{2} \\\\
+    \\mathbf{x}_d &= \\mathbf{x}_a - \\Delta t \\mathbf{v}(\\mathbf{x}_{mid})
+    \\end{aligned}
+    $$
     """
     def __init__(self, grid, physics, dt):
         """

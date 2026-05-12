@@ -2,3 +2,4 @@ venv/
 data/
 suetes.egg-info/
 .DS_Store
+__pycache__/
