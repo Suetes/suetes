@@ -19,15 +19,13 @@ class Euler3D:
     $(\pi')$. The system isolates acoustic and gravity wave modes by splitting 
     thermodynamic variables into a hydrostatic background state and a prognostic 
     perturbation:
-    
     $$ 
-    \\begin{aligned}
-    \\pi &= \\bar{\\pi}(z) + \\pi'(x, y, z, t) \\
-    \\theta_v &= \\bar{\\theta}_v(z) + \\theta_v'(x, y, z, t)
-    \\end{aligned}
+    \begin{align}
+    \pi &= \bar{\pi}(z) + \pi'(x, y, z, t) \\
+    \theta_v &= \bar{\theta}_v(z) + \theta_v'(x, y, z, t)
+    \end{align}
     $$ 
-    
-    Where $\\pi$ is the Exner pressure, $\\theta_v$ is the virtual potential temperature,
+    where $\pi$ is the Exner pressure, $\theta_v$ is the virtual potential temperature,
     and $\bar{\pi}$ and $\bar{\theta}_v$ are the hydrostatic background states.
     """
     def __init__(self, grid, operators, constants, dt, initial_era5_state=None, 
@@ -129,33 +127,33 @@ class Euler3D:
 
     def get_tendencies(self, state_prime, bg, is_explicit=False):
         r"""
-        Evaluates the RHS tendencies for the momentum and pressure equations.
+Evaluates the RHS tendencies for the momentum and pressure equations.
 
-        Horizontal Momentum Equations:
-        $$ 
-        \begin{aligned}
-        \frac{\partial u}{\partial t} &= -c_p \theta_v m_u \frac{\partial \pi'}{\partial x} + fv + D_u \\
-        \frac{\partial v}{\partial t} &= -c_p \theta_v m_v \frac{\partial \pi'}{\partial y} - fu + D_v
-        \end{aligned}
-        $$
+Horizontal momentum equations:
+$$ 
+\begin{aligned}
+\frac{\partial u}{\partial t} &= -c_p \theta_v m_u \frac{\partial \pi'}{\partial x} + fv + D_u \\\\
+\frac{\partial v}{\partial t} &= -c_p \theta_v m_v \frac{\partial \pi'}{\partial y} - fu + D_v
+\end{aligned}
+$$
 
-        Vertical Momentum Equation:
-        $$ 
-        \frac{\partial w}{\partial t} = -c_p \theta_v \frac{\partial \pi'}{\partial z} + g \left( \frac{\theta_v'}{\bar{\theta}_v} \right) + D_w 
-        $$
+Vertical momentum equation:
+$$ 
+\frac{\partial w}{\partial t} = -c_p \theta_v \frac{\partial \pi'}{\partial z} + g \left( \frac{\theta_v'}{\bar{\theta}_v} \right) + D_w 
+$$
 
-        Continuity / Exner Pressure Equation:
-        $$ \frac{\partial \pi'}{\partial t} = - C_\pi \left( m^2 \nabla_h \cdot (\bar{\rho} \bar{\theta}_v \mathbf{v}_h) + \frac{\partial}{\partial z}(\bar{\rho} \bar{\theta}_v w) \right) $$
+Continuity / Exner pressure equation:
+$$ \frac{\partial \pi'}{\partial t} = - C_\pi \left( m^2 \nabla_h \cdot (\bar{\rho} \bar{\theta}_v \mathbf{v}_h) + \frac{\partial}{\partial z}(\bar{\rho} \bar{\theta}_v w) \right) $$
 
-        Args:
-            state_prime (dict): Prognostic variables (perturbations for thermodynamics).
-            bg (dict): Precomputed background state fields.
-            is_explicit (bool): Whether to include non-linear terms like buoyancy 
-                and diffusion. False when called from within the linear GMRES solver.
+Args:
+    state_prime (dict): Prognostic variables (perturbations for thermodynamics).
+    bg (dict): Precomputed background state fields.
+    is_explicit (bool): Whether to include non-linear terms like buoyancy 
+        and diffusion. False when called from within the linear GMRES solver.
 
-        Returns:
-            dict: The discrete tendencies for $u, v, w, \pi$.
-        """
+Returns:
+    dict: The discrete tendencies for $u, v, w, \pi$.
+"""
         u, v, w, pi_prime, eta_dot = state_prime['u'], state_prime['v'], state_prime['w'], state_prime['pi'], state_prime['eta_dot']
         
         th_v_u = bg['th_v_u'] + state_prime.get('th_v_prime_u', 0.0)

@@ -1,9 +1,9 @@
 site_name: Suetes Documentation
-
 theme:
   name: material
-  palette:
-    scheme: slate 
+
+extra_css:
+  - stylesheets/extra.css
 
 plugins:
   - search
