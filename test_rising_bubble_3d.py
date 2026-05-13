@@ -107,4 +107,4 @@ plt.xlabel('X Distance (m)')
 plt.ylabel('Altitude (m)')
 
 plt.savefig(f'{output_dir}/rising_bubble_3d_{t_end}.png')
-print(f"[PLOTTING] Saved plot to '{output_dir}/rising_bubble_3d_{t_end}.png'")
+print(f"[PLOTTING] Saved plot to '{output_dir}/rising_bubble_3d_{t_end}s.png'")

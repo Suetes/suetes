@@ -418,6 +418,9 @@ class SISLStepper3D:
         w_in = state['w'] + (1.0 - alpha) * self.dt * tends_n['w']
         pi_prime_in = state_prime_n['pi'] + (1.0 - alpha) * self.dt * tends_n['pi']
 
+        # Apply Eulerian physics tendencies to the thermodynamics before advection
+        th_v_in = state['th_v'] + self.dt * tends_n['th_v']
+
         # 3d kinematic advection
         u_m = self.physics.op.avg(state['u'], axis=0, from_loc='u', to_loc='m')
         u_w = self.physics.op.avg(u_m, axis=2, from_loc='m', to_loc='w')
@@ -442,9 +445,9 @@ class SISLStepper3D:
         
         # Advect mass with FFSL scheme
         rho_next = self.ffsl_advector.advect_3d_split(state['rho'], state, bg_precomputed)
-        
-        # Advect virtual potential temperature with tricubic SL (use limiter to suppress noise -> experiment!!!)
-        th_v_next = self.advector.advect_cubic(state['th_v'], coords_m, use_limiter=True)
+
+        # Advect virtual potential temperature with tricubic SL (advect the updated field!)
+        th_v_next = self.advector.advect_cubic(th_v_in, coords_m, use_limiter=False)
         
         # Tracers use FFSL to strictly conserve mass
         tracers_next = {}

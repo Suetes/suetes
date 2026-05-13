@@ -9,7 +9,7 @@ friction, and moist microphysics.
 import jax.numpy as jnp
 
 class PhysicsSuite:
-    """
+    r"""
     Unified API for orchestrating all physics parameterizations.
     
     The suite separates physics into two categories:
@@ -37,7 +37,8 @@ class PhysicsSuite:
         """Aggregates continuous momentum and thermodynamic tendencies from all schemes."""
         tends_total = {'u': jnp.zeros_like(state['u']), 
                        'v': jnp.zeros_like(state['v']), 
-                       'w': jnp.zeros_like(state['w'])}
+                       'w': jnp.zeros_like(state['w']),
+                       'th_v': jnp.zeros_like(state['th_v'])}
         
         for scheme in self.tendency_schemes:
             scheme_tends = scheme.get_tendencies(state, bg)
@@ -162,31 +163,90 @@ class SmagorinskyLillySGS:
 
         return {'u': tend_u, 'v': tend_v, 'w': tend_w}
 
-class BulkAerodynamicPBL:
-    r"""
-    Models the frictional deceleration of the wind at the Earth's surface.
 
-    Applies a bulk aerodynamic drag formula exclusively to the lowest model layer:
-    $$ \left(\frac{\partial \mathbf{v}_h}{\partial t}\right)_{surf} = -C_d \frac{|\mathbf{v}_h| \mathbf{v}_h}{\Delta z} $$
+class FastVerticalDiffusion:
+    r"""
+    1D Vertical Eddy Diffusion with a PBL-confined K-profile.
     """
-    def __init__(self, grid, operators, Cd_land=0.005, Cd_ocean=0.001):
-        """
-        Args:
-            grid (RegionalGrid3D): The computational grid.
-            operators (CGridOperator3D): Spatial finite-difference operators.
-            Cd_land (float): Drag coefficient over land.
-            Cd_ocean (float): Drag coefficient over ocean.
-        """
+    def __init__(self, grid, operators, K_z_max=15.0, h_pbl=1500.0):
         self.grid = grid
         self.op = operators
-        
-        self.Cd = Cd_ocean  # This one is still experimental, so we need to implement this properly
+        self.K_z_max = K_z_max
+        self.h_pbl = h_pbl # Height where mixing effectively stops [m]
 
     def get_tendencies(self, state, bg):
-        """
-        Calculates the frictional deceleration for the lowest model layer.
-        Returns tendencies in units of [m/s^2].
-        """
+        u, v, th_v = state['u'], state['v'], state['th_v']
+        
+        # Calculate Height Above Ground Level (AGL) by subtracting the surface height (level 0) 
+        # from all vertical levels. We use 0:1 to keep the z-axis dimension for broadcasting.
+        Z_AGL = self.grid.Z_w - self.grid.Z_w[:, :, 0:1]
+        
+        # Create a spatial K-profile that decays exponentially above the PBL using AGL
+        K_profile = self.K_z_max * jnp.exp(- (Z_AGL / self.h_pbl)**2)
+        
+        u_m = self.op.avg(u, axis=0, from_loc='u', to_loc='m')
+        v_m = self.op.avg(v, axis=1, from_loc='v', to_loc='m')
+        
+        du_dz_w = self.op.diff(u_m, axis=2, from_loc='m', to_loc='w') * (self.grid.dz / bg['dz_w_full'])
+        dv_dz_w = self.op.diff(v_m, axis=2, from_loc='m', to_loc='w') * (self.grid.dz / bg['dz_w_full'])
+
+        # Apply the restricted K-profile to the fluxes
+        flux_u_w  = K_profile * du_dz_w
+        flux_v_w  = K_profile * dv_dz_w
+        
+        # Enforce zero flux at physical boundaries
+        flux_u_w  = flux_u_w.at[:, :, 0].set(0.0).at[:, :, -1].set(0.0)
+        flux_v_w  = flux_v_w.at[:, :, 0].set(0.0).at[:, :, -1].set(0.0)
+
+        # Calculate flux divergence back at mass points
+        tend_u_m  = self.op.diff(flux_u_w, axis=2, from_loc='w', to_loc='m') * (self.grid.dz / bg['dz_m_full'])
+        tend_v_m  = self.op.diff(flux_v_w, axis=2, from_loc='w', to_loc='m') * (self.grid.dz / bg['dz_m_full'])
+
+        tend_u = self.op.avg(tend_u_m, axis=0, from_loc='m', to_loc='u')
+        tend_v = self.op.avg(tend_v_m, axis=1, from_loc='m', to_loc='v')
+
+        return {'u': tend_u, 'v': tend_v}
+
+class NewtonianRelaxation:
+    r"""
+    Newtonian Nudging towards a target state.
+
+    Acts as a proxy for missing diabatic physics (radiation, land-surface) 
+    by gently pulling the thermodynamic field towards the ERA5 background.
+    $$ \frac{\partial \theta_v}{\partial t} = -\frac{1}{\tau_R} (\theta_v - \theta_{v,\text{ERA5}}) $$
+    """
+    def __init__(self, tau_relax_hours=6.0):
+        # Convert relaxation time to seconds
+        self.tau_relax = tau_relax_hours * 3600.0
+        self.target_state = None
+
+    def update_target(self, target_state):
+        """Called dynamically in the integration loop to update the target ERA5 state."""
+        self.target_state = target_state
+
+    def get_tendencies(self, state, bg):
+        if self.target_state is None:
+            return {'th_v': jnp.zeros_like(state['th_v'])}
+            
+        # Calculate the linear restoring tendency
+        tend_th_v = -(state['th_v'] - self.target_state['th_v']) / self.tau_relax
+        
+        return {'th_v': tend_th_v}
+
+class BulkAerodynamicPBL:
+    r"""
+    Models the frictional deceleration of the wind and Sensible Heat Flux at the surface.
+
+    Applies a bulk aerodynamic drag formula exclusively to the lowest model layer.
+    """
+    def __init__(self, grid, operators, theta_surf=None, Cd_ocean=0.001, Ch_ocean=0.001):
+        self.grid = grid
+        self.op = operators
+        self.Cd = Cd_ocean  
+        self.Ch = Ch_ocean
+        self.theta_surf = theta_surf # Static surface skin temperature boundary condition
+
+    def get_tendencies(self, state, bg):
         u, v = state['u'], state['v']
         
         # Bring horizontal winds to the mass points to calculate true wind speed
@@ -210,12 +270,24 @@ class BulkAerodynamicPBL:
         drag_u_surf = -self.Cd * (speed_u_surf * u[:, :, 0]) / dz_u_surf
         drag_v_surf = -self.Cd * (speed_v_surf * v[:, :, 0]) / dz_v_surf
         
-        # Construct the 3D tendency arrays (zeros everywhere except the surface)
         tend_u = jnp.zeros_like(u).at[:, :, 0].set(drag_u_surf)
         tend_v = jnp.zeros_like(v).at[:, :, 0].set(drag_v_surf)
         
-        return {'u': tend_u, 'v': tend_v}
-
+        # Sensible Heat Flux (SHF)
+        if self.theta_surf is not None:
+            speed_m_surf = speed_m_3d[:, :, 0]
+            th_v_surf = state['th_v'][:, :, 0]
+            dz_m_surf = bg['dz_m_full'][:, :, 0]
+            
+            # Positive flux warms the atmosphere (Ocean is warmer than air)
+            shf_kinematic = self.Ch * speed_m_surf * (self.theta_surf - th_v_surf)
+            heat_tend_surf = shf_kinematic / dz_m_surf
+            
+            tend_th_v = jnp.zeros_like(state['th_v']).at[:, :, 0].set(heat_tend_surf)
+        else:
+            tend_th_v = jnp.zeros_like(state['th_v'])
+        
+        return {'u': tend_u, 'v': tend_v, 'th_v': tend_th_v}
 
 class SimpleMicrophysics:
     r"""

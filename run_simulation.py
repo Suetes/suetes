@@ -19,7 +19,7 @@ from suetes.regional3d.operators import CGridOperator3D
 from suetes.regional3d.euler import Euler3D
 from suetes.regional3d.steppers import SISLStepper3D
 from suetes.regional3d.boundaries import DaviesSponge
-from suetes.regional3d.physics import PhysicsSuite, SmagorinskyLillySGS, BulkAerodynamicPBL, SimpleMicrophysics
+from suetes.regional3d.physics import PhysicsSuite, BulkAerodynamicPBL, SimpleMicrophysics, FastVerticalDiffusion, NewtonianRelaxation
 
 from suetes.vis.visualizer import Visualizer
 
@@ -58,14 +58,14 @@ def main():
     sponge_depth = 30
     
     dt = 30.0 # timestep (in seconds)
-    sim_hours = 12
+    sim_hours = 6
     
     sim_time_seconds = sim_hours * 3600.0
     num_steps = int(sim_time_seconds / dt)
     num_era5_states = int(sim_hours) + 1 
 
     constants = {'g': 9.81, 'Rd': 287.0, 'cp': 1004.0, 'cvd': 717.0, 'p0': 100000.0, 'epsilon': 0.622}
-    USE_MOISTURE = True 
+    USE_MOISTURE = False 
 
     # Dynamically calculate the bounding box
     dynamic_bbox = ERA5Manager.calculate_required_bbox(
@@ -131,8 +131,14 @@ def main():
         times_sec.append(float(i * 3600.0))
         
     time_manager = TimeManager(suetes_bc_states, times_sec, grid)
-    initial_state = suetes_bc_states[0]
-    initial_state['q_c'] = jnp.zeros_like(initial_state['q'])
+    initial_state = suetes_bc_states[0].copy() 
+    
+    if USE_MOISTURE:
+        initial_state['q_c'] = jnp.zeros_like(initial_state['q'])
+    else:
+        # Strip moisture from the initial PyTree to match the dry stepper output
+        initial_state.pop('q', None)
+        initial_state.pop('q_c', None)
 
     # ==========================================
     # 5. PHYSICS, STEPPER & SPONGE INITIALIZATION
@@ -143,9 +149,17 @@ def main():
     # Build the Suite
     physics_suite = PhysicsSuite()
     
-    # Register continuous tendencies
-    # physics_suite.add_tendency_scheme(SmagorinskyLillySGS(grid, operators, constants, Cs=0.15))
-    physics_suite.add_tendency_scheme(BulkAerodynamicPBL(grid, operators, Cd_ocean=0.001))
+    # Extract the initial ERA5 surface temperature to use as our static boundary condition
+    theta_surf = initial_state['th_v'][:, :, 0]
+    
+    # Instantiate the schemes but keep references to them
+    pbl_scheme = BulkAerodynamicPBL(grid, operators, theta_surf=initial_state['th_v'][:, :, 0], Cd_ocean=0.001, Ch_ocean=0.0)
+    vert_diff_scheme = FastVerticalDiffusion(grid, operators) # Add the new scheme
+    nudging_scheme = NewtonianRelaxation(tau_relax_hours=6.0)
+    
+    physics_suite.add_tendency_scheme(pbl_scheme)
+    physics_suite.add_tendency_scheme(vert_diff_scheme)
+    physics_suite.add_tendency_scheme(nudging_scheme)
     
     # Register state updates
     if USE_MOISTURE:
@@ -170,19 +184,48 @@ def main():
     
     chunk_steps = 120  # Execute 1 hour of simulation per chunk
     
+    # Setup Hovmöller Data Trackers
+    hov_times = [0.0]
+    # Calculate initial anomaly at the surface (level 0)
+    initial_anom = initial_state['th_v'][:, :, 0] - initial_state['th_v'][:, :, 0] # 0 at T=0
+    hov_data = [np.array(jnp.mean(initial_anom, axis=1))] 
+
+    # Define a pure Python callback function to handle the appending
+    def save_hovmoller_data(hour, anom_array):
+        hov_times.append(float(hour))
+        hov_data.append(np.array(anom_array))
+
     def step_fn(curr_state, step_idx):
         t_curr = step_idx * dt
         
         # Interpolate boundaries at exactly t_curr
         bc_state_t = time_manager.get_forcing(t_curr)
+
+        # Update the PBL scheme with the current ERA5 surface temperature
+        pbl_scheme.theta_surf = bc_state_t['th_v'][:, :, 0]
+        nudging_scheme.update_target(bc_state_t)
         
         def bc_fn(state_next, _):
             return sponge.blend(state_next, bc_state_t)
             
         next_state = stepper.step(curr_state, t_curr, forcing=None, bc_fn=bc_fn)
-        
-        # Track max W for console diagnostics
         max_w = jnp.max(jnp.abs(next_state['w']))
+        
+        # Compute the anomaly every step
+        anom = next_state['th_v'][:, :, 0] - bc_state_t['th_v'][:, :, 0]
+        y_avg_anom = jnp.mean(anom, axis=1)
+        current_hour = (step_idx + 1) * dt / 3600.0
+        
+        # Define the condition as a JAX array
+        is_hourly = ((step_idx + 1) % int(3600.0 / dt)) == 0
+        
+        # Use jax.lax.cond to conditionally trigger the python callback
+        jax.lax.cond(
+            is_hourly,
+            lambda: jax.debug.callback(save_hovmoller_data, current_hour, y_avg_anom),
+            lambda: None
+        )
+
         return next_state, max_w 
 
     # Initialize the centralized driver
@@ -202,33 +245,45 @@ def main():
     # 7. VISUALIZE RESULTS
     # ==========================================
     print("-" * 60)
-    print("[PLOT] Generating standard diagnostic plots...")
+    print("[PLOT] Generating diagnostic plots...")
     visualizer = Visualizer()
     final_era5_state = suetes_bc_states[-1]
+    mid_x, mid_y = grid.nx // 2, grid.ny // 2
     
-    # We pass ACTIVE_DOMAIN directly into the filename strings
-    visualizer.plot_comparison(grid, final_state, final_era5_state, 'th_v', z_idx=5, sponge_depth=sponge_depth, 
-                               save_path=os.path.join(output_dir, f"{ACTIVE_DOMAIN}_compare_th_v_{sim_hours}h.png"))
+    # General overview and stability check
+    for z in [0, 5, 15, 30]: # Logical model levels
+        visualizer.plot_dashboard(grid, final_state, z_idx=z, sponge_depth=sponge_depth, 
+                                  time_hours=sim_hours, save_path=os.path.join(output_dir, f"{ACTIVE_DOMAIN}_dash_z{z}_{sim_hours}h.png"))
 
-    visualizer.plot_comparison(grid, final_state, final_era5_state, 'u', z_idx=5, sponge_depth=sponge_depth, 
-                               save_path=os.path.join(output_dir, f"{ACTIVE_DOMAIN}_compare_u_{sim_hours}h.png"))
-
-    visualizer.plot_comparison(grid, final_state, final_era5_state, 'v', z_idx=5, sponge_depth=sponge_depth, 
-                               save_path=os.path.join(output_dir, f"{ACTIVE_DOMAIN}_compare_v_{sim_hours}h.png"))
+    for z in [500.0, 3000.0, 5000.0, 10000.0]: # Geometric heights (m)
+        visualizer.plot_dashboard(grid, final_state, z_idx=z, sponge_depth=sponge_depth, 
+                                  time_hours=sim_hours, save_path=os.path.join(output_dir, f"{ACTIVE_DOMAIN}_dash_z{int(z)}m_{sim_hours}h.png"))
 
     visualizer.plot_energy_spectrum(grid, final_state, 'w', z_idx=5, sponge_depth=sponge_depth, 
                                     save_path=os.path.join(output_dir, f"{ACTIVE_DOMAIN}_energy_{sim_hours}h.png"))
 
-    visualizer.plot_dashboard(grid, final_state, z_idx=5, sponge_depth=sponge_depth, 
-                              time_hours=sim_hours, save_path=os.path.join(output_dir, f"{ACTIVE_DOMAIN}_dash_{sim_hours}h.png"))
+    # Thermodynamic drift diagnostics
+    # Comparison of the surface layer to see the spatial footprint of the bias
+    visualizer.plot_comparison(grid, final_state, final_era5_state, 'th_v', z_idx=0, sponge_depth=sponge_depth, 
+                               save_path=os.path.join(output_dir, f"{ACTIVE_DOMAIN}_compare_th_v_surf_{sim_hours}h.png"))
 
-    # Slices
-    mid_y = grid.ny // 2 
-    visualizer.plot_cross_section(grid, final_state, 'w', y_idx=mid_y, sponge_depth=sponge_depth, 
-                                  save_path=os.path.join(output_dir, f"{ACTIVE_DOMAIN}_slice_w_{sim_hours}h.png"))
-                                  
-    visualizer.plot_cross_section(grid, final_state, 'q_c', y_idx=mid_y, sponge_depth=sponge_depth, 
-                                  save_path=os.path.join(output_dir, f"{ACTIVE_DOMAIN}_slice_qc_{sim_hours}h.png"))
+    # Level strip to see how deep the drift penetrates vertically
+    visualizer.plot_level_strip(grid, final_state, 'th_v', z_indices=[0, 5, 15, 30], sponge_depth=sponge_depth,
+                                save_path=os.path.join(output_dir, f"{ACTIVE_DOMAIN}_levels_th_v_{sim_hours}h.png"))
+
+    # Hovmöller diagram to watch the drift evolve over time and space
+    visualizer.plot_hovmoller(grid, hov_times, np.array(hov_data), variable='Surface th_v Anomaly [K]',
+                              save_path=os.path.join(output_dir, f"{ACTIVE_DOMAIN}_hovmoller_th_v_{sim_hours}h.png"))
+
+    # Dynamics & Mountain Waves
+    visualizer.plot_slice_locator_dashboard(grid, final_state, map_var='th_v', slice_var='w', map_z=5, 
+                                            sponge_depth=sponge_depth,
+                                            save_path=os.path.join(output_dir, f"{ACTIVE_DOMAIN}_slices_w_{sim_hours}h.png"))
+                                            
+    if USE_MOISTURE:
+        visualizer.plot_slice_locator_dashboard(grid, final_state, map_var='q_c', slice_var='q_c', map_z=5, 
+                                                sponge_depth=sponge_depth,
+                                                save_path=os.path.join(output_dir, f"{ACTIVE_DOMAIN}_slices_qc_{sim_hours}h.png"))
 
 if __name__ == "__main__":
     main()

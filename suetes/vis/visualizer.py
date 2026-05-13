@@ -17,28 +17,42 @@ class Visualizer:
     """
     Handles the post-processing and plotting of 3D fluid states.
     """
-    def _get_plot_data(self, grid, state, variable, z_idx, constants=None):
-        """Helper to extract data, compute derived fields, and interpolate to mass points."""
+    def _get_plot_data(self, grid, state, variable, z_level, constants=None):
+        """Helper to extract data, compute 3D derived fields, and slice/interpolate."""
+        is_height = isinstance(z_level, float)
+        
+        # Compute the full 3D field on the mass points
         if variable == 'div':
-            u = state['u'][:, :, z_idx]
-            v = state['v'][:, :, z_idx]
-            data = (u[1:, :] - u[:-1, :]) / grid.dx + (v[:, 1:] - v[:, :-1]) / grid.dy
+            u, v = state['u'], state['v']
+            data_3d = (u[1:, :, :] - u[:-1, :, :]) / grid.dx + (v[:, 1:, :] - v[:, :-1, :]) / grid.dy
+            z_coords = grid.Z_m
         elif variable == 'rh' and constants is not None:
-            qv, pi, th_v = state['q'][:, :, z_idx], state['pi'][:, :, z_idx], state['th_v'][:, :, z_idx]
+            qv, pi, th_v = state['q'], state['pi'], state['th_v']
             epsilon = constants.get('epsilon', 0.622)
             T = (th_v * pi) / (1.0 + (1.0 / epsilon - 1.0) * qv)
             p = constants['p0'] * (pi ** (constants['cp'] / constants['Rd']))
             e_s = 611.2 * np.exp(17.67 * (T - 273.15) / (T - 29.65))
             q_s = (epsilon * e_s) / (p - (1.0 - epsilon) * e_s)
-            data = np.clip((qv / q_s) * 100.0, 0, 100)
-        elif variable == 'u': # Interpolate U to mass points
-            data = 0.5 * (state['u'][:-1, :, z_idx] + state['u'][1:, :, z_idx])
-        elif variable == 'v': # Interpolate V to mass points
-            data = 0.5 * (state['v'][:, :-1, z_idx] + state['v'][:, 1:, z_idx])
+            data_3d = np.clip((qv / q_s) * 100.0, 0, 100)
+            z_coords = grid.Z_m
+        elif variable == 'u': 
+            data_3d = 0.5 * (state['u'][:-1, :, :] + state['u'][1:, :, :])
+            z_coords = grid.Z_m
+        elif variable == 'v': 
+            data_3d = 0.5 * (state['v'][:, :-1, :] + state['v'][:, 1:, :])
+            z_coords = grid.Z_m
         else:
-            data = state[variable][:, :, z_idx]
+            data_3d = state[variable]
+            z_coords = grid.Z_w if variable == 'w' else grid.Z_m
             
-        return data
+        # Extract the 2D plane
+        if is_height:
+            # Interpolate to constant geometric height (returns np.nan below ground)
+            data_2d = grid.interp_to_height(data_3d, z_coords, float(z_level))
+            return np.array(data_2d) # Convert to numpy for matplotlib NaN handling
+        else:
+            # Extract logical grid index
+            return data_3d[:, :, int(z_level)]
 
     def _draw_domain_and_sponge(self, ax, lons, lats, sponge_depth):
         """Helper to draw domain boundaries and Davies sponge extents."""
@@ -67,6 +81,12 @@ class Visualizer:
             ax.pcolormesh(lons, lats, mask, transform=ccrs.PlateCarree(), 
                           cmap=cmap_white, alpha=0.5, zorder=4)
 
+
+    def _get_level_height(self, grid, z_idx):
+        """Returns the domain-averaged physical height of a logical model level."""
+        return int(np.mean(grid.Z_m[:, :, z_idx]))
+
+
     def plot_2d_field(self, grid, state, variable, z_idx=5, sponge_depth=30, constants=None, 
                       cmap='viridis', vmin=None, vmax=None, scale='linear', title=None, ax=None, save_path=None, plot_data=None):
         """
@@ -78,13 +98,11 @@ class Visualizer:
         Xi, Yi = np.meshgrid(grid.x_m, grid.y_m, indexing='ij')
         lats, lons = grid.proj.get_lat_lon(Xi, Yi)
         
-        # --- THE DATELINE FIX ---
         # Detect if the domain crosses the antimeridian (creating a massive min/max gap)
         if lons.max() - lons.min() > 180.0:
             # Convert negative longitudes back to positive (e.g., -179 -> 181) 
             # to make the array continuous for the extent calculation and pcolormesh.
             lons = np.where(lons < 0, lons + 360.0, lons)
-        # ------------------------
         
         extent = [float(lons.min()) - 0.5, float(lons.max()) + 0.5, float(lats.min()) - 0.5, float(lats.max()) + 0.5]
 
@@ -95,6 +113,7 @@ class Visualizer:
 
         ax.add_feature(cfeature.COASTLINE, linewidth=1.2, edgecolor='black')
         ax.add_feature(cfeature.BORDERS, linewidth=0.8, linestyle=':', edgecolor='gray')
+        ax.set_facecolor('darkgray')
 
         extend = 'neither'
         if vmin is None and vmax is None:
@@ -103,8 +122,9 @@ class Visualizer:
             else:
                 inner_data = data
                 
-            data_max = float(np.max(inner_data))
-            data_min = float(np.min(inner_data))
+            # Use nanmax and nanmin to ignore subterranean geometry
+            data_max = float(np.nanmax(inner_data))
+            data_min = float(np.nanmin(inner_data))
             
             if scale == 'sym': 
                 limit = max(abs(data_max), abs(data_min))
@@ -165,6 +185,7 @@ class Visualizer:
 
         ax.add_feature(cfeature.COASTLINE, linewidth=1.2, edgecolor='black')
         ax.add_feature(cfeature.BORDERS, linewidth=0.8, linestyle=':', edgecolor='gray')
+        ax.set_facecolor('darkgray')
 
         # Background Contour Plot
         im = ax.contourf(lons, lats, bg_data, levels=100, transform=ccrs.PlateCarree(), cmap=cmap, alpha=0.85)
@@ -245,7 +266,8 @@ class Visualizer:
         for j in range(i + 1, len(axes)):
             axes[j].axis('off')
 
-        title = f"Suetes results (Level {z_idx})" + (f" | T={time_hours}h" if time_hours else "")
+        height_str = f"Z={z_idx}m" if isinstance(z_idx, float) else f"Level {z_idx}"
+        title = f"Suetes results ({height_str})" + (f" | T={time_hours}h" if time_hours else "")
         plt.suptitle(title, fontsize=16, y=0.98)
         plt.tight_layout()
         
@@ -268,7 +290,7 @@ class Visualizer:
         vmax_anom = max(float(np.max(np.abs(anomaly))), 0.1)
 
         for ax, data, title in zip(axes, datas, titles):
-            cmap = 'seismic' if 'Anomaly' in title else 'viridis'
+            cmap = 'seismic' if 'Anomaly' in title else 'RdBu_r'
             vmin, vmax = (-vmax_anom, vmax_anom) if 'Anomaly' in title else (vmin_main, vmax_main)
 
             im = self.plot_2d_field(grid, state_model, variable, z_idx, sponge_depth, 
@@ -294,7 +316,7 @@ class Visualizer:
         else:
             interior_slice = data_slice
             
-        cmap = 'seismic' if variable == 'w' else ('Blues' if variable == 'q_c' else 'viridis')
+        cmap = 'seismic' if variable == 'w' else ('Blues' if variable == 'q_c' else 'RdBu_r')
         
         # Calculate limits strictly based on the interior domain
         if variable == 'w':
@@ -343,6 +365,199 @@ class Visualizer:
         
         plt.tight_layout()
         if save_path: plt.savefig(save_path, dpi=200)
+        else: plt.show()
+        plt.close()
+
+    def plot_level_strip(self, grid, state, variable, z_indices=[0, 5, 15, 30], sponge_depth=30, constants=None, cmap=None, scale='linear', save_path=None):
+        """Plots a 2x2 grid of the same variable at four different vertical levels, with localized colorbars."""
+        fig, axes = plt.subplots(2, 2, figsize=(16, 12), subplot_kw={'projection': ccrs.PlateCarree(central_longitude=grid.lon_c)})
+        axes = axes.flatten()
+        
+        if cmap is None:
+            cmap = 'seismic' if variable in ['w', 'div'] else ('Blues' if variable == 'q_c' else 'RdBu_r')
+        if variable in ['w', 'div']: scale = 'sym'
+
+        Xi, Yi = np.meshgrid(grid.x_m, grid.y_m, indexing='ij')
+        lats, lons = grid.proj.get_lat_lon(Xi, Yi)
+        if lons.max() - lons.min() > 180.0: lons = np.where(lons < 0, lons + 360.0, lons)
+        extent = [float(lons.min()) - 0.5, float(lons.max()) + 0.5, float(lats.min()) - 0.5, float(lats.max()) + 0.5]
+
+        for i, (ax, z) in enumerate(zip(axes, z_indices)):
+            data = self._get_plot_data(grid, state, variable, z, constants)
+            z_height = self._get_level_height(grid, z)
+            
+            # Calculate limits strictly based on the interior domain for this specific level
+            inner_data = data[sponge_depth:-sponge_depth, sponge_depth:-sponge_depth] if sponge_depth > 0 else data
+            vmax = float(np.max(inner_data))
+            vmin = float(np.min(inner_data))
+            
+            extend = 'neither'
+            if scale == 'sym':
+                limit = max(abs(vmax), abs(vmin))
+                if variable == 'w': limit = min(limit, 1.0)
+                if variable == 'div': limit = min(limit, 1e-4)
+                vmin, vmax = -limit, limit
+                extend = 'both'
+            elif variable == 'q_c': 
+                vmin = 0.0
+
+            ax.add_feature(cfeature.COASTLINE, linewidth=1.0, edgecolor='black')
+            ax.add_feature(cfeature.BORDERS, linewidth=0.6, linestyle=':', edgecolor='gray')
+            
+            im = ax.pcolormesh(lons, lats, data, transform=ccrs.PlateCarree(), cmap=cmap, vmin=vmin, vmax=vmax)
+            self._draw_domain_and_sponge(ax, lons, lats, sponge_depth)
+            
+            ax.set_title(f"Level {z} (~{z_height} m)", fontsize=14)
+            ax.set_extent(extent, crs=ccrs.PlateCarree())
+            
+            # Add an individual colorbar to each subplot
+            fig.colorbar(im, ax=ax, orientation='vertical', extend=extend, pad=0.02, fraction=0.046)
+            
+        plt.suptitle(f"Vertical Profile: {variable.upper()}", fontsize=18, y=0.98)
+        plt.tight_layout()
+        if save_path: plt.savefig(save_path, dpi=200, bbox_inches='tight')
+        else: plt.show()
+        plt.close()
+
+    def plot_slice_locator_dashboard(self, grid, state, map_var='th_v', slice_var='w', map_z=5, sponge_depth=30, constants=None, save_path=None):
+        """Plots two locator maps and two sets of 3 vertical cross-sections."""
+        import matplotlib.gridspec as gridspec
+        
+        # Select 3 evenly spaced indices for X and Y slices
+        y_indices = [grid.ny // 4, grid.ny // 2, 3 * grid.ny // 4]
+        x_indices = [grid.nx // 4, grid.nx // 2, 3 * grid.nx // 4]
+        
+        x_colors = ['#FF595E', '#FFCA3A', '#8AC926'] # Distinct colors for X slices (Horizontal cuts)
+        y_colors = ['#1982C4', '#6A4C93', '#F15BB5'] # Distinct colors for Y slices (Vertical cuts)
+        
+        fig = plt.figure(figsize=(20, 14))
+        gs = gridspec.GridSpec(2, 2, height_ratios=[1, 1.5], hspace=0.25, wspace=0.15)
+        
+        map_data = self._get_plot_data(grid, state, map_var, map_z, constants)
+        z_height = self._get_level_height(grid, map_z)
+        
+        Xi, Yi = np.meshgrid(grid.x_m, grid.y_m, indexing='ij')
+        lats, lons = grid.proj.get_lat_lon(Xi, Yi)
+        if lons.max() - lons.min() > 180.0: lons = np.where(lons < 0, lons + 360.0, lons)
+        
+        def draw_locator_map(ax, lines_indices, colors, is_x_slice):
+            ax.add_feature(cfeature.COASTLINE, linewidth=1.0)
+            im_map = ax.pcolormesh(lons, lats, map_data, transform=ccrs.PlateCarree(), cmap='RdBu_r')
+            self._draw_domain_and_sponge(ax, lons, lats, sponge_depth)
+            
+            for idx, color in zip(lines_indices, colors):
+                if is_x_slice: # Drawing a line across constant Y
+                    ax.plot(lons[:, idx], lats[:, idx], color=color, linewidth=2.5, transform=ccrs.PlateCarree(), label=f'Y-idx: {idx}')
+                else: # Drawing a line across constant X
+                    ax.plot(lons[idx, :], lats[idx, :], color=color, linewidth=2.5, transform=ccrs.PlateCarree(), label=f'X-idx: {idx}')
+            
+            ax.legend(loc='upper right')
+            ax.set_title(f"Locator Map: {map_var} at Level {map_z} (~{z_height}m)", fontsize=14)
+            return im_map
+
+        # --- Top Left: Map with X slices (constant y cuts) ---
+        ax_map_x = fig.add_subplot(gs[0, 0], projection=ccrs.PlateCarree(central_longitude=grid.lon_c))
+        im_x = draw_locator_map(ax_map_x, y_indices, x_colors, is_x_slice=True)
+        plt.colorbar(im_x, ax=ax_map_x, orientation='vertical', pad=0.02, fraction=0.03)
+
+        # --- Top Right: Map with Y slices (constant x cuts) ---
+        ax_map_y = fig.add_subplot(gs[0, 1], projection=ccrs.PlateCarree(central_longitude=grid.lon_c))
+        im_y = draw_locator_map(ax_map_y, x_indices, y_colors, is_x_slice=False)
+        plt.colorbar(im_y, ax=ax_map_y, orientation='vertical', pad=0.02, fraction=0.03)
+
+        def draw_slice(ax, slice_data, coords, Z_coords, title, line_color, show_x_label=False):
+            inner_data = slice_data[sponge_depth:-sponge_depth, :] if sponge_depth > 0 else slice_data
+            
+            vmax = float(np.max(np.abs(inner_data))) if slice_var == 'w' else float(np.max(inner_data))
+            vmin = -vmax if slice_var == 'w' else float(np.min(inner_data))
+            if slice_var == 'q_c': vmin = 0.0
+            if vmax <= vmin: vmax = vmin + 1e-5
+                
+            cmap = 'seismic' if slice_var == 'w' else ('Blues' if slice_var == 'q_c' else 'RdBu_r')
+            levels = np.linspace(vmin, vmax, 31)
+            
+            X_2d = np.broadcast_to(coords[:, None], Z_coords.shape)
+            c = ax.contourf(X_2d, Z_coords, slice_data, levels=levels, cmap=cmap, extend='both')
+            ax.fill_between(coords, 0, Z_coords[:, 0], color='dimgray')
+            
+            if sponge_depth > 0:
+                ax.axvspan(coords[0], coords[sponge_depth], color='black', alpha=0.15, zorder=4)
+                ax.axvspan(coords[-sponge_depth-1], coords[-1], color='black', alpha=0.15, zorder=4)
+
+            # Color the border spine to match the map locator line
+            for spine in ax.spines.values():
+                spine.set_edgecolor(line_color)
+                spine.set_linewidth(3.0)
+                
+            ax.text(0.01, 0.85, title, transform=ax.transAxes, fontsize=12, color=line_color, fontweight='bold', bbox=dict(facecolor='white', alpha=0.8, edgecolor='none'))
+            
+            if show_x_label: ax.set_xlabel("Distance [km]")
+            else: ax.set_xticklabels([])
+            ax.set_ylabel("Height [m]")
+            ax.set_ylim(0, 15000)
+            return c
+
+        # --- Bottom Left: 3 Stacked X-slices ---
+        gs_x = gridspec.GridSpecFromSubplotSpec(3, 1, subplot_spec=gs[1, 0], hspace=0.1)
+        for i, (y_idx, color) in enumerate(zip(y_indices, x_colors)):
+            ax_slice = fig.add_subplot(gs_x[i])
+            Z_x = grid.Z_w[:, y_idx, :] if slice_var == 'w' else grid.Z_m[:, y_idx, :]
+            c_x = draw_slice(ax_slice, state[slice_var][:, y_idx, :], grid.x_m / 1000.0, Z_x, f"Y-idx: {y_idx}", color, show_x_label=(i==2))
+        
+        cbar_ax_x = fig.add_axes([0.15, 0.05, 0.3, 0.015])
+        fig.colorbar(c_x, cax=cbar_ax_x, orientation='horizontal', label=slice_var)
+
+        # --- Bottom Right: 3 Stacked Y-slices ---
+        gs_y = gridspec.GridSpecFromSubplotSpec(3, 1, subplot_spec=gs[1, 1], hspace=0.1)
+        for i, (x_idx, color) in enumerate(zip(x_indices, y_colors)):
+            ax_slice = fig.add_subplot(gs_y[i])
+            Z_y = grid.Z_w[x_idx, :, :] if slice_var == 'w' else grid.Z_m[x_idx, :, :]
+            c_y = draw_slice(ax_slice, state[slice_var][x_idx, :, :], grid.y_m / 1000.0, Z_y, f"X-idx: {x_idx}", color, show_x_label=(i==2))
+
+        cbar_ax_y = fig.add_axes([0.57, 0.05, 0.3, 0.015])
+        fig.colorbar(c_y, cax=cbar_ax_y, orientation='horizontal', label=slice_var)
+
+        # Make room for the bottom horizontal colorbars
+        plt.subplots_adjust(bottom=0.12)
+        
+        if save_path: plt.savefig(save_path, dpi=200)
+        else: plt.show()
+        plt.close()
+
+
+    def plot_hovmoller(self, grid, time_hours_array, hov_data_2d, variable='th_v Anomaly', cmap='RdBu_r', save_path=None):
+        """
+        Plots a Hovmöller diagram (Time vs Longitude).
+        
+        Args:
+            time_hours_array: 1D array of time in hours (e.g., [0, 1, 2, ... 24]).
+            hov_data_2d: 2D array of shape (len(time_hours), nx) containing the 
+                         y-averaged, z-averaged parameter to plot.
+        """
+        fig, ax = plt.subplots(figsize=(12, 8))
+        
+        # Determine physical X limits (convert to km for readability)
+        x_coords = grid.x_m / 1000.0
+        X, Y = np.meshgrid(x_coords, time_hours_array)
+        
+        # Calculate limits strictly based on the interior
+        vmax = float(np.max(np.abs(hov_data_2d)))
+        vmin = -vmax
+        if vmax <= vmin: vmax = vmin + 1e-5
+        
+        levels = np.linspace(vmin, vmax, 41)
+        
+        im = ax.contourf(X, Y, hov_data_2d, levels=levels, cmap=cmap, extend='both')
+        plt.colorbar(im, ax=ax, pad=0.02, label=variable)
+        
+        ax.set_title(f"Hovmöller Diagram: {variable}", fontsize=14)
+        ax.set_ylabel("Simulation Time [Hours]")
+        ax.set_xlabel("X Distance [km]")
+        
+        # Invert Y axis so time goes from top to bottom (standard meteorological convention)
+        ax.invert_yaxis()
+        
+        if save_path: plt.savefig(save_path, dpi=200, bbox_inches='tight')
         else: plt.show()
         plt.close()
 

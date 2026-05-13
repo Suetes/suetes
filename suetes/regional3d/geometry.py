@@ -256,3 +256,21 @@ class RegionalGrid3D:
                 f"Grid Tangling Detected! Minimum dz is {dz_min:.2f} m.\n"
                 f"The 3D topography is too steep. Smooth the terrain or increase Lz."
             )
+
+    def interp_to_height(self, field_3d, Z_3d, target_z):
+        r"""
+        Interpolates a 3D field onto a constant geometric height surface (Z).
+
+        Args:
+            field_3d (jnp.ndarray): The 3D data array to interpolate.
+            Z_3d (jnp.ndarray): The 3D geometric height array.
+            target_z (float): The desired geometric altitude in meters.
+
+        Returns:
+            jnp.ndarray: A 2D slice at `target_z`, with np.nan for subterranean points.
+        """
+        # left=jnp.nan automatically masks out the topography!
+        interp_1d = lambda z_col, f_col: jnp.interp(target_z, z_col, f_col, left=jnp.nan, right=jnp.nan)
+        interp_2d = jax.vmap(jax.vmap(interp_1d, in_axes=(0, 0)), in_axes=(0, 0))
+        
+        return interp_2d(Z_3d, field_3d)

@@ -226,6 +226,8 @@ Returns:
         # Multiply the horizontal divergence sum by m (vertical divergence is unaffected by the horizontal map factor).
         tend_pi = -bg['C_pi'] * (m_m * (div_x + div_y) + div_z)
 
+        tend_th_v = jnp.zeros_like(state_prime['pi'])
+
         # Diffusion and physics are only done in the explicit part
         if is_explicit:
 
@@ -245,8 +247,9 @@ Returns:
                     if k == 'u': tend_u += phys_tends['u']
                     if k == 'v': tend_v += phys_tends['v']
                     if k == 'w': tend_w += phys_tends['w']
+                    if k == 'th_v': tend_th_v += phys_tends['th_v']
 
-        return {'u': tend_u, 'v': tend_v, 'w': tend_w, 'pi': tend_pi}
+        return {'u': tend_u, 'v': tend_v, 'w': tend_w, 'pi': tend_pi, 'th_v': tend_th_v}
 
     def linear_operator(self, state_prime, bg, dt):
         r"""
