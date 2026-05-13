@@ -37,6 +37,9 @@ class StaggeredGrid:
         self.dz = Lz / nz
         self.h_func = h_func
 
+        # Default to non-periodic boundaries
+        self.periodic_x = False
+
         if transform is None:
             self.transform_op = GalChenSigma()
         else:

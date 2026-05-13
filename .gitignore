@@ -1,5 +1,18 @@
-venv/
-data/
-suetes.egg-info/
-.DS_Store
+# Byte-compiled / optimized / DLL files
 __pycache__/
+*.py[cod]
+*$py.class
+
+# Environments
+venv/
+env/
+.env
+
+# Project specific
+data/
+results/
+suetes.egg-info/
+
+# OS specific
+.DS_Store
+Thumbs.db

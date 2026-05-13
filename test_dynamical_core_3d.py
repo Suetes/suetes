@@ -192,28 +192,24 @@ def test_6_semi_implicit_solver(physics, dt, nx, ny, nz):
     print(f"Max U in solved state: {max_u_sol:.4f} m/s")
     assert is_valid, "Solver diverged and produced NaNs!"
 
-def test_7_davies_sponge(grid, nx, ny, nz):
+def test_7_davies_sponge(grid, op, nx, ny, nz):
     print("\n--- 7. DAVIES SPONGE BOUNDARY TEST ---")
     
     # Explicitly set the relaxation parameters to ensure test determinism
-    tau_factor = 10.0
     dt_test = 30.0
+    outflow_factor = 0.01
     
     # Create a sponge that is 5 grid cells deep
-    sponge = DaviesSponge(grid, sponge_depth=5, dt=dt_test, tau_bndy_factor=tau_factor)
+    sponge = DaviesSponge(grid, op, sponge_depth=5, dt=dt_test, outflow_factor=outflow_factor)
 
-    # Calculate the expected blending coefficient at the absolute boundary (dist=0)
-    # max_c = dt / (tau_factor * dt) = 1.0 / tau_factor
-    max_c = 1.0 / tau_factor
-
-    # Simulate a complete state. Model interior moving at 10 m/s, exterior stationary.
+    # Simulate a complete state. Model interior moving at 10 m/s (West-to-East), exterior stationary.
     model_state = {
         'u': jnp.ones((nx+1, ny, nz)) * 10.0,
         'v': jnp.zeros((nx, ny+1, nz)),
         'w': jnp.zeros((nx, ny, nz+1)),
         'th_v': jnp.ones((nx, ny, nz)) * 300.0,
         'pi': jnp.ones((nx, ny, nz)) * 1.0,
-        'q': jnp.zeros((nx, ny, nz)) # Added tracer to match blend_vars
+        'q': jnp.zeros((nx, ny, nz)) 
     }
     
     ext_state = {
@@ -227,19 +223,27 @@ def test_7_davies_sponge(grid, nx, ny, nz):
 
     blended = sponge.blend(model_state, ext_state)
 
-    # Check the center vs the edge
+    # Check the center vs the edges
     center_u = float(blended['u'][nx//2, ny//2, nz//2])
-    edge_u = float(blended['u'][0, ny//2, nz//2])
-
-    # The edge should be a blend based on max_c
-    expected_edge_u = (1.0 - max_c) * 10.0 + (max_c) * 0.0
+    
+    # West Edge (x=0). Wind is positive (blowing East), so this is an INFLOW boundary.
+    # It should fully apply the sponge (weight = 1.0) -> U perfectly matches the external state (0.0)
+    west_edge_u = float(blended['u'][0, ny//2, nz//2])
+    expected_west = 0.0 
+    
+    # East Edge (x=nx). Wind is positive (blowing East), so this is an OUTFLOW boundary.
+    # It should drop the sponge weight to outflow_factor (0.01) -> U mostly remains model state (10.0)
+    east_edge_u = float(blended['u'][-1, ny//2, nz//2])
+    expected_east = (1.0 - outflow_factor) * 10.0 + (outflow_factor) * 0.0
 
     print(f"U-velocity at domain center (should be 10.0): {center_u:.2f} m/s")
-    print(f"U-velocity at lateral edge (should be {expected_edge_u:.2f}):   {edge_u:.2f} m/s")
+    print(f"U-velocity at West edge (INFLOW, should be {expected_west:.2f}):  {west_edge_u:.2f} m/s")
+    print(f"U-velocity at East edge (OUTFLOW, should be {expected_east:.2f}):  {east_edge_u:.2f} m/s")
     
     assert jnp.isclose(center_u, 10.0), "Bug: Sponge is dampening the interior of the domain!"
-    assert jnp.isclose(edge_u, expected_edge_u), f"Bug: Sponge is not relaxing at the correct rate! Expected {expected_edge_u}, got {edge_u}"
-    
+    assert jnp.isclose(west_edge_u, expected_west), f"Bug: Inflow sponge is not fully relaxing! Expected {expected_west}, got {west_edge_u}"
+    assert jnp.isclose(east_edge_u, expected_east), f"Bug: Outflow sponge is not disabling properly! Expected {expected_east}, got {east_edge_u}"
+
 
 def test_8_kinematic_bottom_boundary(grid, physics, nx, ny, nz, dt):
     print("\n--- 8. KINEMATIC BOTTOM BOUNDARY (FLOW OVER MOUNTAIN) ---")
@@ -253,9 +257,9 @@ def test_8_kinematic_bottom_boundary(grid, physics, nx, ny, nz, dt):
     }
     bg_precomputed = physics.precompute_bg(bg_ref)
     
-    # Force a uniform 10 m/s cross-mountain wind
+    # 1. Create a dummy Right-Hand Side representing the explicit step output
     u_wind = 10.0
-    state_wind = {
+    rhs_prime = {
         'u': jnp.ones((nx+1, ny, nz)) * u_wind,
         'v': jnp.zeros((nx, ny+1, nz)),
         'w': jnp.zeros((nx, ny, nz+1)),
@@ -263,23 +267,32 @@ def test_8_kinematic_bottom_boundary(grid, physics, nx, ny, nz, dt):
         'eta_dot': jnp.zeros((nx, ny, nz+1))
     }
 
-    # The linear operator applies the kinematic boundary constraint at the surface
-    L_out = physics.linear_operator(state_wind, bg_precomputed, dt)
-
-    # Calculate what the theoretical updraft should be based on the mountain slope
-    u_m = physics.op.avg(state_wind['u'], axis=0, from_loc='u', to_loc='m')
+    # 2. Assemble the kinematic boundary constraint onto the RHS (Just like Steppers.py does)
+    u_m = physics.op.avg(rhs_prime['u'], axis=0, from_loc='u', to_loc='m')
     u_w = physics.op.avg(u_m, axis=2, from_loc='m', to_loc='w')
+    
+    v_m = physics.op.avg(rhs_prime['v'], axis=1, from_loc='v', to_loc='m')
+    v_w = physics.op.avg(v_m, axis=2, from_loc='m', to_loc='w')
 
-    expected_w_bottom = u_w[:,:,0] * grid.z_xi_w[:,:,0]
+    m_w = jnp.expand_dims(grid.m_factors['w'], axis=-1)
+    rhs_kinematic_bottom = m_w[:, :, 0] * (
+        u_w[:, :, 0] * grid.z_xi_w[:, :, 0] + 
+        v_w[:, :, 0] * grid.z_eta_w[:, :, 0]
+    )
+    rhs_prime['w'] = rhs_prime['w'].at[:, :, 0].set(rhs_kinematic_bottom)
 
-    max_w_expected = float(jnp.max(expected_w_bottom))
-    max_w_actual = float(jnp.max(L_out['w'][:,:,0]))
+    # 3. Run the implicit solver
+    solver = SemiImplicitSolver3D(physics, dt)
+    sol = solver.solve(rhs_prime, bg_precomputed)
+
+    # 4. Verify the solver's identity matrix perfectly preserved the physical constraint
+    max_w_expected = float(jnp.max(rhs_kinematic_bottom))
+    max_w_actual = float(jnp.max(sol['w'][:,:,0]))
 
     print(f"Max expected updraft from terrain slope: {max_w_expected:.4f} m/s")
-    print(f"Max updraft enforced by implicit solver: {max_w_actual:.4f} m/s")
+    print(f"Max updraft preserved by implicit solver: {max_w_actual:.4f} m/s")
 
-    # Ensure the solver is perfectly matching the terrain slope constraint
-    assert jnp.isclose(max_w_expected, max_w_actual, rtol=1e-4), "Solver is not enforcing flow over the mountain!"
+    assert jnp.isclose(max_w_expected, max_w_actual, rtol=1e-4), "Solver is not preserving the kinematic bottom boundary constraint!"
 
 # --- TERRAIN DIAGNOSTICS TESTS ---
 
@@ -332,7 +345,7 @@ def test_10_kinematic_divergence():
     u_prescribed = u_0 * jnp.ones_like(grid.Z_u)
     v_prescribed = jnp.zeros_like(grid.Z_v)
     
-    # 1. Calculate horizontal fluxes manually
+    # Calculate horizontal fluxes manually
     m_u, m_v = grid.m_factors['u'][..., None], grid.m_factors['v'][..., None]
     flux_x = (u_prescribed * bg['rho_u'] * bg['th_v_u'] * bg['dz_u']) / m_u
     flux_y = (v_prescribed * bg['rho_v'] * bg['th_v_v'] * bg['dz_v']) / m_v
@@ -341,7 +354,7 @@ def test_10_kinematic_divergence():
     div_y = op.diff(flux_y, axis=1, from_loc='v', to_loc='m') / bg['dz_m_full']
     div_h = div_x + div_y
     
-    # 2. Integrate div_h upwards to find the EXACT balancing vertical flux
+    # Integrate div_h upwards to find the EXACT balancing vertical flux
     delta_flux_z = -div_h * bg['dz_m_full'] 
     
     # flux_z is defined on w-points (nz+1). Boundary condition is 0 at bottom.
@@ -350,10 +363,10 @@ def test_10_kinematic_divergence():
         jnp.cumsum(delta_flux_z, axis=2)
     ], axis=2)
     
-    # 3. Convert flux_z back to the contravariant velocity (eta_dot)
+    # Convert flux_z back to the contravariant velocity (eta_dot)
     eta_dot_balanced = flux_z / (bg['dz_w_full'] * bg['rho_w'] * bg['th_v_w'])
     
-    # 4. Feed this perfectly non-divergent state to the physics operator
+    # Feed this perfectly non-divergent state to the physics operator
     state_prime = {
         'u': u_prescribed, 
         'v': v_prescribed, 
@@ -364,7 +377,7 @@ def test_10_kinematic_divergence():
     
     tends = physics.get_tendencies(state_prime, bg)
     
-    # 5. Check divergence. We IGNORE the topmost layer [:, :, -1]
+    # Check divergence. We IGNORE the topmost layer [:, :, -1]
     max_div = float(jnp.max(jnp.abs(tends['pi'][:, :, :-1])))
     print(f"Max spurious pressure tendency (Interior): {max_div:.4e} 1/s")
     
@@ -436,6 +449,77 @@ def test_13_resting_mountain_integration(dt):
     assert max_w < 1e-7, "Metric terms generated artificial winds during integration!"
     print("STATUS: SUCCESS (Mountain integration is stable)")
 
+def test_14_autodiff_gradients():
+    print("\n--- 14. AUTODIFF GRADIENT VERIFICATION (REVERSE-MODE 3D) ---")
+    
+    # Setup a minimal 3D grid to keep compilation fast
+    nx, ny, nz = 16, 16, 8
+    dx, dy, dz = 10000.0, 10000.0, 1000.0
+    
+    grid = RegionalGrid3D(nx, ny, nz, dx, dy, dz, lat_center=45.0, lon_center=0.0, h_func=lambda x, y: 0.0)
+    op = CGridOperator3D(grid)
+    constants = {'g': 9.81, 'cp': 1004.0, 'Rd': 287.0, 'cvd': 717.0, 'p0': 100000.0}
+    dt = 30.0
+    
+    physics = Euler3D(grid, op, constants, dt=dt, damp_height=8000.0, N_bv=0.01)
+    stepper = SISLStepper3D(physics, dt)
+    
+    # Define the pure, side-effect-free forward pass
+    def forward_loss(u_initial_array):
+        # Reconstruct the base state
+        rho_bg = physics.c['p0'] / (physics.c['Rd'] * physics.theta_bg) * \
+                 (physics.pi_bg ** (physics.c['cvd'] / physics.c['Rd']))
+                 
+        state = {
+            'u': u_initial_array,
+            'v': jnp.zeros((nx, ny+1, nz)),
+            'w': jnp.zeros((nx, ny, nz+1)),
+            'pi': physics.pi_bg,
+            'th_v': physics.theta_bg,
+            'eta_dot': jnp.zeros((nx, ny, nz+1)),
+            'rho': rho_bg
+        }
+        
+        def dummy_bc(state_next, forcing): return state_next
+        
+        def scan_fn(curr_state, step_idx):
+            return stepper.step(curr_state, t=step_idx*dt, forcing=None, bc_fn=dummy_bc), None
+            
+        # Run for 3 steps to build the deep computational graph
+        final_state, _ = jax.lax.scan(scan_fn, state, jnp.arange(3))
+        
+        # Calculate a pseudo-Kinetic Energy proxy as the scalar loss
+        ke = 0.5 * (jnp.sum(final_state['u']**2) + jnp.sum(final_state['v']**2) + jnp.sum(final_state['w']**2))
+        return ke
+
+    # Create the initial parameter state (10 m/s wind)
+    u_init = 10.0 * jnp.ones_like(grid.Z_u)
+    
+    # JIT compile the value and gradient function
+    print("[Autodiff] Compiling 3D forward and reverse passes (this may take a minute)...")
+    loss_and_grad_fn = jax.jit(jax.value_and_grad(forward_loss))
+    
+    # Execute
+    loss_val, u_grad = loss_and_grad_fn(u_init)
+    
+    print(f"\n[Result] Forward Loss (Kinetic Energy Proxy): {loss_val:.4f}")
+    
+    # Gradient diagnostics
+    max_grad = float(jnp.max(jnp.abs(u_grad)))
+    mean_grad = float(jnp.mean(jnp.abs(u_grad)))
+    nan_count = int(jnp.isnan(u_grad).sum())
+    
+    print(f"[Result] Max |Gradient|:  {max_grad:.4e}")
+    print(f"[Result] Mean |Gradient|: {mean_grad:.4e}")
+    print(f"[Result] NaN Count:       {nan_count}")
+    
+    if nan_count > 0:
+        print(">>> FAILED: The 3D solver dropped gradients (NaNs detected).")
+    elif max_grad == 0.0:
+        print(">>> FAILED: The 3D gradient is strictly zero. The graph is detached.")
+    else:
+        print(">>> PASSED: JAX successfully backpropagated through the 3D GMRES solver and Semi-Lagrangian advection!")
+
 
 if __name__ == "__main__":
     nx, ny, nz = 32, 32, 15
@@ -466,12 +550,13 @@ if __name__ == "__main__":
     test_4_advection_limiter(grid, advector, nx, ny, nz)
     test_5_hydrostatic_balance(grid, physics, nx, ny, nz)
     test_6_semi_implicit_solver(physics, dt, nx, ny, nz)
-    test_7_davies_sponge(grid, nx, ny, nz)
+    test_7_davies_sponge(grid, op, nx, ny, nz)
     test_8_kinematic_bottom_boundary(grid, physics, nx, ny, nz, dt)
     test_9_metric_gradients()
     test_10_kinematic_divergence()
     test_11_vertical_metric_smoothness()
     test_12_resting_flat_integration(grid, physics, dt)
     test_13_resting_mountain_integration(dt)
+    test_14_autodiff_gradients()
 
     print("\nAll boundary, kinematic and terrain diagnostic tests completed successfully!")
