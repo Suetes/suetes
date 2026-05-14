@@ -50,9 +50,10 @@ python run_simulation.py
 ```
 
 ### 2. Adjoint Sensitivity Analysis
-Calculate the sensitivity of 3D wave energy at $t+6h$ with respect to the initial wind perturbation at $t=0$. This demonstrates the core's ability to propagate gradients backward through the solver.
+Calculate the sensitivity of 3D wave energy with respect to the initial wind perturbation at $t=0$. This demonstrates the core's ability to propagate gradients backward through the solver.
 ```bash
 python run_simulation_adjoint.py
+python schaer_mountain_optimal_perturbation_3d.py
 ```
 
 ### 3. Inverse Topography Optimization
