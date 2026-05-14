@@ -131,14 +131,18 @@ def main():
         times_sec.append(float(i * 3600.0))
         
     time_manager = TimeManager(suetes_bc_states, times_sec, grid)
+    
     initial_state = suetes_bc_states[0].copy() 
     
     if USE_MOISTURE:
         initial_state['q_c'] = jnp.zeros_like(initial_state['q'])
     else:
-        # Strip moisture from the initial PyTree to match the dry stepper output
         initial_state.pop('q', None)
         initial_state.pop('q_c', None)
+
+    # Initialize the forcing variables so the PyTree structure matches
+    initial_state['theta_surf'] = initial_state['th_v'][:, :, 0]
+    initial_state['target_th_v'] = initial_state['th_v']
 
     # ==========================================
     # 5. PHYSICS, STEPPER & SPONGE INITIALIZATION
@@ -202,13 +206,16 @@ def main():
         bc_state_t = time_manager.get_forcing(t_curr)
 
         # Update the PBL scheme with the current ERA5 surface temperature
-        pbl_scheme.theta_surf = bc_state_t['th_v'][:, :, 0]
-        nudging_scheme.update_target(bc_state_t)
+        curr_state['theta_surf'] = bc_state_t['th_v'][:, :, 0]
+        curr_state['target_th_v'] = bc_state_t['th_v']
         
         def bc_fn(state_next, _):
             return sponge.blend(state_next, bc_state_t)
             
         next_state = stepper.step(curr_state, t_curr, forcing=None, bc_fn=bc_fn)
+        next_state['theta_surf'] = curr_state['theta_surf']
+        next_state['target_th_v'] = curr_state['target_th_v']
+        
         max_w = jnp.max(jnp.abs(next_state['w']))
         
         # Compute the anomaly every step

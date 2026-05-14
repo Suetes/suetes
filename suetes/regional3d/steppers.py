@@ -353,11 +353,12 @@ class SISLStepper3D:
     5. Divergence damping and state assembly.
     6. Boundary conditions blending.
     """
-    def __init__(self, physics, dt):
+    def __init__(self, physics, dt, use_checkpointing = False):
         self.physics, self.dt = physics, dt
         self.advector = SemiLagrangianAdvector3D(physics.grid, physics, dt)
         self.ffsl_advector = FluxFormAdvector(physics.grid, dt)
         self.implicit_solver = SemiImplicitSolver3D(physics, dt)
+        self.use_checkpointing = use_checkpointing
         
         # Ask the physics suite for the active tracers
         self.tracer_keys = self.physics.physics_suite.tracer_keys if self.physics.physics_suite is not None else []
@@ -387,10 +388,10 @@ class SISLStepper3D:
 
         if 'eta_dot' not in state: state['eta_dot'] = jnp.zeros_like(state['w'])
             
-        coords_u = self.advector.compute_departure_indices(state, loc='u')
-        coords_v = self.advector.compute_departure_indices(state, loc='v')
-        coords_w = self.advector.compute_departure_indices(state, loc='w')
-        coords_m = self.advector.compute_departure_indices(state, loc='m')
+        coords_u = jax.lax.stop_gradient(self.advector.compute_departure_indices(state, loc='u'))
+        coords_v = jax.lax.stop_gradient(self.advector.compute_departure_indices(state, loc='v'))
+        coords_w = jax.lax.stop_gradient(self.advector.compute_departure_indices(state, loc='w'))
+        coords_m = jax.lax.stop_gradient(self.advector.compute_departure_indices(state, loc='m'))
 
         bg_state_ref = {
             'rho': self.physics.c['p0'] / (self.physics.c['Rd'] * self.physics.theta_bg) * \
@@ -410,8 +411,17 @@ class SISLStepper3D:
             'th_v_prime_v': self.physics.op.avg(th_v_prime_n, axis=1, from_loc='m', to_loc='v'),
             'th_v_prime_w': self.physics.op.avg(th_v_prime_n, axis=2, from_loc='m', to_loc='w')
         }
+
+        if 'theta_surf' in state: state_prime_n['theta_surf'] = state['theta_surf']
+        if 'target_th_v' in state: state_prime_n['target_th_v'] = state['target_th_v']
         
-        tends_n = self.physics.get_tendencies(state_prime_n, bg_precomputed, is_explicit=True)
+        # Use checkpointing for tendencies if requested (speeds up adjoint, slows down forward)
+        if self.use_checkpointing:
+            cp_get_tendencies = jax.checkpoint(self.physics.get_tendencies, static_argnums=(2,))
+        else:
+            cp_get_tendencies = self.physics.get_tendencies
+            
+        tends_n = cp_get_tendencies(state_prime_n, bg_precomputed, True)
         
         u_in = state['u'] + (1.0 - alpha) * self.dt * tends_n['u']
         v_in = state['v'] + (1.0 - alpha) * self.dt * tends_n['v']
@@ -435,25 +445,33 @@ class SISLStepper3D:
             state['w']
         )
         
-        R_eta_dot = -(1.0 - alpha) * self.advector.advect_cubic(residual_n, coords_w)
+        # Use checkpointing for advectors if requested (speeds up adjoint, slows down forward)
+        if self.use_checkpointing:
+            cp_advect_cubic = jax.checkpoint(self.advector.advect_cubic, static_argnums=(2,))
+            cp_advect_ffsl = jax.checkpoint(self.ffsl_advector.advect_3d_split)
+        else:
+            cp_advect_cubic = self.advector.advect_cubic
+            cp_advect_ffsl = self.ffsl_advector.advect_3d_split
 
-        # Momentum and pressure waves must propagate smoothly
-        rhs_u = self.advector.advect_cubic(u_in, coords_u, use_limiter=False)
-        rhs_v = self.advector.advect_cubic(v_in, coords_v, use_limiter=False)
-        rhs_w = self.advector.advect_cubic(w_in, coords_w, use_limiter=False)
-        rhs_pi_prime = self.advector.advect_cubic(pi_prime_in, coords_m, use_limiter=False)
+        # Advect the fields
+        R_eta_dot = -(1.0 - alpha) * cp_advect_cubic(residual_n, coords_w, False)
+
+        rhs_u = cp_advect_cubic(u_in, coords_u, False)
+        rhs_v = cp_advect_cubic(v_in, coords_v, False)
+        rhs_w = cp_advect_cubic(w_in, coords_w, False)
+        rhs_pi_prime = cp_advect_cubic(pi_prime_in, coords_m, False)
         
-        # Advect mass with FFSL scheme
-        rho_next = self.ffsl_advector.advect_3d_split(state['rho'], state, bg_precomputed)
+        # Advect mass with checkpointed FFSL scheme
+        rho_next = cp_advect_ffsl(state['rho'], state, bg_precomputed)
 
-        # Advect virtual potential temperature with tricubic SL (advect the updated field!)
-        th_v_next = self.advector.advect_cubic(th_v_in, coords_m, use_limiter=False)
+        # Advect virtual potential temperature
+        th_v_next = cp_advect_cubic(th_v_in, coords_m, False)
         
         # Tracers use FFSL to strictly conserve mass
         tracers_next = {}
         for key in self.tracer_keys:
             if key in state:
-                rho_tr_next = self.ffsl_advector.advect_3d_split(state['rho'] * state[key], state, bg_precomputed)
+                rho_tr_next = cp_advect_ffsl(state['rho'] * state[key], state, bg_precomputed)
                 tracers_next[key] = rho_tr_next / (rho_next + 1e-15)
 
         # =====================================================================

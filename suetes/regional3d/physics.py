@@ -225,11 +225,18 @@ class NewtonianRelaxation:
         self.target_state = target_state
 
     def get_tendencies(self, state, bg):
-        if self.target_state is None:
+        # Extract target from state safely
+        target_th_v = state.get('target_th_v')
+        
+        # Fallback to internal state if missing (e.g., initial baseline calculations)
+        if target_th_v is None and self.target_state is not None:
+            target_th_v = self.target_state['th_v']
+            
+        if target_th_v is None:
             return {'th_v': jnp.zeros_like(state['th_v'])}
             
         # Calculate the linear restoring tendency
-        tend_th_v = -(state['th_v'] - self.target_state['th_v']) / self.tau_relax
+        tend_th_v = -(state['th_v'] - target_th_v) / self.tau_relax
         
         return {'th_v': tend_th_v}
 
@@ -274,18 +281,18 @@ class BulkAerodynamicPBL:
         tend_v = jnp.zeros_like(v).at[:, :, 0].set(drag_v_surf)
         
         # Sensible Heat Flux (SHF)
-        if self.theta_surf is not None:
+        theta_surf = state.get('theta_surf', self.theta_surf) # Extract from state
+        
+        if theta_surf is not None:
             speed_m_surf = speed_m_3d[:, :, 0]
             th_v_surf = state['th_v'][:, :, 0]
             dz_m_surf = bg['dz_m_full'][:, :, 0]
             
             # Positive flux warms the atmosphere (Ocean is warmer than air)
-            shf_kinematic = self.Ch * speed_m_surf * (self.theta_surf - th_v_surf)
+            shf_kinematic = self.Ch * speed_m_surf * (theta_surf - th_v_surf)
             heat_tend_surf = shf_kinematic / dz_m_surf
             
             tend_th_v = jnp.zeros_like(state['th_v']).at[:, :, 0].set(heat_tend_surf)
-        else:
-            tend_th_v = jnp.zeros_like(state['th_v'])
         
         return {'u': tend_u, 'v': tend_v, 'th_v': tend_th_v}
 

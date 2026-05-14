@@ -122,24 +122,16 @@ class Visualizer:
             else:
                 inner_data = data
                 
-            # Use nanmax and nanmin to ignore subterranean geometry
-            data_max = float(np.nanmax(inner_data))
-            data_min = float(np.nanmin(inner_data))
+            # Use percentiles instead of nanmax/nanmin
+            data_max = float(np.nanpercentile(inner_data, 99.5))
+            data_min = float(np.nanpercentile(inner_data, 0.5))
             
             if scale == 'sym': 
                 limit = max(abs(data_max), abs(data_min))
                 
-                # Safety caps to prevent extreme outliers from washing out the plot
-                capped_limit = limit
-                if variable == 'div': capped_limit = min(limit, 1e-4)
-                if variable == 'w': capped_limit = min(limit, 1.0)
-                
-                # Tell matplotlib to draw arrows on the colorbar if we capped the visual range
-                if capped_limit < limit:
-                    extend = 'both'
-                    
-                vmax = capped_limit
-                vmin = -capped_limit
+                vmax = limit
+                vmin = -limit
+                extend = 'both'
             else:
                 vmax = data_max
                 vmin = data_min
@@ -311,6 +303,15 @@ class Visualizer:
         Z_slice = grid.Z_w[:, y_idx, :] if variable == 'w' else grid.Z_m[:, y_idx, :]
         data_slice = state[variable][:, y_idx, :]
         
+        # Pad mass-point variables down to the surface (Z_w[0]) for plotting
+        if variable != 'w':
+            surface_Z = grid.Z_w[:, y_idx, 0:1] # Get exact topography height
+            surface_data = data_slice[:, 0:1]   # Duplicate the lowest model level data
+            
+            # Prepend the surface values to the arrays
+            Z_slice = np.concatenate([surface_Z, Z_slice], axis=1)
+            data_slice = np.concatenate([surface_data, data_slice], axis=1)
+        
         if sponge_depth > 0:
             interior_slice = data_slice[sponge_depth:-sponge_depth, :]
         else:
@@ -386,16 +387,22 @@ class Visualizer:
             data = self._get_plot_data(grid, state, variable, z, constants)
             z_height = self._get_level_height(grid, z)
             
-            # Calculate limits strictly based on the interior domain for this specific level
-            inner_data = data[sponge_depth:-sponge_depth, sponge_depth:-sponge_depth] if sponge_depth > 0 else data
-            vmax = float(np.max(inner_data))
-            vmin = float(np.min(inner_data))
+            # Isolate the interior domain (Sponge layer protection)
+            if sponge_depth > 0:
+                inner_data = data[sponge_depth:-sponge_depth, sponge_depth:-sponge_depth]
+            else:
+                inner_data = data
+            
+            # Dynamic Percentile Scaling (Spike protection)
+            # This automatically adapts to the magnitude of the data
+            vmax = float(np.percentile(inner_data, 99.5))
+            vmin = float(np.percentile(inner_data, 0.5))
             
             extend = 'neither'
             if scale == 'sym':
                 limit = max(abs(vmax), abs(vmin))
-                if variable == 'w': limit = min(limit, 1.0)
-                if variable == 'div': limit = min(limit, 1e-4)
+                
+                # Removed the hardcoded 1.0 and 1e-4 limits!
                 vmin, vmax = -limit, limit
                 extend = 'both'
             elif variable == 'q_c': 
@@ -613,5 +620,37 @@ class Visualizer:
         
         plt.tight_layout()
         if save_path: plt.savefig(save_path, dpi=200)
+        else: plt.show()
+        plt.close()
+
+    def plot_adjoint_overlay(self, grid, initial_state, sensitivity_2d, u_var='u', v_var='v', z_idx=5, sponge_depth=30, stride=15, save_path=None):
+        """Overlays the forward initial wind field on top of the adjoint sensitivities."""
+        u_grid = self._get_plot_data(grid, initial_state, u_var, z_idx)
+        v_grid = self._get_plot_data(grid, initial_state, v_var, z_idx)
+        
+        Xi, Yi = np.meshgrid(grid.x_m, grid.y_m, indexing='ij')
+        lats, lons = grid.proj.get_lat_lon(Xi, Yi)
+        
+        fig, ax = plt.subplots(1, 1, figsize=(12, 8), subplot_kw={'projection': ccrs.PlateCarree(central_longitude=grid.lon_c)})
+        ax.add_feature(cfeature.COASTLINE, linewidth=1.2)
+        
+        # 1. Plot Adjoint Sensitivity as the background
+        vmax = float(np.max(np.abs(sensitivity_2d)))
+        im = ax.contourf(lons, lats, sensitivity_2d, levels=50, transform=ccrs.PlateCarree(), cmap='RdBu_r', vmin=-vmax, vmax=vmax, alpha=0.85)
+        
+        # 2. Plot Forward Winds on top
+        gamma = np.array(grid.proj.get_convergence_angle(Xi, Yi))
+        u_geo = u_grid * np.cos(gamma) - v_grid * np.sin(gamma)
+        v_geo = u_grid * np.sin(gamma) + v_grid * np.cos(gamma)
+
+        s = stride
+        q = ax.quiver(lons[::s, ::s], lats[::s, ::s], u_geo[::s, ::s], v_geo[::s, ::s], 
+                      transform=ccrs.PlateCarree(), pivot='middle', color='black', alpha=0.6)
+        
+        self._draw_domain_and_sponge(ax, lons, lats, sponge_depth)
+        ax.set_title(r"Adjoint Sensitivity overlaid with Initial Wind Field at $t=0$", fontsize=14)
+        fig.colorbar(im, ax=ax, orientation='horizontal', pad=0.05, label=r'Absolute Impact on Wave Energy per $+1K$ Perturbation')
+        
+        if save_path: plt.savefig(save_path, dpi=200, bbox_inches='tight')
         else: plt.show()
         plt.close()

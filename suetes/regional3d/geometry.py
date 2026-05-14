@@ -7,6 +7,7 @@ coordinate transformations.
 """
 
 import jax
+import jax.core
 import jax.numpy as jnp
 
 class ObliqueStereographic:
@@ -249,13 +250,16 @@ class RegionalGrid3D:
         Z_w_pad_y = jnp.pad(self.Z_w, ((0, 0), (1, 1), (0, 0)), mode='edge')
         self.z_eta_w = (Z_w_pad_y[:, 2:, :] - Z_w_pad_y[:, :-2, :]) / (2.0 * self.dy)
 
-        # DIAGNOSTIC CHECK
-        dz_min = float(jnp.min(self.dz_m_full))
-        if dz_min <= 0.0:
-            raise ValueError(
-                f"Grid Tangling Detected! Minimum dz is {dz_min:.2f} m.\n"
-                f"The 3D topography is too steep. Smooth the terrain or increase Lz."
-            )
+        # DIAGNOSTIC CHECK  
+        dz_min = jnp.min(self.dz_m_full)
+    
+        # Only evaluate the physical tangling check if we are NOT compiling a JAX graph
+        if not isinstance(dz_min, jax.core.Tracer):
+            if float(dz_min) <= 0.0:
+                raise ValueError(
+                    f"Grid Tangling Detected! Minimum dz is {float(dz_min):.2f} m.\n"
+                    f"The 3D topography is too steep. Smooth the terrain or increase Lz."
+                )
 
     def interp_to_height(self, field_3d, Z_3d, target_z):
         r"""
