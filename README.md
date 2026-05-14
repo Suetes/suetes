@@ -20,6 +20,13 @@ Because it is built entirely in JAX, the dynamical core is end-to-end differenti
 * **Simulation Driver:** High-level `Simulation` class for managed integration loops, JIT compilation, and chunked execution.
 * **Stabilization:** Configurable Davies sponge lateral boundaries, Rayleigh damping at the model top, and divergence damping for acoustic modes.
 
+###  Differentiable Science & ML Integration
+* **Reverse-Mode AD:** Full support for backpropagating through the entire 3D dynamical core, including the implicit GMRES solver and Semi-Lagrangian trajectories.
+* **Adjoint Modeling:** Calculate sensitivities of downstream states (e.g., kinetic energy) to initial conditions or boundary forcing.
+* **Inverse Problems:** Optimize terrain profiles or physical parameters to match target observations.
+* **Neural Closures:** Integrate Flax-based neural networks directly into the physics suite for learned subgrid-scale (SGS) parameterizations.
+* **Checkpointing:** Native support for `jax.checkpoint` (Rematerialization) to handle long-horizon adjoint sensitivity runs within memory constraints.
+
 ---
 
 ## Scientific Lineage & Theoretical Foundations
@@ -36,7 +43,26 @@ Suetes is built upon decades of research in Semi-Implicit Semi-Lagrangian (SISL)
 
 ## Quickstart
 
-The easiest way to see Suetes in action is to run the provided 3D simulation script. This script processes ERA5 data, initializes a regional domain, and runs a 6-hour simulation with full visualization output.
-
+### 1. Forward Simulation (ERA5 Driven)
+Run a real-world regional simulation over the Alps using ERA5 boundary conditions. This script will download data, initialize the 3D domain, and generate visualizations.
 ```bash
 python run_simulation.py
+```
+
+### 2. Adjoint Sensitivity Analysis
+Calculate the sensitivity of 3D wave energy at $t+6h$ with respect to the initial wind perturbation at $t=0$. This demonstrates the core's ability to propagate gradients backward through the solver.
+```bash
+python run_simulation_adjoint.py
+```
+
+### 3. Inverse Topography Optimization
+Optimize a 3D terrain profile to maximize the generation of gravity waves downstream, illustrating how the core can be used for "Atmospheric Engineering" and inverse modeling.
+```bash
+python inverse_topography_optimal_3d.py
+```
+
+### 4. Learned Neural Diffusion
+Train a Flax neural network to predict an anisotropic Eddy Viscosity field ($\nu_h, \nu_v$) that preserves a target $k^{-5/3}$ spectral cascade, replacing traditional Smagorinsky closures with learned ones (does not work yet).
+```bash
+python learn_neural_diffusion.py
+```
