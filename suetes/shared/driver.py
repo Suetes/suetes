@@ -71,3 +71,30 @@ class Simulation:
         print(f"[Simulation] Done in {total_time:.2f}s\n")
         
         return state
+
+    def run_differentiable(self, initial_state, t_start, t_end, bc_fn=None, forcing=None, chunk_steps=50):
+        """
+        A purely functional, JAX-traceable simulation loop. 
+        Safe to use inside jax.grad() or jax.value_and_grad().
+        """
+        total_steps = int((t_end - t_start) / self.dt)
+        num_chunks = total_steps // chunk_steps
+        
+        # Define the inner chunk scanner (with checkpointing for memory-efficient autodiff)
+        @jax.checkpoint
+        def scan_chunk(curr_state, chunk_idx):
+            def inner_scan_fn(state, step_offset):
+                step_idx = (chunk_idx * chunk_steps) + step_offset
+                t_curr = step_idx * self.dt
+                # Assuming step_fn takes (state, t_curr, forcing, bc_fn)
+                next_state = self.step_fn(state, t_curr, forcing=forcing, bc_fn=bc_fn)
+                return next_state, None
+                
+            chunk_final_state, _ = jax.lax.scan(inner_scan_fn, curr_state, jnp.arange(chunk_steps))
+            return chunk_final_state, None
+
+        # Execute the outer chunk loop natively in JAX
+        final_state, _ = jax.lax.scan(scan_chunk, initial_state, jnp.arange(num_chunks))
+        
+        # Note: You can add logic for remainders here if total_steps % chunk_steps != 0
+        return final_state

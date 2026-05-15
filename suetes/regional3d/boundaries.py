@@ -160,3 +160,36 @@ class DaviesSponge:
                 blended[k] = intermediate_state[k]
                 
         return blended
+
+class BenchmarkXSponge:
+    """
+    A simplified 1D sponge layer for pseudo-2D benchmark cases (e.g., Schär Mountain).
+    Applies relaxation strictly along the X-axis boundaries without dynamic outflow scaling.
+    """
+    def __init__(self, nx, sponge_depth=10):
+        self.nx = nx
+        self.sponge_depth = sponge_depth
+        
+        # Precompute the mass-grid mask (m, v, w, th_v, rho, pi, q_tr)
+        x_idx = jnp.arange(nx, dtype=jnp.float32)
+        dist_x = jnp.minimum(x_idx, nx - x_idx)
+        weight_x = jnp.where(dist_x < sponge_depth, 
+                             jnp.cos(0.5 * jnp.pi * dist_x / sponge_depth)**2, 0.0)
+        self.mask_m = weight_x[:, None, None]
+        
+        # Precompute the u-grid mask (padded for the staggered X grid)
+        self.mask_u = jnp.pad(self.mask_m, ((0, 1), (0, 0), (0, 0)), mode='edge')
+
+    def blend(self, state_in, ext_state):
+        """Blends the interior state with the external benchmark state."""
+        blended = {}
+        # Define variables that should be relaxed (strictly excluding w, eta_dot)
+        blend_vars = ['u', 'v', 'th_v', 'pi', 'rho', 'q_tr'] 
+        
+        for k in state_in.keys():
+            if k in blend_vars and k in ext_state:
+                m = self.mask_u if k == 'u' else self.mask_m
+                blended[k] = (1.0 - m) * state_in[k] + m * ext_state[k]
+            else:
+                blended[k] = state_in[k]
+        return blended
