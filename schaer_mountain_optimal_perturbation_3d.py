@@ -11,6 +11,8 @@ from suetes.regional3d.geometry import RegionalGrid3D
 from suetes.regional3d.euler import Euler3D
 from suetes.regional3d.operators import CGridOperator3D
 from suetes.regional3d.steppers import SISLStepper3D
+from suetes.regional3d.boundaries import BenchmarkXSponge
+from suetes.shared.driver import Simulation
 
 output_dir = "suetes/plots/inversion"
 os.makedirs(output_dir, exist_ok=True)
@@ -23,10 +25,9 @@ def schaer_mountain(x, y):
     return h0 * jnp.exp(-(x / a)**2) * jnp.cos(jnp.pi * x / lam)**2
 
 # --- 2. SETUP GRID & PHYSICS ---
-nx, ny, nz = 300, 3, 50  # Widened to 300 to give the adjoint signal room
+nx, ny, nz = 300, 3, 50  
 dx, dy, dz = 500.0, 500.0, 400.0  
-
-t_end = 3600.0  # 1 Hour forecast
+t_end = 3600.0  
 dt = 4.0
 num_steps = int(t_end / dt)
 
@@ -34,11 +35,10 @@ grid = RegionalGrid3D(nx, ny, nz, dx, dy, dz, lat_center=45.0, lon_center=0.0, h
 op = CGridOperator3D(grid)
 constants = {'g': 9.81, 'cp': 1004.0, 'Rd': 287.0, 'cvd': 717.0, 'p0': 100000.0}
 
-# Pure Dynamics: No diffusion, no damping, no relaxation
 physics = Euler3D(grid, op, constants, dt=dt, N_bv=0.01, damp_height=12000.0, max_damp=0.5,
                   nu_div_factor=0.0, nu_h_factor=0.0, physics_suite=None)
 
-# --- 3. INITIALIZE STATE ---
+# --- 3. INITIALIZE STATE & BOUNDARIES ---
 u_bg = 10.0
 
 bg_ref = {
@@ -58,14 +58,9 @@ initial_state = {
     'th_v': bg_ref['th_v']
 }
 
-# --- 4. BOUNDARIES & STEPPER ---
-sponge_depth = 10
-x_idx = jnp.arange(nx, dtype=jnp.float32)
-dist_x = jnp.minimum(x_idx, nx - x_idx)
-weight_x = jnp.where(dist_x < sponge_depth, jnp.cos(0.5 * jnp.pi * dist_x / sponge_depth)**2, 0.0)
-mask_x = weight_x[:, None, None]
+x_sponge = BenchmarkXSponge(nx=nx, sponge_depth=10)
 
-def bc_fn(state_in, forcing):
+def bc_fn(state_in, forcing=None):
     ext_state = {
         'u': jnp.ones_like(state_in['u']) * u_bg,
         'v': jnp.zeros_like(state_in['v']),
@@ -73,49 +68,24 @@ def bc_fn(state_in, forcing):
         'rho': bg_ref['rho'],
         'pi': bg_ref['pi']
     }
-    
-    blended = {}
-    blend_vars = ['u', 'v', 'th_v', 'pi', 'rho'] 
-    for k in state_in.keys():
-        if k in blend_vars and k in ext_state:
-            m = jnp.pad(mask_x, ((0, 1), (0, 0), (0, 0)), mode='edge') if k == 'u' else mask_x
-            blended[k] = (1.0 - m) * state_in[k] + m * ext_state[k]
-        else:
-            blended[k] = state_in[k]
-    return blended
+    return x_sponge.blend(state_in, ext_state)
 
-stepper = SISLStepper3D(physics, dt)
-
-# --- 5. THE ADJOINT METRIC FUNCTION ---
-# Target Box Definition:
-# Mountain peak is at nx//2 = 150.
-# Box is from index 190 to 220 (20km to 35km downstream)
-# Altitude from index 8 to 20 (approx 3.2km to 8.0km high)
+# --- 4. THE ADJOINT METRIC FUNCTION ---
 x_t0, x_t1 = 190, 220
 z_t0, z_t1 = 8, 20
 
-def compute_forecast_metric(x0_state):
-    chunk_size = 50 
-    num_chunks = num_steps // chunk_size
-    
-    @jax.checkpoint
-    def scan_chunk(curr_state, chunk_idx):
-        def inner_scan_fn(state, step_offset):
-            t_curr = (chunk_idx * chunk_size + step_offset) * dt
-            next_state = stepper.step(state, t_curr, forcing=None, bc_fn=bc_fn)
-            return next_state, None
-        
-        chunk_final_state, _ = jax.lax.scan(inner_scan_fn, curr_state, jnp.arange(chunk_size))
-        return chunk_final_state, None
+stepper = SISLStepper3D(physics, dt)
+sim = Simulation(step_fn=stepper.step, dt=dt)
 
-    final_state, _ = jax.lax.scan(scan_chunk, x0_state, jnp.arange(num_chunks))
+def compute_forecast_metric(x0_state):
+    # Utilize the shared differentiable driver
+    final_state = sim.run_differentiable(x0_state, 0.0, t_end, bc_fn=bc_fn, chunk_steps=50)
     
-    # The Objective: Total Vertical Kinetic Energy in the Target Box
     w_final = final_state['w']
     target_energy = w_final[x_t0:x_t1, 1, z_t0:z_t1] ** 2
     return jnp.sum(target_energy)
 
-# --- 6. RUN SENSITIVITIES ---
+# --- 5. RUN SENSITIVITIES ---
 print("\n[ADJOINT] Compiling and running ideal forward/backward trajectories...")
 start_time = time.time()
 

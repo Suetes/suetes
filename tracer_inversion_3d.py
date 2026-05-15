@@ -12,6 +12,10 @@ from suetes.regional3d.euler import Euler3D
 from suetes.regional3d.operators import CGridOperator3D
 from suetes.regional3d.steppers import SISLStepper3D
 from suetes.regional3d.physics import PhysicsSuite
+from suetes.regional3d.boundaries import BenchmarkXSponge
+
+from suetes.shared.driver import Simulation
+from suetes.shared.optimization import OptaxSolver
 
 output_dir = "suetes/plots/tracer_inversion"
 os.makedirs(output_dir, exist_ok=True)
@@ -26,7 +30,6 @@ u_bg = 10.0
 
 constants = {'g': 9.81, 'cp': 1004.0, 'Rd': 287.0, 'cvd': 717.0, 'p0': 100000.0}
 
-# Introduce irregular topography: A 2km high Gaussian mountain
 def terrain_profile(x, y):
     h0 = 2000.0    # 2 km height
     a = 4000.0     # 4 km width spread
@@ -50,12 +53,9 @@ bg_ref = {
     'th_v': physics.theta_bg
 }
 
-sponge_depth = 10
-x_idx = jnp.arange(nx, dtype=jnp.float32)
-dist_x = jnp.minimum(x_idx, nx - x_idx)
-mask_x = jnp.where(dist_x < sponge_depth, jnp.cos(0.5 * jnp.pi * dist_x / sponge_depth)**2, 0.0)[:, None, None]
+x_sponge = BenchmarkXSponge(nx=nx, sponge_depth=10)
 
-def bc_fn(state_in, forcing):
+def bc_fn(state_in, forcing=None):
     ext_state = {
         'u': jnp.ones_like(state_in['u']) * u_bg,
         'v': jnp.zeros_like(state_in['v']),
@@ -64,15 +64,7 @@ def bc_fn(state_in, forcing):
         'pi': bg_ref['pi'],
         'q_tr': jnp.zeros_like(state_in.get('q_tr', jnp.zeros_like(state_in['rho'])))
     }
-    blended = {}
-    blend_vars = ['u', 'v', 'th_v', 'pi', 'rho', 'q_tr'] 
-    for k in state_in.keys():
-        if k in blend_vars and k in ext_state:
-            m = jnp.pad(mask_x, ((0, 1), (0, 0), (0, 0)), mode='edge') if k == 'u' else mask_x
-            blended[k] = (1.0 - m) * state_in[k] + m * ext_state[k]
-        else:
-            blended[k] = state_in[k]
-    return blended
+    return x_sponge.blend(state_in, ext_state)
 
 def create_state_with_tracer(x_km, z_km, amplitude):
     X_km = grid.x_m[:, None, None] / 1000.0
@@ -92,86 +84,62 @@ def create_state_with_tracer(x_km, z_km, amplitude):
         'q_tr': q_tr
     }
 
-# --- 3. GENERATE "TRUE" TARGET DATA AND SNAPSHOTS ---
-print("[SIMULATION] Generating true target observations over topography...")
-stepper_fwd = SISLStepper3D(physics, dt, use_checkpointing=False)
-
+# --- 3. GENERATE "TRUE" TARGET DATA ---
+print("[SIMULATION] Generating true target observations...")
 true_params = {'x': -15.0, 'z': 3.5, 'A': 10.0}
 true_state = create_state_with_tracer(true_params['x'], true_params['z'], true_params['A'])
 
-# Modified fast_forward to return the tracer slice at each step for the snapshot plot
-def fast_forward(s, _):
-    next_s = stepper_fwd.step(s, 0.0, None, bc_fn)
-    return next_s, next_s['q_tr'][:, 1, :]
+# Use a custom fast-forward scan here to capture the history for plotting without autodiff overhead
+stepper_fwd = SISLStepper3D(physics, dt, use_checkpointing=False)
 
-true_final_state, q_tr_history = jax.lax.scan(fast_forward, true_state, jnp.arange(num_steps))
+@jax.jit
+def generate_target_data(init_state):
+    def fast_forward(s, _):
+        next_s = stepper_fwd.step(s, 0.0, None, bc_fn)
+        return next_s, next_s['q_tr'][:, 1, :]
+    
+    return jax.lax.scan(fast_forward, init_state, jnp.arange(num_steps))
 
-# Sensor Array at x = +10 km
+true_final_state, q_tr_history = generate_target_data(true_state)
+
 sensor_idx_x = int((10.0 - (grid.x_m[0]/1000.0)) / (dx/1000.0))
 target_sensor_profile = true_final_state['q_tr'][sensor_idx_x, 1, :]
 
-# Extract snapshots for visualization
 snapshot_indices = [num_steps // 4, num_steps // 2, 3 * num_steps // 4, num_steps - 1]
 snapshots = [true_state['q_tr'][:, 1, :]] + [q_tr_history[i] for i in snapshot_indices]
 times_mins = [0.0] + [(i * dt) / 60.0 for i in snapshot_indices]
 
+
 # --- 4. THE INVERSE PROBLEM ---
+stepper_adj = SISLStepper3D(physics, dt, use_checkpointing=True)
+sim_adj = Simulation(step_fn=stepper_adj.step, dt=dt)
+
 def objective_fn(params):
     x_km, z_km, A = params[0], params[1], params[2]
-    
     state = create_state_with_tracer(x_km, z_km, A)
-    stepper_adj = SISLStepper3D(physics, dt, use_checkpointing=True)
     
-    chunk_size = 40 
-    num_chunks = num_steps // chunk_size
+    final_state = sim_adj.run_differentiable(state, 0.0, t_end, bc_fn=bc_fn, chunk_steps=40)
     
-    @jax.checkpoint
-    def scan_chunk(curr_state, chunk_idx):
-        def inner_scan_fn(s, step_offset):
-            t_curr = (chunk_idx * chunk_size + step_offset) * dt
-            return stepper_adj.step(s, t_curr, forcing=None, bc_fn=bc_fn), None
-        chunk_final, _ = jax.lax.scan(inner_scan_fn, curr_state, jnp.arange(chunk_size))
-        return chunk_final, None
-
-    final_state, _ = jax.lax.scan(scan_chunk, state, jnp.arange(num_chunks))
-    
-    # Pure MSE Loss (removed the regularization penalty)
     simulated_sensor_profile = final_state['q_tr'][sensor_idx_x, 1, :]
     mse_loss = jnp.mean((simulated_sensor_profile - target_sensor_profile)**2)
-    
     return mse_loss, final_state
 
-print("\n[JAX] Compiling Inverse Advection Model...")
-grad_fn = jax.jit(jax.value_and_grad(objective_fn, has_aux=True))
-
-# Start with a terrible guess
+# Setup Solver
 guess_params = jnp.array([-5.0, 7.0, 2.0]) 
-
-# Use the Cosine Decay Schedule to prevent overshooting the target
 total_opt_steps = 60
 lr_schedule = optax.cosine_decay_schedule(init_value=0.5, decay_steps=total_opt_steps, alpha=0.02)
-
 optimizer = optax.adam(learning_rate=lr_schedule)
-opt_state = optimizer.init(guess_params)
 
-history_params = [guess_params]
+def constrain_bounds(p):
+    p = p.at[1].set(jnp.maximum(p[1], 0.1))
+    p = p.at[2].set(jnp.maximum(p[2], 0.0))
+    return p
 
-print("\n[OPTIMIZATION] Recovering Tracer Source Coordinates...")
-for i in range(total_opt_steps): 
-    start = time.time()
-    
-    (loss, final_sim_state), grads = grad_fn(guess_params)
-    updates, opt_state = optimizer.update(grads, opt_state, guess_params)
-    guess_params = optax.apply_updates(guess_params, updates)
-    
-    # Bounds protection
-    guess_params = guess_params.at[1].set(jnp.maximum(guess_params[1], 0.1))
-    guess_params = guess_params.at[2].set(jnp.maximum(guess_params[2], 0.0))
-    
-    history_params.append(guess_params)
-    current_lr = lr_schedule(i)
-    
-    print(f"Step {i+1:02d} | Loss: {loss:.4f} | Guess X: {guess_params[0]:.2f}km, Z: {guess_params[1]:.2f}km, A: {guess_params[2]:.2f} | LR: {current_lr:.3f} | Time: {time.time()-start:.1f}s")
+solver = OptaxSolver(objective_fn, optimizer, has_aux=True)
+
+# This single line handles the entire forward-backward gradient descent loop!
+optimal_params, history = solver.fit(guess_params, total_steps=total_opt_steps, bounds_fn=constrain_bounds)
+
 
 # --- 5. VISUALIZATION ---
 print("\n[PLOT] Generating visualizations...")
@@ -207,8 +175,9 @@ axs2[0].contourf(X_plot, Z_plot, true_state['q_tr'][:, 1, :], levels=20, cmap='G
 axs2[0].fill_between(x_plot_1d, 0, terrain_plot, color='black', alpha=0.7)
 axs2[0].axvline(x=10.0, color='blue', linestyle='--', linewidth=2, label='Sensor array')
 
-hx = [p[0] for p in history_params]
-hz = [p[1] for p in history_params]
+# Extract history correctly from the solver's output dictionary
+hx = [p[0] for p in history['params']]
+hz = [p[1] for p in history['params']]
 axs2[0].plot(hx, hz, marker='o', color='purple', linestyle='-', linewidth=2, markersize=5, label='Optimizer trajectory')
 axs2[0].scatter([hx[0]], [hz[0]], color='orange', s=100, label='Initial guess')
 axs2[0].scatter([hx[-1]], [hz[-1]], color='blue', s=100, zorder=5, label='Inferred source location')
@@ -220,9 +189,17 @@ axs2[0].set_ylim([0, 10])
 axs2[0].set_ylabel("Altitude (km)")
 axs2[0].legend()
 
-# Sensor Profile Plot
-final_guessed_state = create_state_with_tracer(guess_params[0], guess_params[1], guess_params[2])
-final_sim, _ = jax.lax.scan(fast_forward, final_guessed_state, jnp.arange(num_steps))
+# Sensor Profile Plot (Using the optimal_params found by the solver)
+final_guessed_state = create_state_with_tracer(optimal_params[0], optimal_params[1], optimal_params[2])
+
+# Fast forward to get the final recovered state
+@jax.jit
+def fast_fwd_eval(s):
+    def scan_fwd(state, _):
+        return stepper_fwd.step(state, 0.0, None, bc_fn), None
+    return jax.lax.scan(scan_fwd, s, jnp.arange(num_steps))[0]
+
+final_sim = fast_fwd_eval(final_guessed_state)
 recovered_sensor_profile = final_sim['q_tr'][sensor_idx_x, 1, :]
 
 axs2[1].plot(target_sensor_profile, grid.Z_m[sensor_idx_x, 1, :]/1000.0, 'k-', linewidth=3, label='True target profile')

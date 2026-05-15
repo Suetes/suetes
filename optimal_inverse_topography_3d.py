@@ -137,7 +137,7 @@ for i, A_step in enumerate(history_A):
     alpha = (i + 1) / len(history_A)
     plt.plot(x_1d, h, color='blue', alpha=alpha*0.5)
 
-# Plot the definitive BEST mountain in bold
+# Plot the best mountain in bold
 h_best = jnp.zeros_like(x_1d)
 for j in range(num_rbfs):
     h_best += best_A[j] * jnp.exp(-((x_1d*1000.0 - mu_rbf[j])**2) / (2 * sigma_rbf**2))
@@ -151,7 +151,7 @@ plt.legend()
 plt.savefig(f"{output_dir}/inverse_topography_evolution.png", dpi=150)
 print("Done! Check 'inverse_topography_evolution.png'.")
 
-# --- 5. VALIDATION: OPTIMAL VS. RANDOM DIRT ALLOCATIONS ---
+# --- 5. VALIDATION: OPTIMAL VS. RANDOM MOUNTAIN ALLOCATIONS ---
 print("\n[VALIDATION] Running forward simulations for comparison...")
 
 # 1. Gather the configurations to test
@@ -161,7 +161,7 @@ configs_to_test = []
 optimal_A = best_A 
 configs_to_test.append(("Optimal topography", optimal_A))
 
-# B. Generate 3 Random Configurations (strictly enforcing the 1500m budget)
+# B. Generate 3 Random Configurations (enforcing the 1500m budget)
 key = jax.random.PRNGKey(42)
 for i in range(1, 4):
     key, subkey = jax.random.split(key)
@@ -169,7 +169,7 @@ for i in range(1, 4):
     rand_A = total_dirt_budget * jax.nn.softmax(rand_z)
     configs_to_test.append((f"Random topography {i}", rand_A))
 
-# 2. Evaluation Wrapper (Eager execution, no JAX tracing needed here)
+# 2. Evaluation Wrapper 
 def evaluate_topography(A_params):
     def h_func(x, y):
         h = jnp.zeros_like(x)
@@ -201,7 +201,7 @@ def evaluate_topography(A_params):
 
     stepper = SISLStepper3D(physics, dt, use_checkpointing=False) 
 
-    # FIXED: Use the new BenchmarkXSponge here instead of mask_x
+    # Use the new BenchmarkXSponge instead of mask_x
     def bc_fn(state_in, forcing=None):
         ext_state = {
             'u': jnp.ones_like(state_in['u']) * u_bg,
