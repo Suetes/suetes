@@ -2,9 +2,9 @@
 Time Integration and Advection Module.
 
 Implements a Semi-Implicit Semi-Lagrangian (SISL) integration scheme. 
-This scheme bypasses the severe CFL restrictions of explicit Eulerian models by:
-1. Treating advection purely geometrically (tracing parcels backward in time).
-2. Treating stiff acoustic and gravity waves implicitly via a GMRES solver.
+This architecture bypasses the restrictive Eulerian CFL limit by treating 
+advection geometrically (trajectory tracing) and treating stiff acoustic 
+and gravity wave modes implicitly via a GMRES solver.
 """
 
 import jax
@@ -19,23 +19,40 @@ from suetes.regional3d.physics import SimpleMicrophysics
 
 class VerticalPreconditioner:
     r"""
-    Solves the 1D vertical Helmholtz equation to precondition the 3D implicit solver.
+    1D vertical Helmholtz equation solver for implicit preconditioning.
 
-    By analytically eliminating the horizontal wave propagation, we reduce the 
-    linearized acoustic system to a vertically implicit tridiagonal matrix:
+    By analytically eliminating the horizontal wave propagation, the linearized 
+    acoustic system is reduced to a vertically implicit tridiagonal matrix:
     
     $$ -\mathcal{L}_{\pi} P_{k-1} \pi'_{k-1} + (1 - \mathcal{L}_{\pi} P_k) \pi'_k - \mathcal{L}_{\pi} P_{k+1} \pi'_{k+1} = \text{RHS} $$
 
-    This provides an excellent initial guess for the GMRES solver, dramatically 
-    reducing the number of required iterations to resolve sound waves.
+    This exact vertical solve acts as a highly efficient preconditioner $M^{-1}$ 
+    for the 3D GMRES solver, drastically reducing the iterations required to 
+    resolve high-frequency sound waves.
     """
     def __init__(self, physics, dt, alpha=0.55):
+        """
+        Initializes the vertical preconditioner.
+
+        Args:
+            physics (Euler3D): The dynamical core physics configuration.
+            dt (float): Integration time step $\Delta t$ [s].
+            alpha (float, optional): Semi-implicit off-centering parameter. Defaults to 0.55.
+        """
         self.physics = physics
         self.dt = dt
         self.alpha = alpha
 
     def precompute_banded(self, bg):
-        """Derives the 1D vertical Helmholtz equation coefficients for pi'."""
+        r"""
+        Precomputes the 1D tridiagonal coefficients.
+
+        Derives the local coefficients for thermodynamic compressibility ($\mathcal{L}_\pi$) 
+        and acoustic wave speed ($P$) mapped to the staggered grid.
+
+        Args:
+            bg (dict): Precomputed hydrostatic background state metrics.
+        """
         dt, alpha, cp = self.dt, self.alpha, self.physics.c['cp']
         
         self.th_v_w = bg['th_v_w']
@@ -61,6 +78,15 @@ class VerticalPreconditioner:
         self.main  = 1.0 - self.lower - self.upper
 
     def __call__(self, rhs_scaled):
+        r"""
+        Executes the vertical tridiagonal solve.
+
+        Args:
+            rhs_scaled (dict): Scaled right-hand side vectors from the GMRES solver.
+
+        Returns:
+            dict: The preconditioned state vector $\mathbf{x} = M^{-1}\mathbf{b}$.
+        """
         # Unscale for physical math
         pi_scale = 100000.0
         rhs_pi_phys = rhs_scaled['pi'] / pi_scale
@@ -124,18 +150,37 @@ class SemiLagrangianAdvector3D:
     r"""
     Computes fluid parcel trajectories and interpolates scalar quantities.
 
-    The advection scheme traces the arrival point $\mathbf{x}_a$ backward in time 
-    to find the departure point $\mathbf{x}_d$:
+    The scheme traces the arrival point $\mathbf{x}_a$ backward in time to 
+    find the departure point $\mathbf{x}_d$ by iteratively solving:
     
     $$ \mathbf{x}_d = \mathbf{x}_a - \Delta t \, \mathbf{v}(\mathbf{x}_{mid}, t_{mid}) $$
-
-    This allows stable integration even when the Courant number $C = \frac{u \Delta t}{\Delta x} > 1$.
     """
     def __init__(self, grid, physics, dt):
+        """
+        Initializes the Semi-Lagrangian advector.
+
+        Args:
+            grid (RegionalGrid3D): Computational grid geometry.
+            physics (Euler3D): Dynamical core configuration.
+            dt (float): Integration time step $\Delta t$ [s].
+        """
         self.grid, self.physics, self.dt, self.op = grid, physics, dt, physics.op
 
     def _get_index_velocities(self, u_phys, v_phys, eta_dot, loc='m'):
-        """Returns velocities in units of [array indices / second]."""
+        """
+        Maps physical velocities to non-dimensional index crossing rates.
+
+        Returns velocities in units of [indices / second] scaled by local map factors.
+
+        Args:
+            u_phys (jnp.ndarray): Zonal velocity $u$ [m/s].
+            v_phys (jnp.ndarray): Meridional velocity $v$ [m/s].
+            eta_dot (jnp.ndarray): Vertical velocity in $\dot{\eta}$ coordinates [1/s].
+            loc (str): Target grid location ('m', 'u', 'v', 'w').
+
+        Returns:
+            tuple: $(u_i, v_i, w_i, m_factor)$.
+        """
         if loc == 'm':
             u_loc = self.op.avg(u_phys, axis=0, from_loc='u', to_loc='m')
             v_loc = self.op.avg(v_phys, axis=1, from_loc='v', to_loc='m')
@@ -164,7 +209,17 @@ class SemiLagrangianAdvector3D:
         return u_idx_sec, v_idx_sec, w_idx_sec
 
     def compute_departure_indices(self, state, loc='m', iterations=2):
-        """Iteratively solves the implicit trajectory equation for the departure point."""
+        r"""
+        Iteratively solves the implicit trajectory equation.
+
+        Args:
+            state (dict): Current prognostic state containing 3D winds.
+            loc (str): Grid staggering to target ('m', 'u', 'v', 'w').
+            iterations (int): Number of iterations for the midpoint trajectory solver.
+
+        Returns:
+            jnp.ndarray: Continuous departure point coordinates $\mathbf{x}_d$ [indices].
+        """
         u_idx_sec, v_idx_sec, w_idx_sec = self._get_index_velocities(state['u'], state['v'], state['eta_dot'], loc)
         
         nx, ny, nz = self.grid.nx, self.grid.ny, self.grid.nz
@@ -197,29 +252,50 @@ class SemiLagrangianAdvector3D:
         return jnp.stack([Xi_idx - alpha_x, Yi_idx - alpha_y, Zi_idx - alpha_z], axis=0)
 
     def advect_linear(self, field, coords):
-        """Trilinear interpolation. No limiter needed."""
+        """
+        Evaluates a trilinear interpolation at continuous coordinates.
+        Used primarily within the iterative trajectory solver.
+        """
         return jnd.map_coordinates(field, coords, order=1, mode='nearest')
 
     def advect_cubic(self, field, coords, use_limiter=False):
-        """Tricubic interpolation, used ONLY for final dynamics."""
+        """
+        Evaluates a tricubic interpolation at continuous coordinates.
+        Used for the final high-order advection of prognostic fields.
+        """
         return tensor_product_interp_3d(field, coords, use_limiter=use_limiter)
 
 
 class SemiImplicitSolver3D:
     r"""
-    Solves the linear acoustic and gravity wave matrix system $\mathcal{A}\mathbf{x} = \mathbf{b}$.
+    GMRES solver for the linear acoustic and gravity wave matrix system $\mathcal{A}\mathbf{x} = \mathbf{b}$.
 
-    Uses the Generalized Minimal Residual Method (GMRES) combined with the 
-    `VerticalPreconditioner` to solve for the implicit adjustments needed to 
-    stabilize high-frequency waves.
+    Couples the 3D linear operator $\mathcal{L}(\mathbf{x})$ with the 
+    `VerticalPreconditioner` to solve for the implicit stabilizing adjustments.
     """
     def __init__(self, physics, dt):
+        """
+        Initializes the implicit solver.
+
+        Args:
+            physics (Euler3D): The dynamical core linear operator definition.
+            dt (float): Integration time step $\Delta t$ [s].
+        """
         self.physics = physics
         self.dt = dt
         self.pi_scale = 100000.0
 
     def solve(self, rhs_prime, bg_precomputed):
-        # rhs_prime['eta_dot'] is R_eta_dot, which is already a velocity [m/s]
+        r"""
+        Solves the implicit system $\mathcal{A}\mathbf{x} = \mathbf{b}$ using preconditioned GMRES.
+
+        Args:
+            rhs_prime (dict): The linear residual (forcing terms) from the explicit step.
+            bg_precomputed (dict): Precomputed hydrostatic background state metrics.
+
+        Returns:
+            dict: The implicit correction vector $\mathbf{x}$.
+        """
         rhs_scaled = {k: rhs_prime[k] * self.pi_scale if k == 'pi' else rhs_prime[k] for k in rhs_prime}
 
         # Setup preconditioner
@@ -228,9 +304,19 @@ class SemiImplicitSolver3D:
         preconditioner.precompute_banded(bg_precomputed)  
 
         def M_fn(state_scaled):
-            return preconditioner(state_scaled)       # Fast solve inside GMRES
+            r"""
+            The Preconditioner application $M^{-1}\mathbf{b}$.
+
+            This applies the fast vertical Helmholtz solver locally to each grid column.
+            """
+            return preconditioner(state_scaled)
 
         def A_fn(state_scaled):
+            r"""
+            The Linear Operator application $\mathcal{A}\mathbf{x}$.
+
+            This computes the residual from the full 3D dynamical equations.
+            """
             state_prime = {
                 'u': state_scaled['u'], 
                 'v': state_scaled['v'], 
@@ -262,23 +348,38 @@ class SemiImplicitSolver3D:
 
 class FluxFormAdvector:
     r"""
-    Implements a Flux-Form Semi-Lagrangian (FFSL) scheme.
+    Implements a Flux-Form Semi-Lagrangian (FFSL) advection scheme.
 
-    Standard Semi-Lagrangian advection is not strictly conservative. The FFSL scheme 
-    ensures global mass conservation by advecting volumetric density exactly:
+    Standard Semi-Lagrangian advection does not strictly conserve mass. 
+    The FFSL scheme advects volumetric density exactly by integrating the 
+    cumulative mass function across the continuous departure points:
     
     $$ \frac{\partial \rho}{\partial t} + \nabla \cdot (\rho \mathbf{v}) = 0 $$
     """
     def __init__(self, grid, dt):
+        """
+        Initializes the FFSL advector.
+
+        Args:
+            grid (RegionalGrid3D): Computational grid geometry.
+            dt (float): Integration time step $\Delta t$ [s].
+        """
         self.grid = grid
         self.dt = dt
 
     def advect_1d(self, scalar_1d, cfl_inter_1d):
         r"""
-        Advects a 1D scalar using interface Courant numbers.
+        Advects a 1D scalar column using interface Courant numbers.
 
-        The algorithm calculates the departure indices $\xi_i = i - \Delta t \cdot v_i$
-        and interpolates the cumulative mass function $M$ back to the departure points.
+        Computes the exact mass flux across cell boundaries by mapping 
+        the discrete cumulative mass to the continuous departure locations.
+        
+        Args:
+            scalar_1d (jnp.ndarray): 1D array representing the mass or tracer in each grid cell.
+            cfl_inter_1d (jnp.ndarray): Interface Courant numbers for each cell face.
+
+        Returns:
+            jnp.ndarray: The updated 1D array after advection.
         """
         N = scalar_1d.shape[0]
         
@@ -297,15 +398,17 @@ class FluxFormAdvector:
 
     def advect_3d_split(self, field, state, bg_precomputed):
         r"""
-        Split-step advection in x, y, then z.
+        Performs a 3D directional-split advection sequence.
 
+        Evaluates the 1D advection sequentially in the $x$, $y$, and $z$ directions.
+        
         Args:
-            field (jnp.ndarray): Volumetric field to advect (e.g., density or tracer).
-            state (dict): Model state containing $u, v, \eta_{\dot{t}}$.
-            bg_precomputed (dict): Precomputed background state for metrics.
+            field (jnp.ndarray): Volumetric density field to advect.
+            state (dict): Current dynamic state ($u, v, \eta_{\dot{t}}$).
+            bg_precomputed (dict): Precomputed metrics for cell volumes.
         
         Returns:
-            jnp.ndarray: The advected field.
+            jnp.ndarray: The advected and strictly conserved density field.
         """
         # Calculate true Courant numbers (index crossing rates)
         m_u = self.grid.m_factors['u'][..., None]
@@ -342,18 +445,26 @@ class FluxFormAdvector:
 
 
 class SISLStepper3D:
-    """
-    Coordinates the full SISL integration cycle.
+    r"""
+    Coordinates the complete Semi-Implicit Semi-Lagrangian (SISL) integration cycle.
     
-    Flow:
-    1. Departure point calculation.
-    2. Explicit physics and nonlinear dynamics.
-    3. Semi-Lagrangian Advection.
-    4. Implicit GMRES solve for stiff waves.
-    5. Divergence damping and state assembly.
-    6. Boundary conditions blending.
+    Integration flow:
+    1. Trajectory calculation (compute $\mathbf{x}_d$).
+    2. Evaluate explicit physics and non-linear advection.
+    3. Implicit GMRES solve for stiff wave modes.
+    4. State assembly and a-posteriori divergence damping.
+    5. Boundary condition blending and thermodynamic reconciliation.
     """
     def __init__(self, physics, dt, use_checkpointing = False):
+        r"""
+        Initializes the integration stepper.
+
+        Args:
+            physics (Euler3D): The dynamical core configuration.
+            dt (float): Integration time step $\Delta t$ [s].
+            use_checkpointing (bool): Enables JAX gradient checkpointing (rematerialization) 
+                to trade re-computation for memory savings during adjoint/autodiff tasks.
+        """
         self.physics, self.dt = physics, dt
         self.advector = SemiLagrangianAdvector3D(physics.grid, physics, dt)
         self.ffsl_advector = FluxFormAdvector(physics.grid, dt)
@@ -364,7 +475,21 @@ class SISLStepper3D:
         self.tracer_keys = self.physics.physics_suite.tracer_keys if self.physics.physics_suite is not None else []
 
     def integrate(self, state, t_start, num_steps, forcing, bc_fn):
-        """Wraps the step function in a JAX scan loop for fast execution."""
+        """
+        Executes the primary time integration loop using `jax.lax.scan`.
+        
+        Compiles the entire step sequence into a single, highly optimized XLA graph.
+        
+        Args:
+            state (dict): Initial state of the atmosphere.
+            t_start (float): Initial time.
+            num_steps (int): Number of time steps to integrate.
+            forcing (callable): Function providing external forcing fields.
+            bc_fn (callable): Function applying boundary conditions.
+            
+        Returns:
+            dict: Final state of the atmosphere after `num_steps`.
+        """
         def scan_fn(curr_state, step_idx):
             t_curr = t_start + step_idx * self.dt
             next_state = self.step(curr_state, t_curr, forcing, bc_fn)
@@ -375,13 +500,24 @@ class SISLStepper3D:
 
     def step(self, state, t, forcing, bc_fn):
         r"""
-        Single SISL time step.
+        Executes a single SISL time step.
 
-        Performs the full cycle: advection -> explicit physics -> implicit correction.
+        The core discrete equation represents an implicit discretization of the 
+        momentum and continuity equations:
 
-        The core equation is an implicit discretization of the horizontal momentum and 2D divergence equations:
+        $$ \begin{cases} 
+        \frac{\pi^{n+1} - \pi_d}{\Delta t} + \alpha \mathcal{T}_\pi^{n+1} = (1-\alpha)\mathcal{T}_\pi^n \\ 
+        \frac{\mathbf{u}^{n+1} - \mathbf{u}_d}{\Delta t} + \alpha \mathcal{T}_\mathbf{u}^{n+1} = (1-\alpha)\mathcal{T}_\mathbf{u}^n 
+        \end{cases} $$
 
-        $$ \begin{cases} \frac{\pi^* - \pi}{\Delta t} + \nabla \cdot (\pi^* \mathbf{v}^n) = -\mathcal{L}_{z} \frac{w^{n+1/2}}{2} + \dots \\ \frac{w^{n+1/2} - w^{n-1/2}}{\Delta t} + \frac{\pi^n}{\pi^0} \nabla_h \cdot (\mathbf{u}^{n+1/2}) = \mathcal{L}_{w} \end{cases} $$
+        Args:
+            state (dict): Current prognostic state.
+            t (float): Current simulation time [s].
+            forcing (dict): External forcing conditions.
+            bc_fn (callable): Boundary condition blending operator.
+
+        Returns:
+            dict: The updated prognostic state at $t + \Delta t$.
         """
 
         alpha = 0.55

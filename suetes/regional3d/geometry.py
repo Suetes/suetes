@@ -12,20 +12,19 @@ import jax.numpy as jnp
 
 class ObliqueStereographic:
     """
-    Defines an Oblique Stereographic projection for regional domains.
-
-    This projection is conformal, meaning it preserves local angles and shapes,
-    which is highly desirable for fluid dynamics as the map factors are isotropic
-    (i.e., $m_x = m_y = m$).
+    Oblique Stereographic conformal projection.
+    
+    Preserves isotropy ($m_x = m_y = m$) across the regional domain, yielding 
+    a uniform map factor for the horizontal momentum equations.
     """
     def __init__(self, lat_center, lon_center, R_earth=6371229.0):
         r"""
         Initializes the projection around a central tangent point.
 
         Args:
-            lat_center (float): Central latitude $\phi_c$ in degrees.
-            lon_center (float): Central longitude $\lambda_c$ in degrees.
-            R_earth (float, optional): Radius of the Earth in meters. Defaults to 6371229.0.
+            lat_center (float): Central latitude $\phi_c$ [deg].
+            lon_center (float): Central longitude $\lambda_c$ [deg].
+            R_earth (float, optional): Radius of the Earth $R$ [m]. Defaults to 6371229.0.
         """
         self.phi_c = jnp.radians(lat_center)
         self.lam_c = jnp.radians(lon_center)
@@ -125,29 +124,33 @@ class ObliqueStereographic:
 
 class RegionalGrid3D:
     r"""
-    Constructs the 3D staggered computational grid and physical metric tensors.
+    3D computational grid and metric tensor constructor.
 
-    This class defines an Arakawa C-grid in the horizontal and a Lorenz staggering 
-    in the vertical. It maps the logical Cartesian coordinates $(\xi, \eta, \zeta)$ 
-    to the physical coordinates $(x, y, z)$ using a user-specified terrain-following 
-    transformation.
+    Implements an Arakawa C-grid horizontally and Lorenz staggering vertically.
+    Logical coordinates $(\xi, \eta, \zeta)$ are mapped to physical coordinates 
+    $(x, y, z)$ via a terrain-following transformation $z = z(\xi, \eta, \zeta)$.
+
+    Discrete topological spaces:
+    - Mass points (`m`): $(i, j, k)$
+    - U points (`u`): $(i\pm 1/2, j, k)$
+    - V points (`v`): $(i, j\pm 1/2, k)$
+    - W points (`w`): $(i, j, k\pm 1/2)$
     """
     def __init__(self, nx, ny, nz, dx, dy, dz, lat_center, lon_center, h_func=None, transform=None):
         r"""
         Initializes the grid geometry, map factors, Coriolis parameters, and metric tensors.
 
         Args:
-            nx (int): Number of mass cells in the x-direction.
-            ny (int): Number of mass cells in the y-direction.
-            nz (int): Number of mass cells in the z-direction.
-            dx (float): Grid spacing in the x-direction [m].
-            dy (float): Grid spacing in the y-direction [m].
-            dz (float): Nominal grid spacing in the z-direction [m].
-            lat_center (float): Central latitude of the domain [deg].
-            lon_center (float): Central longitude of the domain [deg].
-            h_func (callable, optional): A function $h(\xi, \eta)$ providing the surface elevation. 
-                Defaults to a flat surface.
-            transform (callable, optional): The terrain-following coordinate transformation. 
+            nx (int): Number of internal mass points in $\xi$.
+            ny (int): Number of internal mass points in $\eta$.
+            nz (int): Number of internal mass points in $\zeta$.
+            dx (float): Logical grid spacing $\Delta x$ [m].
+            dy (float): Logical grid spacing $\Delta y$ [m].
+            dz (float): Nominal logical grid spacing $\Delta z$ [m].
+            lat_center (float): Central latitude $\phi_c$ [deg].
+            lon_center (float): Central longitude $\lambda_c$ [deg].
+            h_func (callable, optional): Surface topography function $h(\xi, \eta)$.
+            transform (callable, optional): Vertical coordinate transform operator. 
                 Defaults to `GalChenSigma`.
 
         Raises:
@@ -263,15 +266,21 @@ class RegionalGrid3D:
 
     def interp_to_height(self, field_3d, Z_3d, target_z):
         r"""
-        Interpolates a 3D field onto a constant geometric height surface (Z).
+        Interpolates a computational 3D field onto a constant geometric height surface.
+
+        Performs independent 1D linear interpolations along the vertical axis for 
+        each $(\xi, \eta)$ column:
+        
+        $$ f_{2D}(x, y) = \text{interp}(f_{3D}(x, y, z), z, z_{target}) $$
 
         Args:
-            field_3d (jnp.ndarray): The 3D data array to interpolate.
-            Z_3d (jnp.ndarray): The 3D geometric height array.
-            target_z (float): The desired geometric altitude in meters.
+            field_3d (jnp.ndarray): 3D source field on the computational grid.
+            Z_3d (jnp.ndarray): Physical altitude array $z(\xi, \eta, \zeta)$ [m].
+            target_z (float): Target geometric altitude $z_{target}$ [m].
 
         Returns:
-            jnp.ndarray: A 2D slice at `target_z`, with np.nan for subterranean points.
+            jnp.ndarray: 2D horizontal slice at $z = z_{target}$. Values below 
+            the local topography $h(\xi, \eta)$ evaluate to `np.nan`.
         """
         # left=jnp.nan automatically masks out the topography!
         interp_1d = lambda z_col, f_col: jnp.interp(target_z, z_col, f_col, left=jnp.nan, right=jnp.nan)

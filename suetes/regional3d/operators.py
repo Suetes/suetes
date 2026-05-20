@@ -1,8 +1,8 @@
 """
 Discrete Spatial Operators Module.
 
-Contains the finite-difference stencils, spatial averaging routines, and 
-high-order interpolators required for integrating PDEs on an Arakawa C-grid.
+Provides finite-difference stencils, spatial averaging operators, and 
+high-order interpolators for integrating PDEs on an Arakawa C-grid.
 """
 
 import jax.numpy as jnp
@@ -10,8 +10,7 @@ import jax.scipy.ndimage as jnd
 
 class CGridOperator3D:
     """
-    Provides discrete derivative and averaging operators tailored to the 
-    staggered locations of the Arakawa C-grid.
+    Finite-difference and averaging operators for staggered C-grid variables.
     """
     def __init__(self, grid):
         """
@@ -42,16 +41,15 @@ class CGridOperator3D:
 
     def diff(self, f, axis, from_loc, to_loc):
         r"""
-        Computes the spatial derivative of a field across a staggered boundary, 
-        incorporating the local map factor.
+        Computes the discrete spatial derivative across a staggered boundary.
 
-        For example, computing the $x$-derivative of a field $\pi$ defined at 
-        mass points ($m$) onto the $u$-velocity faces:
+        Incorporates the local map factor $m$ when differentiating along horizontal axes. 
+        For example, a derivative along the $x$-axis from a mass point to a $u$ face is:
 
-        $$ \left( \frac{\partial \pi}{\partial x} \right)_u \approx m_u \frac{\pi_{i} - \pi_{i-1}}{\Delta x} $$
+        $$ \delta_x f = m_u \frac{f_{i} - f_{i-1}}{\Delta x} $$
 
         Args:
-            f (jnp.ndarray): The input field.
+            f (jnp.ndarray): The input field array.
             axis (int): The axis of differentiation (0 for x, 1 for y, 2 for z).
             from_loc (str): Original grid staggering ('m', 'u', 'v', 'w').
             to_loc (str): Target grid staggering ('m', 'u', 'v', 'w').
@@ -71,13 +69,13 @@ class CGridOperator3D:
         r"""
         Computes the 2-point spatial average to translate fields between staggerings.
 
-        $$ \bar{f}^x \approx \frac{1}{2}(f_{i+1/2} + f_{i-1/2}) $$
+        $$ \overline{f}^x = \frac{1}{2}(f_{i} + f_{i-1}) $$
 
         Args:
-            f (jnp.ndarray): The input field.
+            f (jnp.ndarray): The input field array.
             axis (int): The axis of averaging (0 for x, 1 for y, 2 for z).
-            from_loc (str): Original grid staggering.
-            to_loc (str): Target grid staggering.
+            from_loc (str): Original grid staggering ('m', 'u', 'v', 'w').
+            to_loc (str): Target grid staggering ('m', 'u', 'v', 'w').
 
         Returns:
             jnp.ndarray: The averaged field mapped to `to_loc`.
@@ -89,27 +87,35 @@ class CGridOperator3D:
 
 def cubic_weight(p0, p1, p2, p3, t):
     r"""
-    Evaluates a 1D cubic spline interpolant.
+    Evaluates a 1D cubic spline interpolant using 4 grid points.
 
-    $$ f(t) = \left(-\frac{1}{2}p_0 + \frac{3}{2}p_1 - \frac{3}{2}p_2 + \frac{1}{2}p_3\right)t^3 + \dots $$
+    $$ f(t) = \left(-\frac{1}{2}p_0 + \frac{3}{2}p_1 - \frac{3}{2}p_2 + \frac{1}{2}p_3\right)t^3 + \left(p_0 - \frac{5}{2}p_1 + 2p_2 - \frac{1}{2}p_3\right)t^2 + \left(-\frac{1}{2}p_0 + \frac{1}{2}p_2\right)t + p_1 $$
+
+    where $t \in [0, 1]$ is the fractional distance between the central nodes $p_1$ and $p_2$.
     """
     return (-0.5*p0 + 1.5*p1 - 1.5*p2 + 0.5*p3) * t**3 + \
            (p0 - 2.5*p1 + 2.0*p2 - 0.5*p3) * t**2 + \
            (-0.5*p0 + 0.5*p2) * t + p1
 
 def tensor_product_interp_3d(field, coords, use_limiter=False):
-    """
-    Performs 3D tricubic interpolation using a 64-point local stencil.
+    r"""
+    Evaluates a 3D tricubic interpolation using a 64-point local stencil.
+
+    Used primarily in the Semi-Lagrangian scheme to evaluate fields at the continuous 
+    departure point $\mathbf{x}_d$.
+
+    If `use_limiter` is True, applies a quasi-monotone limiter that bounds the 
+    interpolated value by the extrema of the immediate 8-point cubic neighborhood 
+    to prevent unphysical overshoots (e.g., negative mass or water vapor):
     
-    Crucial for the Semi-Lagrangian advection scheme to evaluate the field value 
-    at continuous departure points $\mathbf{x}_d$ without excessive numerical damping.
+    $$ \min(f_{nb}) \le f(\mathbf{x}_d) \le \max(f_{nb}) $$
+    
+    where $f_{nb}$ are the values at the 8 surrounding discrete grid points.
 
     Args:
         field (jnp.ndarray): The 3D data grid to interpolate from.
         coords (tuple): A tuple $(x, y, z)$ of fractional continuous indices.
-        use_limiter (bool): If True, applies a quasi-monotone limiter bounding 
-            the interpolated value by its immediate 8-point neighborhood to 
-            prevent unphysical extrema (e.g., negative water vapor).
+        use_limiter (bool): Whether to apply the bounding limiter. Defaults to False.
             
     Returns:
         jnp.ndarray: The interpolated values.
