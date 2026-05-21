@@ -30,7 +30,8 @@ class Euler3D:
     """
     def __init__(self, grid, operators, constants, dt, initial_era5_state=None, 
                  N_bv=0.01, damp_height=20000.0, max_damp=0.5, 
-                 nu_div_factor=0.8, nu_h_factor=0.1, physics_suite=None):
+                 nu_div_factor=0.8, nu_h_factor=0.1, physics_suite=None,
+                 interior_mask=None):
         """
         Initializes the dynamical core, calculating explicit diffusion limits 
         and building the 1D thermodynamic reference state.
@@ -48,6 +49,10 @@ class Euler3D:
             nu_div_factor (float): Divergence damping scale factor (0.0 to 1.0).
             nu_h_factor (float): Hyperdiffusion scale factor (0.0 to 1.0).
             physics_suite (PhysicsSuite, optional): Configured subgrid physics.
+            interior_mask (dict, optional): Per-field masks in [0, 1] keyed by
+                'u', 'v', 'w', 'th_v'. When set, the physics-suite tendencies
+                are multiplied by these before being added to the dynamical
+                RHS, which switches physics off inside the Davies sponge zone.
         """
         self.grid = grid
         self.op = operators
@@ -64,6 +69,7 @@ class Euler3D:
         
         # Physics suite injection
         self.physics_suite = physics_suite
+        self.interior_mask = interior_mask
 
         # Use physical 3D height (Z_m)
         Z_m = self.grid.Z_m
@@ -240,7 +246,9 @@ Returns:
 
             # Call physics suite
             if self.physics_suite is not None:
-                phys_tends = self.physics_suite.get_explicit_tendencies(state_prime, bg)
+                phys_tends = self.physics_suite.get_explicit_tendencies(
+                    state_prime, bg, interior_mask=self.interior_mask,
+                )
 
                 # Add them to the dynamical core's right-hand side
                 for k in phys_tends:
