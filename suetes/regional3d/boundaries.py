@@ -99,6 +99,30 @@ class DaviesSponge:
             'north': jnp.expand_dims(jnp.expand_dims(weight_north, axis=-1), axis=0)
         }
 
+    def get_interior_mask(self):
+        """
+        Builds interior masks for u, v, w, th_v from the sponge masks.
+        Physics tendencies are multiplied by this mask to shut them off inside the sponge.
+        """
+        mask = {}
+        for loc in ('u', 'v', 'm'):
+            masks_loc = self.masks[loc]
+            combined = jnp.maximum(
+                jnp.maximum(masks_loc['west'], masks_loc['east']),
+                jnp.maximum(masks_loc['south'], masks_loc['north']),
+            )
+            interior = 1.0 - combined
+            
+            if loc == 'u':
+                mask['u'] = interior
+            elif loc == 'v':
+                mask['v'] = interior
+            else:
+                mask['th_v'] = interior
+                mask['w'] = interior
+                
+        return mask
+
     def blend(self, intermediate_state, external_state):
         r"""
         Blends the internally integrated state with the external boundary forcing.

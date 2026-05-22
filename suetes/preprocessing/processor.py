@@ -8,6 +8,7 @@ surface variables onto the bottom of the upper-air pressure levels.
 import xarray as xr
 import numpy as np
 import jax.numpy as jnp
+from scipy.ndimage import uniform_filter
 
 class ERA5Processor:
     """
@@ -28,7 +29,7 @@ class ERA5Processor:
         self.ds_pl = xr.open_dataset(pl_path)
         self.ds_sl = xr.open_dataset(sl_path)
 
-    def get_stitched_state(self, time_idx=0):
+    def get_stitched_state(self, time_idx=0, coarsen_window=None):
         """
         Extracts arrays, broadcasts pressure, and stitches the surface 
         to the bottom of the pressure levels for a given timestep.
@@ -95,4 +96,18 @@ class ERA5Processor:
             'longitude': pl['longitude'].values
         }
         
+        if coarsen_window is not None and coarsen_window > 1:
+            coarsened_state = {}
+            for key, val in stitched_state.items():
+                if key in ('latitude', 'longitude'):
+                    coarsened_state[key] = val
+                    continue
+                arr = np.asarray(val)
+                if arr.ndim == 2:
+                    arr = uniform_filter(arr, size=coarsen_window, mode='nearest')
+                elif arr.ndim == 3:
+                    arr = uniform_filter(arr, size=(1, coarsen_window, coarsen_window), mode='nearest')
+                coarsened_state[key] = jnp.asarray(arr)
+            return coarsened_state
+            
         return stitched_state

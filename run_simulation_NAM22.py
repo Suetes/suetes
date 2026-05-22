@@ -8,28 +8,15 @@ outbreak.
 ERA5 is box-averaged to ~84 km effective resolution before driving
 Suetes, giving a 3.8:1 downscaling ratio rather than the
 near-identity 28 km to 22 km of raw ERA5.
-
-Comparison plots use native ERA5 (not the coarsened driver) so that
-the downscaling skill is visible: Suetes should recover structure that
-is in native ERA5 but absent in the coarsened driver.
-
-Physics is masked off in the Davies sponge zone via the `interior_mask`
-mechanism: drag, vertical diffusion, and Newtonian nudging act only on
-interior cells, leaving the sponge to enforce LBC consistency without
-fighting the physics tendencies.
 """
 
 import os
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 
-import pickle
 import time
-
 import jax
 import jax.numpy as jnp
 import numpy as np
-
-from scipy.ndimage import uniform_filter
 
 from suetes.preprocessing.era5downloader import ERA5Manager
 from suetes.preprocessing.processor import ERA5Processor
@@ -49,77 +36,15 @@ from suetes.regional3d.physics import (
     McFarlaneVerticalDiffusion, McFarlaneSurfaceDrag,
     NewtonianRelaxation,
 )
-
 from suetes.vis.visualizer import Visualizer
 
-
 DATA_DIR = "suetes/data"
-
-
-def coarsen_state(state, window=3):
-    """Box-average a raw ERA5 stitched state in the horizontal (lat, lon) plane."""
-    new_state = {}
-    for key, val in state.items():
-        if key in ('latitude', 'longitude'):
-            new_state[key] = val
-            continue
-        arr = np.asarray(val)
-        if arr.ndim == 2:
-            arr = uniform_filter(arr, size=window, mode='nearest')
-        elif arr.ndim == 3:
-            arr = uniform_filter(arr, size=(1, window, window), mode='nearest')
-        new_state[key] = jnp.asarray(arr)
-    return new_state
-
-
-def build_interior_mask(sponge):
-    """Build interior masks for u, v, w, th_v from a DaviesSponge."""
-    mask = {}
-    for loc in ('u', 'v', 'm'):
-        masks = sponge.masks[loc]
-        combined = jnp.maximum(
-            jnp.maximum(masks['west'], masks['east']),
-            jnp.maximum(masks['south'], masks['north']),
-        )
-        interior = 1.0 - combined
-        if loc == 'u':
-            mask['u'] = interior
-        elif loc == 'v':
-            mask['v'] = interior
-        else:
-            mask['th_v'] = interior
-            mask['w'] = interior
-    return mask
-
-
-def _bc_cache_path(cache_dir, prefix, num_states, coarsen_window, sponge_depth,
-                   smooth_sigma, kind):
-    tag = (f"{prefix}_n{num_states}_cw{coarsen_window}"
-           f"_sd{sponge_depth}_ss{smooth_sigma:.1f}_{kind}")
-    return os.path.join(cache_dir, f"{tag}_bc_states.pkl")
-
-
-def save_bc_cache(path, suetes_bc_states):
-    payload = [
-        {k: np.asarray(v) for k, v in state.items()}
-        for state in suetes_bc_states
-    ]
-    with open(path, 'wb') as f:
-        pickle.dump(payload, f, protocol=pickle.HIGHEST_PROTOCOL)
-
-
-def load_bc_cache(path):
-    with open(path, 'rb') as f:
-        payload = pickle.load(f)
-    return [{k: jnp.asarray(v) for k, v in state.items()} for state in payload]
-
 
 def main():
     ACTIVE_DOMAIN = "nam22"
     RUN_NAME = f"{ACTIVE_DOMAIN}_NAM22_july2025"
 
     lat_c, lon_c = 47.5, -97.0
-
     output_dir = "suetes/plots"
     os.makedirs(output_dir, exist_ok=True)
 
@@ -131,7 +56,6 @@ def main():
 
     dt = 120.0
     sim_hours = 42
-
     sim_time_seconds = sim_hours * 3600.0
     num_era5_states = int(sim_hours) + 1
 
@@ -151,14 +75,10 @@ def main():
 
     print(f"[CONFIG] Domain: {ACTIVE_DOMAIN.upper()} (CORDEX NAM-22)")
     print(f"[CONFIG] Center: ({lat_c}N, {lon_c}E)")
-    print(f"[CONFIG] Grid: {nx}x{ny}x{nz} at dx={dx/1000:.0f} km, "
-          f"dz={dz:.0f} m -> {nx*dx/1000:.0f} x {ny*dy/1000:.0f} km")
-    print(f"[CONFIG] Period: {YEAR}-{MONTH}-{DAYS[0]} to "
-          f"{YEAR}-{MONTH}-{DAYS[-1]} ({sim_hours} h)")
+    print(f"[CONFIG] Grid: {nx}x{ny}x{nz} at dx={dx/1000:.0f} km")
 
     print(f"[DATA] Validating ERA5 forcing files...")
     manager = ERA5Manager(data_dir=DATA_DIR, pressure_levels='buffered')
-
     cache_prefix = f"{ACTIVE_DOMAIN}_{YEAR}{MONTH}{DAYS[0]}_Nx{nx}_Ny{ny}_dx{int(dx)}"
 
     sl_file, pl_file = manager.download_regional_subset(
@@ -166,8 +86,7 @@ def main():
         area=dynamic_bbox, prefix=cache_prefix,
     )
 
-    print(f"[GEOMETRY] Building {nx}x{ny}x{nz} terrain-following mesh "
-          f"(dx={dx/1000} km)")
+    print(f"[GEOMETRY] Building {nx}x{ny}x{nz} terrain-following mesh")
     base_grid = RegionalGrid3D(nx, ny, nz, dx, dy, dz, lat_c, lon_c)
 
     topo_proc = TopographyProcessor(
@@ -177,72 +96,49 @@ def main():
     h_func = topo_proc.process_and_blend(
         base_grid, sponge_depth=sponge_depth, smooth_sigma=smooth_sigma,
     )
-    sleve_transform = SleveSimple(scale_s=10000.0, n=1.0)
     grid = RegionalGrid3D(
         nx, ny, nz, dx, dy, dz, lat_c, lon_c,
-        h_func=h_func, transform=sleve_transform,
+        h_func=h_func, transform=SleveSimple(scale_s=10000.0, n=1.0),
     )
 
-    bc_cache_path_coarse = _bc_cache_path(
-        DATA_DIR, cache_prefix, num_era5_states, coarsen_window,
-        sponge_depth, smooth_sigma, kind='coarse',
-    )
-    bc_cache_path_native = _bc_cache_path(
-        DATA_DIR, cache_prefix, num_era5_states, coarsen_window,
-        sponge_depth, smooth_sigma, kind='native',
-    )
-
+    # ---------------------------------------------------------
+    # 1. SETUP PROCESSORS & STATIC FIELDS
+    # ---------------------------------------------------------
     era5_proc = ERA5Processor(pl_path=pl_file, sl_path=sl_file)
     raw_t0 = era5_proc.get_stitched_state(time_idx=0)
-
-    bridge = BoundaryProcessor(
-        grid, raw_t0['latitude'], raw_t0['longitude'], constants,
-    )
+    bridge = BoundaryProcessor(grid, raw_t0['latitude'], raw_t0['longitude'], constants)
+    
     static_fields = bridge.process_static(raw_t0)
     land_fraction = static_fields['land_fraction']
 
-    if os.path.exists(bc_cache_path_coarse):
-        print(f"[BOUNDARY] Loading cached coarsened BC states from "
-              f"{bc_cache_path_coarse}")
-        suetes_bc_states = load_bc_cache(bc_cache_path_coarse)
-    else:
-        print(f"[BOUNDARY] Building coarsened-driver BC states "
-              f"({sim_hours} h)...")
-        suetes_bc_states = []
-        for i in range(num_era5_states):
-            if i % 6 == 0:
-                print(f"[BOUNDARY] -> Regridding coarsened ERA5 for T={i}h")
-            raw_state = era5_proc.get_stitched_state(time_idx=i)
-            raw_state = coarsen_state(raw_state, window=coarsen_window)
-            bc_state = bridge.process(raw_state)
-            suetes_bc_states.append(bc_state)
+    # ---------------------------------------------------------
+    # 2. AUTOMATED BOUNDARY CACHING & LOAD
+    # ---------------------------------------------------------
+    bc_cache_path_coarse = os.path.join(DATA_DIR, f"{cache_prefix}_cw{coarsen_window}_coarse.pkl")
+    bc_cache_path_native = os.path.join(DATA_DIR, f"{cache_prefix}_native.pkl")
 
-        print(f"[BOUNDARY] Caching coarsened BC states to "
-              f"{bc_cache_path_coarse}")
-        save_bc_cache(bc_cache_path_coarse, suetes_bc_states)
+    print(f"[BOUNDARY] Preparing coarsened driver BC states...")
+    suetes_bc_states = bridge.build_or_load_timeseries(
+        era5_proc=era5_proc,
+        num_states=num_era5_states,
+        cache_path=bc_cache_path_coarse,
+        coarsen_window=coarsen_window
+    )
 
-    if os.path.exists(bc_cache_path_native):
-        print(f"[BOUNDARY] Loading cached native BC states from "
-              f"{bc_cache_path_native}")
-        suetes_bc_states_native = load_bc_cache(bc_cache_path_native)
-    else:
-        print(f"[BOUNDARY] Building native-resolution reference BC states "
-              f"({sim_hours} h)...")
-        suetes_bc_states_native = []
-        for i in range(num_era5_states):
-            if i % 6 == 0:
-                print(f"[BOUNDARY] -> Regridding native ERA5 for T={i}h")
-            raw_state = era5_proc.get_stitched_state(time_idx=i)
-            bc_state = bridge.process(raw_state)
-            suetes_bc_states_native.append(bc_state)
-
-        print(f"[BOUNDARY] Caching native BC states to "
-              f"{bc_cache_path_native}")
-        save_bc_cache(bc_cache_path_native, suetes_bc_states_native)
+    print(f"[BOUNDARY] Preparing native reference BC states...")
+    suetes_bc_states_native = bridge.build_or_load_timeseries(
+        era5_proc=era5_proc,
+        num_states=num_era5_states,
+        cache_path=bc_cache_path_native,
+        coarsen_window=None
+    )
 
     times_sec = [float(i * 3600.0) for i in range(num_era5_states)]
     time_manager = TimeManager(suetes_bc_states, times_sec, grid)
 
+    # ---------------------------------------------------------
+    # 3. INITIAL STATE SETUP
+    # ---------------------------------------------------------
     initial_state = dict(suetes_bc_states[0])
 
     if USE_MOISTURE:
@@ -261,20 +157,20 @@ def main():
     z0_ocean, z0_land = 1e-4, 0.1
     epsilon_ocean, epsilon_land = 0.3, 0.0
     z_0_field = land_fraction * z0_land + (1.0 - land_fraction) * z0_ocean
-    epsilon_field = (
-        land_fraction * epsilon_land
-        + (1.0 - land_fraction) * epsilon_ocean
-    )
+    epsilon_field = land_fraction * epsilon_land + (1.0 - land_fraction) * epsilon_ocean
 
+    # ---------------------------------------------------------
+    # 4. DYNAMICS & SPONGE
+    # ---------------------------------------------------------
     print(f"[DYNAMICS] Initializing dynamical core")
     operators = CGridOperator3D(grid)
+    
     sponge = DaviesSponge(
         grid, operators, sponge_depth=sponge_depth, dt=dt,
         tau_bndy_factor=10.0,
     )
-    interior_mask = build_interior_mask(sponge)
-    print(f"[DYNAMICS] Interior mask built: "
-          f"physics scaled to zero in {sponge_depth}-cell sponge zone")
+    interior_mask = sponge.get_interior_mask()
+    print(f"[DYNAMICS] Interior mask built: physics masked in {sponge_depth}-cell sponge")
 
     physics_suite = PhysicsSuite()
 

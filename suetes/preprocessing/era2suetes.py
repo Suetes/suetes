@@ -446,3 +446,35 @@ class BoundaryProcessor:
         lsm_2d = self.regridder.regrid_2d(stitched_era5_state['lsm'], loc='m', order=1)
         lsm_2d = jnp.clip(lsm_2d, 0.0, 1.0)
         return {'land_fraction': lsm_2d}
+
+    def build_or_load_timeseries(self, era5_proc, num_states, cache_path, coarsen_window=None):
+        """
+        Automates the creation, regridding, and disk-caching of boundary states.
+        """
+        import os
+        import pickle
+        
+        if os.path.exists(cache_path):
+            print(f"[BOUNDARY] Loading cached BC states from {cache_path}")
+            with open(cache_path, 'rb') as f:
+                payload = pickle.load(f)
+            # Convert back to JAX arrays upon loading
+            return [{k: jnp.asarray(v) for k, v in state.items()} for state in payload]
+            
+        print(f"[BOUNDARY] Building BC states (N={num_states})...")
+        bc_states = []
+        for i in range(num_states):
+            if i % 6 == 0:
+                print(f"[BOUNDARY] -> Regridding state for T={i}h")
+                
+            raw_state = era5_proc.get_stitched_state(time_idx=i, coarsen_window=coarsen_window)
+            bc_state = self.process(raw_state)
+            bc_states.append(bc_state)
+            
+        print(f"[BOUNDARY] Caching BC states to {cache_path}")
+        # Convert to numpy arrays before pickling to save memory and avoid JAX tracer issues
+        payload = [{k: np.asarray(v) for k, v in state.items()} for state in bc_states]
+        with open(cache_path, 'wb') as f:
+            pickle.dump(payload, f, protocol=pickle.HIGHEST_PROTOCOL)
+            
+        return bc_states
