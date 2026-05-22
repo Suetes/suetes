@@ -9,6 +9,7 @@ class BaseTransform:
     def __call__(self, xi, zeta, h, Lz):
         raise NotImplementedError
 
+
 class GalChenSigma(BaseTransform):
     """
     The classic 'Sigma-Z' linear decay (Gal-Chen & Somerville, 1975).
@@ -16,6 +17,7 @@ class GalChenSigma(BaseTransform):
     """
     def __call__(self, xi, zeta, h, Lz):
         return h + zeta * (Lz - h) / Lz
+
 
 class HybridSigma(BaseTransform):
     """
@@ -29,6 +31,7 @@ class HybridSigma(BaseTransform):
         decay = (1.0 - zeta/Lz) * jnp.exp(-zeta / self.scale_height)
         return zeta + h * decay
 
+
 class SleveSimple(BaseTransform):
     """
     Simplified SLEVE Coordinate with a single topography scale.
@@ -41,6 +44,39 @@ class SleveSimple(BaseTransform):
     def __call__(self, xi, zeta, h, Lz):
         b_s = jnp.sinh((Lz - zeta)/self.ss) / jnp.sinh(Lz/self.ss)
         return zeta + h * (b_s**self.n)
+
+
+class StretchedSleveSimple(BaseTransform):
+    """
+    Simplified SLEVE Coordinate with exponential boundary-layer stretching.
+    """
+    def __init__(self, stretch_kappa=2.5, scale_s=4000.0, n=1.35):
+        """
+        Args:
+            stretch_kappa (float): Stretching factor. Higher values compress layers closer to the surface.
+            scale_s (float): Scale height for the terrain decay.
+            n (float): Exponent for the simplified SLEVE decay profile.
+        """
+        self.kappa = stretch_kappa
+        self.ss = scale_s
+        self.n = n
+
+    def __call__(self, xi, zeta, h, Lz):
+        # Intermediate mapping (Computational Uniform -> Stretched Non-Uniform)
+        eta = zeta / Lz
+        
+        # Safe evaluation: if kappa is very close to 0, default to uniform spacing
+        zeta_stretched = jnp.where(
+            jnp.abs(self.kappa) > 1e-5,
+            Lz * (jnp.exp(self.kappa * eta) - 1.0) / (jnp.exp(self.kappa) - 1.0),
+            zeta
+        )
+
+        # Simplified SLEVE decay using the stretched coordinate
+        b_s = jnp.sinh((Lz - zeta_stretched) / self.ss) / jnp.sinh(Lz / self.ss)
+        
+        return zeta_stretched + h * (b_s ** self.n)
+
 
 class Sleve(BaseTransform):
     """
@@ -60,6 +96,40 @@ class Sleve(BaseTransform):
         b1 = self._b_func(zeta, Lz, self.s1)
         b2 = self._b_func(zeta, Lz, self.s2)
         return zeta + h1 * b1 + h2 * b2
+
+
+class StretchedSleve(BaseTransform):
+    """
+    SLEVE Coordinate with exponential boundary-layer stretching.
+    """
+    def __init__(self, h1_func, stretch_kappa=2.5, s1=15000.0, s2=2500.0):
+        self.h1_func = h1_func
+        self.kappa = stretch_kappa
+        self.s1 = s1
+        self.s2 = s2
+
+    def _b_func(self, zeta, Lz, s):
+        return jnp.sinh((Lz - zeta)/s) / jnp.sinh(Lz/s)
+
+    def __call__(self, xi, zeta, h, Lz):
+        # Intermediate mapping (Computational Uniform -> Stretched Non-Uniform)
+        eta = zeta / Lz
+        
+        # Safe evaluation: if kappa is very close to 0, default to uniform spacing
+        zeta_stretched = jnp.where(
+            jnp.abs(self.kappa) > 1e-5,
+            Lz * (jnp.exp(self.kappa * eta) - 1.0) / (jnp.exp(self.kappa) - 1.0),
+            zeta
+        )
+
+        # Terrain-following SLEVE transform using the stretched coordinate
+        h1 = self.h1_func(xi)
+        h2 = h - h1
+        b1 = self._b_func(zeta_stretched, Lz, self.s1)
+        b2 = self._b_func(zeta_stretched, Lz, self.s2)
+
+        return zeta_stretched + h1 * b1 + h2 * b2
+
 
 class IntegralNeuralTransform(BaseTransform):
     """

@@ -53,7 +53,7 @@ from suetes.regional3d.physics import (
 from suetes.vis.visualizer import Visualizer
 
 
-DATA_DIR = "data"
+DATA_DIR = "suetes/data"
 
 
 def coarsen_state(state, window=3):
