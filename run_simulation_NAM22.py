@@ -194,7 +194,7 @@ def main():
         initial_era5_state=initial_state,
         damp_height=9000.0, max_damp=3.0,
         nu_div_factor=0.1, nu_h_factor=0.1,
-        physics_suite=physics_suite,
+        physics_suite=physics_suite, 
         interior_mask=interior_mask,
     )
     stepper = SISLStepper3D(physics, dt)
