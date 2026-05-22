@@ -17,67 +17,77 @@ import scipy.ndimage as ndimage_cpu
 class TimeManager:
     """
     Manages the temporal interpolation of forcing fields.
-    
+
     Given a list of historical ERA5 states, this class provides a mechanism
     to retrieve the correct analytical forcing values for any point in time
     during the simulation run, using linear interpolation between time steps.
+
+    Memory layout: the full stack of bc_states is held on host (CPU) memory
+    as numpy arrays. Each call to ``get_forcing`` uses ``jax.pure_callback``
+    to fetch only the two states bounding the requested time and transfer
+    them to device. This keeps the per-call GPU footprint to ~2 states worth
+    of data rather than the full ``n_times`` stack, which is essential for
+    large domains where ``n_times * per_state_size`` would otherwise dominate
+    GPU memory.
     """
     def __init__(self, states_list, times_sec_list, grid):
-        """
-        Initializes the TimeManager.
-
-        Args:
-            states_list (list): A list of atmospheric state dictionaries.
-                                Each dictionary must contain keys for prognostic
-                                variables (e.g., 'u', 'v', 'rho', 'th_v').
-            times_sec_list (list): A list of simulation times corresponding to 
-                                   each state in `states_list`. Times are 
-                                   expected in seconds.
-            grid (BareGrid): The computational grid object.
-        """
         self.grid = grid
-        self.times_sec = jnp.array(times_sec_list, dtype=jnp.float32)
-        
-        # Stack the list of dicts into a single dict of 4D arrays (time, X, Y, Z)
-        # This allows JAX to dynamically slice the correct time index during the scan loop
-        self.stacked_states = {}
+        # Times array: small enough to keep on both host and device.
+        self.times_sec_np = np.asarray(times_sec_list, dtype=np.float32)
+        self.times_sec_jax = jnp.asarray(self.times_sec_np)
+        self.n_times = len(self.times_sec_np)
+
+        # Stack the list of dicts into a single dict of 4D numpy arrays
+        # (time, X, Y, Z), kept on host. They will be sliced and transferred
+        # to device on demand via jax.pure_callback inside get_forcing.
+        self.stacked_states_host = {}
         for k in states_list[0].keys():
-            self.stacked_states[k] = jnp.stack([state[k] for state in states_list], axis=0)
+            self.stacked_states_host[k] = np.stack(
+                [np.asarray(state[k]) for state in states_list], axis=0
+            )
+
+        # Pre-compute the per-state ShapeDtypeStruct for pure_callback. Each
+        # individual time-slice has the shape of the un-stacked field.
+        self._slice_shape_dtypes = {
+            k: jax.ShapeDtypeStruct(v.shape[1:], v.dtype)
+            for k, v in self.stacked_states_host.items()
+        }
+        self._return_shape_dtypes = (self._slice_shape_dtypes,
+                                     self._slice_shape_dtypes)
+
+    def _fetch_two_states_host(self, idx_arr):
+        """Host-side fetch: returns (state_t0, state_t1) given idx as numpy.
+
+        Called via jax.pure_callback so the bulk stacked arrays never get
+        materialized on device. Only the two requested slices are transferred.
+        """
+        i = int(idx_arr)
+        i_next = min(i + 1, self.n_times - 1)
+        state_t0 = {k: v[i]      for k, v in self.stacked_states_host.items()}
+        state_t1 = {k: v[i_next] for k, v in self.stacked_states_host.items()}
+        return state_t0, state_t1
 
     def get_forcing(self, t):
-        """
-        Retrieves the interpolated forcing state for a given time.
+        # Find the left bounding time index for the current t.
+        idx = jnp.searchsorted(self.times_sec_jax, t, side='right') - 1
+        idx = jnp.clip(idx, 0, self.n_times - 2)
 
-        Performs a linear interpolation between the two nearest known time states
-        to provide a continuous forcing field.
+        # Stream the two bounding states from host -> device.
+        state_t0, state_t1 = jax.pure_callback(
+            self._fetch_two_states_host,
+            self._return_shape_dtypes,
+            idx,
+        )
 
-        Args:
-            t (float): The current simulation time in seconds.
+        # Interpolation weight (computed on device with the small times array).
+        t0 = self.times_sec_jax[idx]
+        t1 = self.times_sec_jax[idx + 1]
+        alpha = jnp.clip((t - t0) / (t1 - t0), 0.0, 1.0)
 
-        Returns:
-            dict: The interpolated atmospheric state.
-        """
-        # Find the left bounding time index for the current t
-        # (e.g., if t=4000s, idx will be 1, representing the 3600s boundary)
-        idx = jnp.searchsorted(self.times_sec, t, side='right') - 1
-        
-        # Clip to prevent out-of-bounds errors if the simulation runs slightly past the last ERA5 state
-        idx = jnp.clip(idx, 0, len(self.times_sec) - 2)
-        
-        t0 = self.times_sec[idx]
-        t1 = self.times_sec[idx + 1]
-        
-        # Calculate interpolation weight
-        alpha = (t - t0) / (t1 - t0)
-        alpha = jnp.clip(alpha, 0.0, 1.0)
-        
-        # Dynamically slice the two bounding states and interpolate
-        interp_state = {}
-        for k in self.stacked_states.keys():
-            state_t0 = self.stacked_states[k][idx]
-            state_t1 = self.stacked_states[k][idx + 1]
-            interp_state[k] = (1.0 - alpha) * state_t0 + alpha * state_t1
-            
+        interp_state = {
+            k: (1.0 - alpha) * state_t0[k] + alpha * state_t1[k]
+            for k in state_t0.keys()
+        }
         return interp_state
 
 class HorizontalRegridder:
@@ -147,13 +157,32 @@ class HorizontalRegridder:
         # Map coordinates layer by layer using standard SciPy with order=3
         regridded_layers = []
         for z in range(field_np.shape[0]):
-            layer = ndimage_cpu.map_coordinates(field_np[z], coords, order=3, mode='nearest')
+            layer = ndimage_cpu.map_coordinates(field_np[z], coords, order=1, mode='nearest')
             regridded_layers.append(layer)
             
         regridded = np.stack(regridded_layers, axis=0)
         
         # Convert back to JAX array and transpose to (X, Y, Z) expected by the model
         return jnp.array(np.transpose(regridded, (1, 2, 0)))
+
+    def regrid_2d(self, field_era5_2d, loc='m', order=3):
+        """
+        Regrids a 2D ERA5 surface field onto the native grid.
+
+        Args:
+            field_era5_2d (array): 2D ERA5 field shaped (lat, lon).
+            loc (str): Target stagger ('m', 'u', or 'v').
+            order (int): Spline order for map_coordinates. Use order=1 for
+                fields that should remain bounded or crisp (e.g. land-sea
+                mask). Use order=3 for smooth fields (e.g. skin temperature).
+
+        Returns:
+            jnp.ndarray: 2D field on the target stagger.
+        """
+        coords = self.target_indices[loc]
+        field_np = np.array(field_era5_2d)
+        regridded = ndimage_cpu.map_coordinates(field_np, coords, order=order, mode='nearest')
+        return jnp.array(regridded)
 
 
 class BoundaryProcessor:
@@ -384,7 +413,36 @@ class BoundaryProcessor:
         state['w'] = state['w'].at[:, :, -1].set(0.0)             
         state['eta_dot'] = jnp.zeros_like(state['w'])
         
+        # Surface skin potential temperature.
+        # T_skt is regridded from the ERA5 skin_temperature single-level field;
+        # the Exner conversion uses the ERA5 surface pressure (bottom layer of
+        # the horizontally regridded 3D pressure array).
+        skt_2d = self.regridder.regrid_2d(stitched_era5_state['skt'], loc='m', order=3)
+        sp_2d = p_era5[:, :, -1]
+        pi_skin = (sp_2d / self.c['p0']) ** (self.c['Rd'] / self.c['cp'])
+        state['theta_skt'] = skt_2d / pi_skin
+
         # Enforce global mass conservation (probably a bad idea for open systems!)
         # state = self._balance_global_mass(state)
         
         return state
+
+    def process_static(self, stitched_era5_state):
+        r"""
+        Produces time-invariant surface fields from a raw ERA5 state.
+
+        Currently returns only the land fraction, regridded from the ERA5
+        land-sea mask. Use linear interpolation (order=1) so coastlines stay
+        crisp and the result remains bounded in [0, 1].
+
+        Call once at simulation setup, using any timestep's stitched state.
+
+        Args:
+            stitched_era5_state (dict): The raw ERA5 state dictionary.
+
+        Returns:
+            dict: {'land_fraction': 2D array on the m-stagger}.
+        """
+        lsm_2d = self.regridder.regrid_2d(stitched_era5_state['lsm'], loc='m', order=1)
+        lsm_2d = jnp.clip(lsm_2d, 0.0, 1.0)
+        return {'land_fraction': lsm_2d}

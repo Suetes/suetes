@@ -58,6 +58,14 @@ class ERA5Processor:
         q_surf = np.zeros_like(p_surf) 
         omega_surf = np.zeros_like(p_surf)
 
+        # Surface-only fields (2D), not stitched onto the 3D state.
+        # skt is the skin temperature and varies hourly (used as the Dirichlet
+        # surface temperature for the bulk drag and SHF schemes). lsm is the
+        # ERA5 land-sea mask, time-invariant in practice; the value at this
+        # timestep is the same as at any other.
+        skt_2d = sl['skt'].values
+        lsm_2d = sl['lsm'].values
+
         # Extract and format Pressure Levels
         z_pl = pl['z'].values
         t_pl = pl['t'].values
@@ -81,6 +89,8 @@ class ERA5Processor:
             'u': jnp.array(np.concatenate([u_pl, u_surf], axis=0)),
             'v': jnp.array(np.concatenate([v_pl, v_surf], axis=0)),
             'omega': jnp.array(np.concatenate([omega_pl, omega_surf], axis=0)),
+            'skt': jnp.array(skt_2d),
+            'lsm': jnp.array(lsm_2d),
             'latitude': pl['latitude'].values,
             'longitude': pl['longitude'].values
         }

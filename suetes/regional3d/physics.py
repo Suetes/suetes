@@ -6,6 +6,7 @@ smaller than the grid resolution ($\Delta x$), including turbulence, surface
 friction, and moist microphysics.
 """
 
+import jax
 import jax.numpy as jnp
 
 class PhysicsSuite:
@@ -33,18 +34,31 @@ class PhysicsSuite:
         if key not in self.tracer_keys:
             self.tracer_keys.append(key)
 
-    def get_explicit_tendencies(self, state, bg):
-        """Aggregates continuous momentum and thermodynamic tendencies from all schemes."""
-        tends_total = {'u': jnp.zeros_like(state['u']), 
-                       'v': jnp.zeros_like(state['v']), 
+    def get_explicit_tendencies(self, state, bg, interior_mask=None):
+        """Aggregates continuous momentum and thermodynamic tendencies from all schemes.
+
+        If `interior_mask` is provided, it should be a dict keyed by field
+        name ('u', 'v', 'w', 'th_v') with values in [0, 1]. The accumulated
+        tendencies are multiplied by the mask before being returned, so
+        physics tendencies are zeroed inside the Davies sponge zone where
+        the LBC nudging would otherwise be fighting drag and diffusion
+        every step.
+        """
+        tends_total = {'u': jnp.zeros_like(state['u']),
+                       'v': jnp.zeros_like(state['v']),
                        'w': jnp.zeros_like(state['w']),
                        'th_v': jnp.zeros_like(state['th_v'])}
-        
+
         for scheme in self.tendency_schemes:
             scheme_tends = scheme.get_tendencies(state, bg)
             for k in scheme_tends:
                 tends_total[k] += scheme_tends[k]
-                
+
+        if interior_mask is not None:
+            for k in tends_total:
+                if k in interior_mask:
+                    tends_total[k] = tends_total[k] * interior_mask[k]
+
         return tends_total
 
     def apply_state_updates(self, state):
@@ -295,6 +309,392 @@ class BulkAerodynamicPBL:
             tend_th_v = jnp.zeros_like(state['th_v']).at[:, :, 0].set(heat_tend_surf)
         
         return {'u': tend_u, 'v': tend_v, 'th_v': tend_th_v}
+
+
+class McFarlaneVerticalDiffusion:
+    r"""
+    Stability-dependent vertical eddy diffusion of momentum and heat.
+
+    Follows McFarlane et al. (1992) GCMII, equations (2.1) to (2.3):
+
+    $$ K_{m,h} = l^2 \left|\frac{\partial \mathbf{V}}{\partial z}\right| f_{m,h}(Ri) $$
+
+    with mixing length
+
+    $$ l = \frac{k z}{1 + k z / \lambda} $$
+
+    and a piecewise stability function in the gradient Richardson number Ri.
+    GCMII uses the same functional form for momentum and heat.
+
+    Surface flux is held at zero by this scheme; the surface stress and SHF
+    are provided by a separate surface scheme (e.g. McFarlaneSurfaceDrag) as
+    a tendency confined to the lowest mass layer.
+    """
+
+    def __init__(self, grid, operators, constants,
+                 lambda_mix=100.0, epsilon=0.3, k_vk=0.4):
+        """
+        Args:
+            grid (RegionalGrid3D): computational grid.
+            operators (CGridOperator3D): finite-difference operators.
+            constants (dict): physical constants; must contain 'g'.
+            lambda_mix (float): asymptotic mixing length [m]. McFarlane: 100 m.
+            epsilon: stability cutoff parameter. McFarlane uses 0.3 over open
+                water and 0.0 over land/ice. Can be a scalar (uniform) or a
+                2D (nx, ny) array for per-cell values from a land-sea mask.
+                A 2D array is promoted internally to (nx, ny, 1) so it
+                broadcasts against the 3D Ri on w-points; the caller does
+                not need to add a trailing axis.
+            k_vk (float): von Karman constant.
+        """
+        self.grid = grid
+        self.op = operators
+        self.c = constants
+        self.lambda_mix = lambda_mix
+        eps_arr = jnp.asarray(epsilon)
+        if eps_arr.ndim == 2:
+            eps_arr = eps_arr[..., None]
+        self.epsilon = eps_arr
+        self.k_vk = k_vk
+
+    def _stability_function(self, Ri):
+        """McFarlane (1992) eq. (2.2). Same form for f_m and f_h in GCMII.
+
+        The unstable branch is written in the paper as "1 - 10|Ri| / (...)"
+        but yields f > 1 in unstable conditions (enhanced mixing) when |Ri|
+        is read with the Louis (1979) signed-Ri convention. Implemented here
+        with an explicit + sign so the formula in absolute-value form gives
+        the physically correct enhancement.
+        """
+        abs_Ri = jnp.abs(Ri)
+        # Unstable branch (Ri < 0): f > 1, enhanced mixing
+        f_unstable = 1.0 + 10.0 * abs_Ri / (1.0 + 10.0 * jnp.sqrt(abs_Ri / 87.0))
+        # Stable branch (0 <= Ri <= 1/(5*eps)): f < 1, reduced mixing
+        f_stable = (1.0 - 5.0 * self.epsilon * Ri) ** 2 \
+                   / (1.0 + 10.0 * (1.0 - self.epsilon) * Ri)
+        Ri_cutoff = 1.0 / (5.0 * self.epsilon + 1e-12)
+        f = jnp.where(Ri < 0.0, f_unstable, f_stable)
+        f = jnp.where(Ri > Ri_cutoff, 0.0, f)
+        return f
+
+    def get_tendencies(self, state, bg):
+        u, v, th_v = state['u'], state['v'], state['th_v']
+
+        # Height above ground at w-points
+        Z_AGL_w = self.grid.Z_w - self.grid.Z_w[:, :, 0:1]
+        kz = self.k_vk * Z_AGL_w
+        l_w = kz / (1.0 + kz / self.lambda_mix)
+
+        # Horizontal winds at mass points
+        u_m = self.op.avg(u, axis=0, from_loc='u', to_loc='m')
+        v_m = self.op.avg(v, axis=1, from_loc='v', to_loc='m')
+
+        # Shear at w-points
+        du_dz_w = self.op.diff(u_m, axis=2, from_loc='m', to_loc='w') \
+                  * (self.grid.dz / bg['dz_w_full'])
+        dv_dz_w = self.op.diff(v_m, axis=2, from_loc='m', to_loc='w') \
+                  * (self.grid.dz / bg['dz_w_full'])
+        shear_sq_w = du_dz_w ** 2 + dv_dz_w ** 2
+        shear_w = jnp.sqrt(shear_sq_w + 1e-12)
+
+        # Buoyancy at w-points
+        dth_dz_w = self.op.diff(th_v, axis=2, from_loc='m', to_loc='w') \
+                   * (self.grid.dz / bg['dz_w_full'])
+        N2_w = (self.c['g'] / bg['th_v_w']) * dth_dz_w
+
+        # Gradient Richardson number
+        Ri_w = N2_w / (shear_sq_w + 1e-12)
+        f_w = self._stability_function(Ri_w)
+
+        # Eddy diffusivity at w-points
+        K_w = l_w ** 2 * shear_w * f_w
+
+        # Fluxes; zero at top and bottom (surface is handled elsewhere)
+        flux_u_w = K_w * du_dz_w
+        flux_v_w = K_w * dv_dz_w
+        flux_th_w = K_w * dth_dz_w
+        flux_u_w = flux_u_w.at[:, :, 0].set(0.0).at[:, :, -1].set(0.0)
+        flux_v_w = flux_v_w.at[:, :, 0].set(0.0).at[:, :, -1].set(0.0)
+        flux_th_w = flux_th_w.at[:, :, 0].set(0.0).at[:, :, -1].set(0.0)
+
+        # Flux divergence at mass points
+        tend_u_m = self.op.diff(flux_u_w, axis=2, from_loc='w', to_loc='m') \
+                   * (self.grid.dz / bg['dz_m_full'])
+        tend_v_m = self.op.diff(flux_v_w, axis=2, from_loc='w', to_loc='m') \
+                   * (self.grid.dz / bg['dz_m_full'])
+        tend_th = self.op.diff(flux_th_w, axis=2, from_loc='w', to_loc='m') \
+                  * (self.grid.dz / bg['dz_m_full'])
+
+        # Stagger horizontal momentum tendencies back to u and v faces
+        tend_u = self.op.avg(tend_u_m, axis=0, from_loc='m', to_loc='u')
+        tend_v = self.op.avg(tend_v_m, axis=1, from_loc='m', to_loc='v')
+
+        return {'u': tend_u, 'v': tend_v, 'th_v': tend_th}
+
+
+class McFarlaneSurfaceDrag:
+    r"""
+    Stability-dependent bulk surface drag and sensible heat flux.
+
+    Follows McFarlane et al. (1992) GCMII, equations (2.4) and (2.5):
+
+    $$ (C_m, C_h) = (C_{DM}, C_{DH}) \cdot (F_m(Ri_B), F_h(Ri_B)) $$
+
+    The bulk Richardson number is formed from the lowest model mass level and
+    the prescribed surface skin temperature theta_surf (Dirichlet condition
+    from outside). Neutral coefficients come from the log law:
+
+    $$ C_{DN} = (k / \ln(z_L / z_0))^2 $$
+
+    GCMII uses the same stability function for momentum and heat.
+    """
+
+    def __init__(self, grid, operators, constants,
+                 z_0=1e-4, epsilon=0.3, k_vk=0.4, theta_surf=None):
+        """
+        Args:
+            grid (RegionalGrid3D): computational grid.
+            operators (CGridOperator3D): finite-difference operators.
+            constants (dict): physical constants; must contain 'g'.
+            z_0 (float): surface roughness length [m]. McFarlane GCMII used
+                per-class values from Wilson-Henderson-Sellers; here applied
+                uniformly. Default 1e-4 m is the ocean value. Land values
+                range roughly 0.01 to 1 m.
+            epsilon (float): stability cutoff parameter. McFarlane: 0.3 over
+                open water, 0.0 over land/ice.
+            k_vk (float): von Karman constant.
+            theta_surf: optional fallback if state['theta_surf'] is missing.
+        """
+        self.grid = grid
+        self.op = operators
+        self.c = constants
+        self.z_0 = z_0
+        self.epsilon = epsilon
+        self.k_vk = k_vk
+        self.theta_surf = theta_surf
+
+    def _stability_function(self, Ri_B, A_sq):
+        """McFarlane (1992) eq. (2.4). Same form for F_m and F_h in GCMII.
+
+        Unstable branch sign convention as in McFarlaneVerticalDiffusion: the
+        paper formula written with |Ri_B| produces F > 1 under Louis (1979)
+        sign conventions, implemented here as an explicit + sign.
+        """
+        abs_Ri = jnp.abs(Ri_B)
+        F_unstable = 1.0 + 10.0 * abs_Ri \
+                     / (1.0 + 10.0 * jnp.sqrt(abs_Ri / (87.0 * A_sq + 1e-12)))
+        F_stable = (1.0 - 5.0 * self.epsilon * Ri_B) ** 2 \
+                   / (1.0 + 10.0 * (1.0 - self.epsilon) * Ri_B)
+        Ri_cutoff = 1.0 / (5.0 * self.epsilon + 1e-12)
+        F = jnp.where(Ri_B < 0.0, F_unstable, F_stable)
+        F = jnp.where(Ri_B > Ri_cutoff, 0.0, F)
+        return F
+
+    def get_tendencies(self, state, bg):
+        u, v, th_v = state['u'], state['v'], state['th_v']
+
+        # Mass-point wind speed throughout the column, with a soft floor
+        u_m = self.op.avg(u, axis=0, from_loc='u', to_loc='m')
+        v_m = self.op.avg(v, axis=1, from_loc='v', to_loc='m')
+        speed_m = jnp.sqrt(u_m ** 2 + v_m ** 2 + 1e-8)
+        speed_u = self.op.avg(speed_m, axis=0, from_loc='m', to_loc='u')
+        speed_v = self.op.avg(speed_m, axis=1, from_loc='m', to_loc='v')
+
+        speed_m_surf = speed_m[:, :, 0]
+        speed_u_surf = speed_u[:, :, 0]
+        speed_v_surf = speed_v[:, :, 0]
+
+        # Height of lowest mass level above the local terrain
+        z_L = self.grid.Z_m[:, :, 0] - self.grid.Z_w[:, :, 0]
+
+        # Neutral drag coefficient from log law (scalar in z_0, 2D in z_L)
+        log_ratio = jnp.log(z_L / self.z_0)
+        C_DN = (self.k_vk / log_ratio) ** 2
+
+        # A^2 from eq. (2.5), used in the unstable branch denominator
+        A_sq = (self.z_0 / z_L) * (self.k_vk ** 4) / (C_DN ** 2 + 1e-30)
+
+        # Surface temperature (Dirichlet from outside)
+        theta_surf = state.get('theta_surf', self.theta_surf)
+
+        th_v_L = th_v[:, :, 0]
+        speed_sq_surf = speed_m_surf ** 2
+
+        if theta_surf is not None:
+            Ri_B = self.c['g'] * (th_v_L - theta_surf) * z_L \
+                   / (th_v_L * speed_sq_surf)
+        else:
+            Ri_B = jnp.zeros_like(z_L)
+
+        F = self._stability_function(Ri_B, A_sq)
+        C_eff = C_DN * F  # GCMII uses the same for momentum and heat
+
+        # Promote C_eff to 3D for face averaging
+        nx_m, ny_m, nz_m = u_m.shape
+        C_eff_3d = jnp.broadcast_to(C_eff[:, :, None], (nx_m, ny_m, nz_m))
+        C_u = self.op.avg(C_eff_3d, axis=0, from_loc='m', to_loc='u')[:, :, 0]
+        C_v = self.op.avg(C_eff_3d, axis=1, from_loc='m', to_loc='v')[:, :, 0]
+
+        # Surface momentum tendency (lowest layer only)
+        dz_u_surf = bg['dz_u'][:, :, 0]
+        dz_v_surf = bg['dz_v'][:, :, 0]
+        drag_u_surf = -C_u * speed_u_surf * u[:, :, 0] / dz_u_surf
+        drag_v_surf = -C_v * speed_v_surf * v[:, :, 0] / dz_v_surf
+
+        tend_u = jnp.zeros_like(u).at[:, :, 0].set(drag_u_surf)
+        tend_v = jnp.zeros_like(v).at[:, :, 0].set(drag_v_surf)
+
+        # Sensible heat flux (lowest layer only)
+        if theta_surf is not None:
+            dz_m_surf = bg['dz_m_full'][:, :, 0]
+            shf_kin = C_eff * speed_m_surf * (theta_surf - th_v_L)
+            tend_th = jnp.zeros_like(th_v).at[:, :, 0].set(shf_kin / dz_m_surf)
+        else:
+            tend_th = jnp.zeros_like(th_v)
+
+        return {'u': tend_u, 'v': tend_v, 'th_v': tend_th}
+
+
+class McFarlaneGWD:
+    r"""
+    Orographic gravity wave drag (single column, vectorized over horizontal).
+
+    Follows McFarlane (1987) and McFarlane et al. (1992) eq. (2.8) and (2.9).
+    Subgrid-scale orographic gravity waves carry momentum flux upward; the
+    flux is capped at each level by a Lindzen-style saturation criterion, and
+    the excess is deposited locally as horizontal drag.
+
+    $$ F_p(z) = \mu \rho N U \delta^2, \quad \delta_{sat} = F_c U / N $$
+
+    $$ (\frac{dV}{dt})_g = \mathbf{n} \frac{1}{\rho} \frac{d F_p}{dz} $$
+
+    Reference level: the lowest mass point. Reference direction n: the
+    surface-projected horizontal wind there. Drag is deposited along that
+    direction at each level above the reference.
+
+    If h_variance is None or zero, this scheme returns identically zero
+    tendencies.
+    """
+
+    def __init__(self, grid, operators, constants,
+                 h_variance=None, F_c=0.7, mu=1.5e-5,
+                 U_min=1.0, N2_min=1e-6, speed_min=0.1):
+        """
+        Args:
+            grid (RegionalGrid3D): computational grid.
+            operators (CGridOperator3D): finite-difference operators.
+            constants (dict): physical constants; must contain 'g', 'p0',
+                'cp', 'Rd'.
+            h_variance: 2D array on mass points of subgrid orography variance
+                [m^2], or None. If None, returns zero tendencies.
+            F_c (float): saturation Froude factor. McFarlane: 0.7.
+            mu (float): effective inverse horizontal wavelength of the
+                orographic spectrum [m^-1]. McFarlane: 1.5e-5.
+            U_min (float): floor on the projected wind speed used inside the
+                saturation cap (avoids singularities at critical levels).
+            N2_min (float): floor on N^2 below which waves are treated as
+                evanescent and the saturation flux is computed with the floor.
+            speed_min (float): if the surface wind speed is below this, the
+                column produces no drag (avoids spurious drag in resting air).
+        """
+        self.grid = grid
+        self.op = operators
+        self.c = constants
+        self.h_variance = h_variance
+        self.F_c = F_c
+        self.mu = mu
+        self.U_min = U_min
+        self.N2_min = N2_min
+        self.speed_min = speed_min
+
+    def get_tendencies(self, state, bg):
+        u, v, th_v = state['u'], state['v'], state['th_v']
+
+        if self.h_variance is None:
+            return {'u': jnp.zeros_like(u), 'v': jnp.zeros_like(v)}
+
+        # Density on mass points: from state['rho'] if present, else from pi
+        rho_m = state.get('rho')
+        if rho_m is None:
+            pi_full = state.get('pi')
+            if pi_full is None:
+                return {'u': jnp.zeros_like(u), 'v': jnp.zeros_like(v)}
+            T_v = th_v * pi_full
+            rho_m = self.c['p0'] * pi_full ** (self.c['cp'] / self.c['Rd']) \
+                    / (self.c['Rd'] * T_v)
+
+        # Winds at mass points
+        u_m = self.op.avg(u, axis=0, from_loc='u', to_loc='m')
+        v_m = self.op.avg(v, axis=1, from_loc='v', to_loc='m')
+
+        # Reference (surface) direction
+        u0 = u_m[:, :, 0]
+        v0 = v_m[:, :, 0]
+        speed0 = jnp.sqrt(u0 ** 2 + v0 ** 2 + 1e-8)
+        n_x = u0 / speed0
+        n_y = v0 / speed0
+
+        # Active mask: only columns with appreciable surface flow generate drag
+        active = (speed0 > self.speed_min).astype(rho_m.dtype)
+
+        # Projected wind speed at all m-levels (along the reference direction)
+        U_m = u_m * n_x[:, :, None] + v_m * n_y[:, :, None]
+        U_m_floor = jnp.maximum(U_m, self.U_min)
+
+        # N^2 on w-points
+        dth_dz_w = self.op.diff(th_v, axis=2, from_loc='m', to_loc='w') \
+                   * (self.grid.dz / bg['dz_w_full'])
+        N2_w = (self.c['g'] / bg['th_v_w']) * dth_dz_w
+        N2_w = jnp.maximum(N2_w, self.N2_min)
+        N_w = jnp.sqrt(N2_w)
+
+        # Place rho and U on w-points (simple centered average; edges padded)
+        def m_to_w(field_m):
+            interior = 0.5 * (field_m[:, :, :-1] + field_m[:, :, 1:])
+            return jnp.concatenate(
+                [field_m[:, :, 0:1], interior, field_m[:, :, -1:]],
+                axis=2,
+            )
+
+        rho_w = m_to_w(rho_m)
+        U_w = m_to_w(U_m_floor)
+
+        # Saturation flux at every w-level
+        F_sat_w = self.mu * rho_w * (self.F_c ** 2) * (U_w ** 3) / N_w
+
+        # Reference flux at the surface, using the actual (un-floored) U
+        delta_ref_sq = jnp.maximum(self.h_variance, 0.0)
+        F_ref_surf = self.mu * rho_w[:, :, 0] * N_w[:, :, 0] * U_m[:, :, 0] \
+                     * delta_ref_sq
+        F_ref_surf = jnp.maximum(F_ref_surf, 0.0)
+        F_0 = jnp.minimum(F_ref_surf, F_sat_w[:, :, 0])
+
+        # March upward through w-points: F_k = min(F_{k-1}, F_sat_k)
+        F_sat_z_first = jnp.moveaxis(F_sat_w, 2, 0)
+
+        def scan_step(F_prev, F_sat_k):
+            F_k = jnp.minimum(F_prev, F_sat_k)
+            return F_k, F_k
+
+        _, F_above_z_first = jax.lax.scan(scan_step, F_0, F_sat_z_first[1:])
+        F_w_z_first = jnp.concatenate([F_0[None, :, :], F_above_z_first], axis=0)
+        F_w = jnp.moveaxis(F_w_z_first, 0, 2)
+
+        # Drag along n: a_proj = (1/rho) d F_w / dz at each m-point
+        dF_dz_m = (F_w[:, :, 1:] - F_w[:, :, :-1]) / bg['dz_m_full']
+        a_proj_m = dF_dz_m / rho_m
+
+        # Mask inactive columns
+        a_proj_m = a_proj_m * active[:, :, None]
+
+        # Project back into (u, v) components on mass points, then stagger
+        tend_u_m = a_proj_m * n_x[:, :, None]
+        tend_v_m = a_proj_m * n_y[:, :, None]
+        tend_u = self.op.avg(tend_u_m, axis=0, from_loc='m', to_loc='u')
+        tend_v = self.op.avg(tend_v_m, axis=1, from_loc='m', to_loc='v')
+
+        return {'u': tend_u, 'v': tend_v}
+
 
 class SimpleMicrophysics:
     r"""

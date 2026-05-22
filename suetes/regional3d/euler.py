@@ -30,33 +30,29 @@ class Euler3D:
     """
     def __init__(self, grid, operators, constants, dt, initial_era5_state=None, 
                  N_bv=0.01, damp_height=20000.0, max_damp=0.5, 
-                 nu_div_factor=0.8, nu_h_factor=0.1, physics_suite=None):
-        r"""
-        Initializes the dynamical core, reference states, and sponge coefficients.
-
-        Dynamically evaluates the explicit stability constraints for horizontal 
-        hyperdiffusion ($\nu_h$) and horizontal divergence damping ($\nu_{div}$):
-        
-        $$ \nu_{div} = \gamma_{div} \frac{\Delta x^2}{4 \Delta t}, \quad \nu_h = \gamma_h \frac{\Delta x^4}{64 \Delta t} $$
-
-        Constructs an upper Rayleigh friction layer (sponge) to absorb vertically 
-        propagating wave energy above a specified threshold altitude:
-        
-        $$ \tau_{damp}(z) = \tau_{max} \cdot \frac{1}{2} \left[ 1 + \tanh\left( \pi \frac{z - z_{damp}}{z_{top} - z_{damp}} - \frac{\pi}{2} \right) \right] \quad \text{for } z > z_{damp} $$
+                 nu_div_factor=0.8, nu_h_factor=0.1, physics_suite=None,
+                 interior_mask=None):
+        """
+        Initializes the dynamical core, calculating explicit diffusion limits 
+        and building the 1D thermodynamic reference state.
 
         Args:
             grid (RegionalGrid3D): The 3D geometry and metric tensor object.
             operators (CGridOperator3D): Spatial finite-difference operators.
-            constants (dict): Physical constants ($g, R_d, c_p, c_{vd}$).
-            dt (float): Integration time step $\Delta t$ [s].
-            initial_era5_state (dict, optional): 3D external state used to compute 
-                the horizontally averaged reference profile.
-            N_bv (float): Brunt-Väisälä frequency ($N$) for the analytical background profile [$s^{-1}$].
-            damp_height (float): Altitude where the Rayleigh sponge layer begins ($z_{damp}$) [m].
-            max_damp (float): Maximum damping coefficient at the model top ($\tau_{max}$).
-            nu_div_factor (float): Divergence damping tuning coefficient $\gamma_{div} \in [0, 1]$.
-            nu_h_factor (float): Hyperdiffusion tuning coefficient $\gamma_h \in [0, 1]$.
-            physics_suite (PhysicsSuite, optional): Subgrid-scale physics parameterizations.
+            constants (dict): Physical constants (e.g., $g$, $R_d$, $c_p$).
+            dt (float): Integration time step [s].
+            initial_era5_state (dict, optional): 3D state used to compute the 
+                horizontal-mean reference state. If None, uses an analytical profile.
+            N_bv (float): Brunt-Väisälä frequency for the analytical profile [$s^{-1}$].
+            damp_height (float): Altitude where the Rayleigh sponge layer begins [m].
+            max_damp (float): Maximum damping coefficient at the model top.
+            nu_div_factor (float): Divergence damping scale factor (0.0 to 1.0).
+            nu_h_factor (float): Hyperdiffusion scale factor (0.0 to 1.0).
+            physics_suite (PhysicsSuite, optional): Configured subgrid physics.
+            interior_mask (dict, optional): Per-field masks in [0, 1] keyed by
+                'u', 'v', 'w', 'th_v'. When set, the physics-suite tendencies
+                are multiplied by these before being added to the dynamical
+                RHS, which switches physics off inside the Davies sponge zone.
         """
         self.grid = grid
         self.op = operators
@@ -73,6 +69,7 @@ class Euler3D:
         
         # Physics suite injection
         self.physics_suite = physics_suite
+        self.interior_mask = interior_mask
 
         # Use physical 3D height (Z_m)
         Z_m = self.grid.Z_m
@@ -261,7 +258,9 @@ class Euler3D:
 
             # Call physics suite
             if self.physics_suite is not None:
-                phys_tends = self.physics_suite.get_explicit_tendencies(state_prime, bg)
+                phys_tends = self.physics_suite.get_explicit_tendencies(
+                    state_prime, bg, interior_mask=self.interior_mask,
+                )
 
                 # Add them to the dynamical core's right-hand side
                 for k in phys_tends:

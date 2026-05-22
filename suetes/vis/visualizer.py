@@ -568,7 +568,7 @@ class Visualizer:
         else: plt.show()
         plt.close()
 
-    def plot_energy_spectrum(self, grid, state_model, variable='w', z_idx=5, sponge_depth=30, save_path=None):
+    def plot_energy_spectrum(self, grid, state_or_states, variable='w', z_idx=5, sponge_depth=30, save_path=None):
         r"""
         Computes and plots the 1D spatial power spectrum using FFT.
 
@@ -577,32 +577,62 @@ class Visualizer:
         against the theoretical Kolmogorov isotropic turbulence cascade:
 
         $$ E(k) \propto k^{-5/3} $$
+
+        Accepts either a single state dict (one snapshot) or a list of state
+        dicts (time-averages the spectra across snapshots). Time averaging
+        reduces the per-wavenumber variance of the spectral estimate.
         """
-        data_2d = state_model[variable][:, :, z_idx]
-        if sponge_depth > 0:
-            data_inner = data_2d[sponge_depth:-sponge_depth, sponge_depth:-sponge_depth]
+        # Accept a single state dict for backward compatibility, or a list/tuple
+        # of state dicts for time-averaging.
+        if isinstance(state_or_states, dict):
+            states = [state_or_states]
         else:
-            data_inner = data_2d
-            
+            states = list(state_or_states)
+
         dx = grid.dx
         spectra = []
-        for row in data_inner.T:
-            row_windowed = signal.detrend(row) * np.hanning(len(row))
-            spectra.append(np.abs(np.fft.rfft(row_windowed))**2)
-            
+        for state in states:
+            data_2d = state[variable][:, :, z_idx]
+            if sponge_depth > 0:
+                data_inner = data_2d[sponge_depth:-sponge_depth, sponge_depth:-sponge_depth]
+            else:
+                data_inner = data_2d
+
+            for row in data_inner.T:
+                row_windowed = signal.detrend(row) * np.hanning(len(row))
+                spectra.append(np.abs(np.fft.rfft(row_windowed))**2)
+
         avg_power = np.mean(spectra, axis=0)[1:]
         k = np.fft.rfftfreq(data_inner.shape[0], d=dx)[1:]
         
         fig, ax = plt.subplots(figsize=(10, 6))
         ax.loglog(k, avg_power, 'b-', label=f"Spectrum ({variable})", linewidth=2)
         
-        ref_k = k[len(k)//10:] 
-        ax.loglog(ref_k, avg_power[len(k)//10] * (ref_k / ref_k[0])**(-5/3), 'k--', label="$k^{-5/3}$ cascade")
+        # Reference slopes are placed in their physically expected regimes:
+        # k^-3 at synoptic/large scales, k^-5/3 at mesoscale. The transition
+        # is set at the empirical Nastrom-Gage wavelength of ~400 km. For a
+        # small regional domain this puts the split at very low k (few
+        # synoptic modes resolved), which is the honest physical picture.
+        k_transition = 1.0 / 400e3
+        split = int(np.clip(np.searchsorted(k, k_transition), 1, len(k) - 1))
+
+        ref_k_low = k[: split + 1]
+        i_low = max(1, split // 2)
+        ax.loglog(ref_k_low,
+                  avg_power[i_low] * (ref_k_low / k[i_low]) ** (-3),
+                  'k:', label="$k^{-3}$ slope")
+
+        ref_k_high = k[split:]
+        i_high = split + (len(k) - split) // 2
+        ax.loglog(ref_k_high,
+                  avg_power[i_high] * (ref_k_high / k[i_high]) ** (-5/3),
+                  'k--', label="$k^{-5/3}$ slope")
         
         ax.axvline(x=1.0/(2*dx), color='r', linestyle=':', label=rf'$2\Delta x$ ({2*dx/1000:.1f} km)')
         ax.axvline(x=1.0/(6*dx), color='orange', linestyle=':', label=rf'$6\Delta x$ ({6*dx/1000:.1f} km)')
-        
-        ax.set_title(f"Power spectrum: {variable} at level {z_idx}")
+
+        title_suffix = f" (averaged over {len(states)} snapshots)" if len(states) > 1 else ""
+        ax.set_title(f"Power spectrum: {variable} at level {z_idx}{title_suffix}")
         ax.set_xlabel("Wavenumber $k$ [m⁻¹]")
         ax.set_ylabel("Spectral power density")
         ax.grid(True, which="both", ls="--", alpha=0.5)
@@ -653,4 +683,30 @@ class Visualizer:
         
         if save_path: plt.savefig(save_path, dpi=200, bbox_inches='tight')
         else: plt.show()
+        plt.close()
+        
+    def plot_point_timeseries(self, times_hours, suetes_values, era5_values,
+                              location_name, units='K', save_path=None):
+        """
+        Plot a single-cell timeseries comparing Suetes against the ERA5 driver.
+
+        Args:
+            times_hours: 1D iterable of times in hours.
+            suetes_values: 1D iterable of Suetes values at each time.
+            era5_values: 1D iterable of ERA5 values at each time.
+            location_name (str): label for the title.
+            units (str): units string for the y-axis.
+            save_path (str): if set, saves the figure to this path.
+        """
+        fig, ax = plt.subplots(figsize=(10, 5))
+        ax.plot(times_hours, suetes_values, 'b-',  linewidth=2, label='Suetes')
+        ax.plot(times_hours, era5_values,   'r--', linewidth=2, label='ERA5')
+        ax.set_xlabel('Time [hours]')
+        ax.set_ylabel(f'Temperature [{units}]')
+        ax.set_title(f'Near-surface temperature over {location_name}')
+        ax.grid(True, ls='--', alpha=0.5)
+        ax.legend()
+        plt.tight_layout()
+        if save_path:
+            plt.savefig(save_path, dpi=150)
         plt.close()
