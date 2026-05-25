@@ -29,13 +29,6 @@ import argparse
 import time
 
 import jax
-# NOTE: jax_enable_x64 is required by the dinosaur stage but must NOT be on for
-# the Suetes stage (its implicit GMRES solver carries float32 state; x64 promotes
-# parts of it to float64 and the while_loop carry types stop matching). The
-# original run_simulation_jw.py never enabled x64. We therefore leave it OFF here
-# and toggle it on only around the dinosaur call in main(). The two stages
-# communicate through a float32 netCDF on disk, so the precision boundary is clean.
-
 import jax.numpy as jnp
 import numpy as np
 import xarray as xr
