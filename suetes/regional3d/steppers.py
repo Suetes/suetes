@@ -498,7 +498,7 @@ class SISLStepper3D:
         final_state, _ = jax.lax.scan(scan_fn, state, jnp.arange(num_steps))
         return final_state
 
-    def step(self, state, t, forcing, bc_fn):
+    def step(self, state, t, forcing, bc_fn, ml_params=None):
         r"""
         Executes a single SISL time step.
 
@@ -557,7 +557,8 @@ class SISLStepper3D:
         else:
             cp_get_tendencies = self.physics.get_tendencies
             
-        tends_n = cp_get_tendencies(state_prime_n, bg_precomputed, True)
+        # Pass ml_params as the 4th argument to the physics evaluator
+        tends_n = cp_get_tendencies(state_prime_n, bg_precomputed, True, ml_params)
         
         u_in = state['u'] + (1.0 - alpha) * self.dt * tends_n['u']
         v_in = state['v'] + (1.0 - alpha) * self.dt * tends_n['v']

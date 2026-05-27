@@ -4,16 +4,18 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "suetes"
-version = "0.1.0"
-description = "Differentiable Atmospheric Solver (JAX)"
+version = "0.8.0"
+description = "Suetes is a Differentiable Regional Climate Model (JAX)"
 dependencies = [
     "numpy",
     "matplotlib",
     "scipy",
     "jax",
-    "jaxlib"
+    "jaxlib",
     "xarray",
-    "cartopy"
+    "cartopy",
+    "pandas",
+    "optax"
 ]
 
 [tool.setuptools]

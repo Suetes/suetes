@@ -12,7 +12,7 @@ options and the rationale behind each.
 import os
 import math
 import cdsapi
-
+import xarray as xr
 
 # ---------------------------------------------------------------------------
 # Pressure-level presets.
@@ -71,7 +71,7 @@ class ERA5Manager:
         appropriate for a NAM-22 run with a ~100 hPa model lid.
     """
 
-    def __init__(self, data_dir="/Data/whittaker/suetes/data",
+    def __init__(self, data_dir="suetes/data",
                  pressure_levels="buffered"):
         self.data_dir = data_dir
         self.client = cdsapi.Client()
@@ -193,3 +193,95 @@ class ERA5Manager:
 
         print("[DATA] Data is ready for the model!")
         return sl_filepath, pl_filepath
+
+    def download_point_columns(self, year, month, days, points_dict, prefix="scm_training"):
+        """
+        Downloads localized 3x3 ERA5 patches for 1D neural closure training.
+        Chunks pressure level requests by day to bypass CDS backend memory limits.
+        """
+        downloaded_files = {}
+        times = [f"{str(i).zfill(2)}:00" for i in range(24)]
+
+        for loc_name, (lat, lon) in points_dict.items():
+            safe_name = loc_name.lower().replace(' ', '_').replace("'", "")
+            sl_filepath = os.path.join(self.data_dir, f"{prefix}_{safe_name}_sl.nc")
+            pl_filepath = os.path.join(self.data_dir, f"{prefix}_{safe_name}_pl.nc")
+            
+            area = [
+                round(lat + 0.25, 2), # North
+                round(lon - 0.25, 2), # West
+                round(lat - 0.25, 2), # South
+                round(lon + 0.25, 2), # East
+            ]
+            
+            print(f"--- Fetching 3x3 column data for {loc_name} ---")
+
+            # 1. Single Levels (Usually light enough for one batch, but safe to leave as is)
+            if os.path.exists(sl_filepath):
+                print(f"[DATA] Single levels for {loc_name} already exist. Skipping.")
+            else:
+                self.client.retrieve(
+                    "reanalysis-era5-single-levels",
+                    {
+                        "product_type": ["reanalysis"],
+                        "variable": [
+                            "10m_u_component_of_wind", "10m_v_component_of_wind",
+                            "2m_dewpoint_temperature", "2m_temperature",
+                            "surface_pressure", "geopotential",
+                            "land_sea_mask", "skin_temperature",
+                        ],
+                        "year": [year], "month": [month], "day": days, "time": times,
+                        "area": area, 
+                        "grid": ["0.25", "0.25"], 
+                        "data_format": "netcdf", 
+                        "download_format": "unarchived",
+                    },
+                    sl_filepath,
+                )
+
+            # 2. Pressure Levels (Chunked by day to prevent CDS cost limit crashes)
+            if os.path.exists(pl_filepath):
+                print(f"[DATA] Pressure levels for {loc_name} already exist. Skipping.")
+            else:
+                print(f"[DATA] Chunking pressure level requests by day to respect CDS limits...")
+                temp_pl_files = []
+                
+                for day in days:
+                    temp_file = pl_filepath.replace(".nc", f"_day{day}.nc")
+                    temp_pl_files.append(temp_file)
+                    
+                    if not os.path.exists(temp_file):
+                        print(f"       -> Requesting day {day}...")
+                        self.client.retrieve(
+                            "reanalysis-era5-pressure-levels",
+                            {
+                                "product_type": ["reanalysis"],
+                                "variable": [
+                                    "geopotential", "specific_humidity", "temperature",
+                                    "u_component_of_wind", "v_component_of_wind",
+                                    "vertical_velocity", 
+                                ],
+                                "pressure_level": self.pressure_levels,
+                                "year": [year], "month": [month], "day": [day], "time": times,
+                                "area": area, 
+                                "grid": ["0.25", "0.25"], 
+                                "data_format": "netcdf", 
+                                "download_format": "unarchived",
+                            },
+                            temp_file,
+                        )
+                
+                # Stitch the daily chunks together locally
+                print(f"[DATA] Stitching daily chunks into final file: {pl_filepath}")
+                ds_pl = xr.open_mfdataset(temp_pl_files, combine='by_coords')
+                ds_pl.to_netcdf(pl_filepath)
+                ds_pl.close()
+                
+                # Clean up the temporary daily files
+                for f in temp_pl_files:
+                    os.remove(f)
+                
+            downloaded_files[loc_name] = (sl_filepath, pl_filepath)
+
+        print("\n[DATA] All 3x3 column training data is ready!")
+        return downloaded_files

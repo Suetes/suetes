@@ -11,6 +11,7 @@ import jax.numpy as jnp
 from suetes.regional3d.diffusion import HyperFilter
 from suetes.regional3d.physics import BulkAerodynamicPBL
 
+
 class Euler3D:
     r"""
     3D fully compressible, non-hydrostatic Euler equation solver.
@@ -142,7 +143,7 @@ class Euler3D:
             'th_v': th_v_bg
         }
 
-    def get_tendencies(self, state_prime, bg, is_explicit=False):
+    def get_tendencies(self, state_prime, bg, is_explicit=False, ml_params=None):
         r"""
         Evaluates the spatial right-hand side (RHS) tendencies for the system.
 
@@ -259,7 +260,7 @@ class Euler3D:
             # Call physics suite
             if self.physics_suite is not None:
                 phys_tends = self.physics_suite.get_explicit_tendencies(
-                    state_prime, bg, interior_mask=self.interior_mask,
+                    state_prime, bg, interior_mask=self.interior_mask, ml_params=ml_params
                 )
 
                 # Add them to the dynamical core's right-hand side

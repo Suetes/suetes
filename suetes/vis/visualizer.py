@@ -686,21 +686,20 @@ class Visualizer:
         plt.close()
         
     def plot_point_timeseries(self, times_hours, suetes_values, era5_values,
-                              location_name, units='K', save_path=None):
+                              location_name, units='K', save_path=None, ml_values=None):
         """
-        Plot a single-cell timeseries comparing Suetes against the ERA5 driver.
-
-        Args:
-            times_hours: 1D iterable of times in hours.
-            suetes_values: 1D iterable of Suetes values at each time.
-            era5_values: 1D iterable of ERA5 values at each time.
-            location_name (str): label for the title.
-            units (str): units string for the y-axis.
-            save_path (str): if set, saves the figure to this path.
+        Plot a single-cell timeseries comparing Suetes (and optionally ML-Suetes) against the ERA5 driver.
         """
         fig, ax = plt.subplots(figsize=(10, 5))
-        ax.plot(times_hours, suetes_values, 'b-',  linewidth=2, label='Suetes')
+        
+        if ml_values is not None:
+            ax.plot(times_hours, suetes_values, 'b-',  linewidth=2, alpha=0.4, label='Suetes (Baseline)')
+            ax.plot(times_hours, ml_values, 'g-', linewidth=2, label='Suetes (ML Corrected)')
+        else:
+            ax.plot(times_hours, suetes_values, 'b-',  linewidth=2, label='Suetes')
+            
         ax.plot(times_hours, era5_values,   'r--', linewidth=2, label='ERA5')
+        
         ax.set_xlabel('Time [hours]')
         ax.set_ylabel(f'Temperature [{units}]')
         ax.set_title(f'Near-surface temperature over {location_name}')

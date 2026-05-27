@@ -12,6 +12,7 @@ env/
 data/
 results/
 suetes.egg-info/
+weights/
 
 # OS specific
 .DS_Store
