@@ -16,7 +16,7 @@ def plot_ablation_spatial_matrix(grid, states_dict, target_state, variable='th_v
     fig, axes = plt.subplots(2, cols, figsize=(6 * cols, 6.5), 
                              subplot_kw={'projection': ccrs.PlateCarree(central_longitude=grid.lon_c)})
     
-    # 1. Gather data and compute global colorbar limits
+    # Gather data and compute global colorbar limits
     all_data = {name: _get_plot_data(grid, state, variable, z_idx, constants) for name, state in states_dict.items()}
     target_data = _get_plot_data(grid, target_state, variable, z_idx, constants)
     
@@ -28,7 +28,7 @@ def plot_ablation_spatial_matrix(grid, states_dict, target_state, variable='th_v
     vmax =  0.1 if np.all(np.isnan(flat_vals)) else float(np.nanpercentile(flat_vals, 99.5))
     if vmin == vmax: vmin -= 1e-5; vmax += 1e-5
 
-    # 2. Draw Top Row (Absolute Fields)
+    # Draw Top Row (Absolute Fields)
     for i, name in enumerate(run_names):
         im_abs = plot_2d_field(grid, states_dict[name], variable, z_idx, sponge_depth, constants, 
                                 cmap='RdBu_r', vmin=vmin, vmax=vmax, title=name, ax=axes[0, i])
@@ -39,7 +39,7 @@ def plot_ablation_spatial_matrix(grid, states_dict, target_state, variable='th_v
     cbar_ax_top = fig.add_axes([0.91, 0.55, 0.015, 0.33]) 
     fig.colorbar(im_abs, cax=cbar_ax_top, orientation='vertical', label=variable)
 
-    # 3. Draw Bottom Row (Anomalies)
+    # Draw Bottom Row (Anomalies)
     anomalies = [all_data[name] - target_data for name in run_names]
     inner_anoms = [a[sponge_depth:-sponge_depth, sponge_depth:-sponge_depth] if sponge_depth > 0 else a for a in anomalies]
     
@@ -76,7 +76,7 @@ def plot_ablation_cross_section_matrix(grid, states_dict, target_state, variable
     
     fig, axes = plt.subplots(2, len(run_names) + 1, figsize=(6 * (len(run_names) + 1), 8))
     
-    # 1. Global limit logic 
+    # Global limit logic 
     all_data = [states_dict[name][variable][:, y_idx, :] for name in run_names] + [target_state[variable][:, y_idx, :]]
     inner_vals = [d[sponge_depth:-sponge_depth, :] if sponge_depth > 0 else d for d in all_data]
     flat_vals = np.concatenate([np.asarray(d).flatten() for d in inner_vals])
@@ -89,7 +89,7 @@ def plot_ablation_cross_section_matrix(grid, states_dict, target_state, variable
         vmax = float(np.nanpercentile(flat_vals, 99.5))
     if vmin == vmax: vmin -= 1e-5; vmax += 1e-5
 
-    # 2. Draw Top Row
+    # Draw Top Row
     for i, name in enumerate(run_names):
         c_abs = plot_cross_section(grid, states_dict[name], variable, y_idx, sponge_depth, 
                                     vmin=vmin, vmax=vmax, title=name, ax=axes[0, i])
@@ -100,7 +100,7 @@ def plot_ablation_cross_section_matrix(grid, states_dict, target_state, variable
     cbar_ax_top = fig.add_axes([0.91, 0.55, 0.015, 0.33])
     fig.colorbar(c_abs, cax=cbar_ax_top, orientation='vertical', label=variable)
     
-    # 3. Draw Bottom Row (Anomalies)
+    # Draw Bottom Row (Anomalies)
     anomalies = [states_dict[name][variable][:, y_idx, :] - target_state[variable][:, y_idx, :] for name in run_names]
     inner_anoms = [a[sponge_depth:-sponge_depth, :] if sponge_depth > 0 else a for a in anomalies]
     
@@ -146,7 +146,6 @@ def plot_ablation_hovmoller_matrix(grid, hov_times, hov_data_dict, variable='th_
     axes[0].set_ylabel("Simulation Time [Hours]")
     plt.suptitle(f"Hovmöller Diagram: {variable}", fontsize=18, y=0.98)
     
-    # ---> ADD GLOBAL COLORBAR FOR HOVMOLLER <---
     cbar_ax = fig.add_axes([0.91, 0.15, 0.015, 0.7])
     fig.colorbar(im, cax=cbar_ax, orientation='vertical', label=variable)
     

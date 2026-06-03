@@ -205,28 +205,27 @@ class BucketLSM:
         Cd_eff = jnp.where(land_mask > 0.5, self.Cd_land, self.Cd_ocean)
         Ch_eff = jnp.where(land_mask > 0.5, self.Ch_land, self.Ch_ocean)
         
-        # 1. Calculate full 3D mass-point wind speed first
+        # Calculate full 3D mass-point wind speed first
         u_m = self.op.avg(u, axis=0, from_loc='u', to_loc='m')
         v_m = self.op.avg(v, axis=1, from_loc='v', to_loc='m')
         speed_m_3d = jnp.sqrt(u_m**2 + v_m**2 + 1e-8)
         
-        # 2. Average the 3D speed back to the staggered faces
+        # Average the 3D speed back to the staggered faces
         speed_u_3d = self.op.avg(speed_m_3d, axis=0, from_loc='m', to_loc='u')
         speed_v_3d = self.op.avg(speed_m_3d, axis=1, from_loc='m', to_loc='v')
         
-        # 3. Extract the surface layer 
+        # Extract the surface layer 
         speed_u_surf = speed_u_3d[:, :, 0]
         speed_v_surf = speed_v_3d[:, :, 0]
         speed_m_surf = speed_m_3d[:, :, 0]
         
-        # --- THE FIX: Use the mass-point shape, NOT the u-face shape ---
+        # Use the mass-point shape, not the u-face shape
         nx_m, ny_m, nz_m = u_m.shape
         Cd_eff_3d = jnp.broadcast_to(Cd_eff[:, :, None], (nx_m, ny_m, nz_m))
         
         # Map to faces and extract the surface layer
         Cd_u = self.op.avg(Cd_eff_3d, axis=0, from_loc='m', to_loc='u')[:, :, 0]
         Cd_v = self.op.avg(Cd_eff_3d, axis=1, from_loc='m', to_loc='v')[:, :, 0]
-        # --------------------------------------------------------
         
         dz_u_surf = bg['dz_u'][:, :, 0]
         dz_v_surf = bg['dz_v'][:, :, 0]

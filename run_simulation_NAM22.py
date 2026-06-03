@@ -31,11 +31,12 @@ from suetes.regional3d.operators import CGridOperator3D
 from suetes.regional3d.euler import Euler3D
 from suetes.regional3d.steppers import SISLStepper3D
 from suetes.regional3d.boundaries import DaviesSponge
-from suetes.regional3d.physics import (
-    PhysicsSuite,
-    McFarlaneVerticalDiffusion, McFarlaneSurfaceDrag,
-    NewtonianRelaxation,
-)
+
+from suetes.physics.base import PhysicsSuite
+from suetes.physics.forcing import NewtonianRelaxation
+from suetes.physics.surface import McFarlaneSurfaceDrag
+from suetes.physics.turbulence import McFarlaneVerticalDiffusion
+
 from suetes.vis.visualizer import Visualizer
 
 DATA_DIR = "suetes/data"

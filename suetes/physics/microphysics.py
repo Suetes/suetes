@@ -111,7 +111,7 @@ class KesslerWarmRain:
         th_v = state['th_v']
         pi_full = state['pi']
 
-        # 1. SATURATION ADJUSTMENT (Latent Heating)
+        # SATURATION ADJUSTMENT (Latent Heating)
         Tv = th_v * pi_full
         T = Tv / (1.0 + (1.0 / self.epsilon - 1.0) * qv - qc - qr)
         p = self.c['p0'] * (pi_full ** (self.c['cp'] / self.c['Rd']))
@@ -127,7 +127,7 @@ class KesslerWarmRain:
         new_qc = qc + dq
         T_new = T + (self.Lv / self.c['cp']) * dq
 
-        # 2. KESSLER RAIN FORMATION
+        # KESSLER RAIN FORMATION
         # Autoconversion (Cloud -> Rain)
         auto = jnp.where(new_qc > self.qc0, self.k1 * (new_qc - self.qc0), 0.0)
         

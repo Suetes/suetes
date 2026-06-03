@@ -76,24 +76,42 @@ class Euler3D:
         Z_m = self.grid.Z_m
         
         if initial_era5_state is not None:
-            # Get the average physical height of each logical level
+            # Get average 1D profile
             z_1d = jnp.mean(Z_m, axis=(0, 1))
-            # Get the average thermodynamic profile
             th_v_1d = jnp.mean(initial_era5_state['th_v'], axis=(0, 1))
-            pi_1d = jnp.mean(initial_era5_state['pi'], axis=(0, 1))
-            # Interpolate the 1D profile onto the 3D grid based on geometric height
+            
+            # Interpolate the potential temperature to the 3D grid
             self.theta_bg = jnp.interp(Z_m, z_1d, th_v_1d)
-            self.pi_bg = jnp.interp(Z_m, z_1d, pi_1d)
+            
+            # Get the true horizontal-mean pressure at the domain top
+            pi_anchor_top = jnp.mean(initial_era5_state['pi'][:, :, -1])
         else:
             # Analytical background for idealized test suites
             self.theta_0 = 300.0
             self.theta_bg = self.theta_0 * jnp.exp((N_bv**2 / self.c['g']) * Z_m) if N_bv > 0.0 else self.theta_0 * jnp.ones_like(Z_m)
             
+            # Calculate top boundary pressure for the analytical profile
+            z_max = jnp.max(Z_m)
             if N_bv > 0.0:
-                self.pi_bg = 1.0 + (self.c['g']**2 / (self.c['cp'] * self.theta_0 * N_bv**2)) * \
-                             (jnp.exp(-N_bv**2 * Z_m / self.c['g']) - 1.0)
+                pi_anchor_top = 1.0 + (self.c['g']**2 / (self.c['cp'] * self.theta_0 * N_bv**2)) * (jnp.exp(-N_bv**2 * z_max / self.c['g']) - 1.0)
             else:
-                self.pi_bg = 1.0 - (self.c['g'] / (self.c['cp'] * self.theta_0)) * Z_m
+                pi_anchor_top = 1.0 - (self.c['g'] / (self.c['cp'] * self.theta_0)) * z_max
+
+        # Hydrostatic reconstruction. The background state cancels the gravitational 
+        # term in the discrete w-equation, leaving zero residual.
+        delta_z = Z_m[:, :, 1:] - Z_m[:, :, :-1]
+        th_v_w_bg = 0.5 * (self.theta_bg[:, :, 1:] + self.theta_bg[:, :, :-1])
+        
+        delta_pi = -(self.c['g'] * delta_z) / (self.c['cp'] * th_v_w_bg)
+        
+        # Integrate pressure down from the top lid
+        pi_cumsum_rev = jnp.cumsum(delta_pi[..., ::-1], axis=-1)[..., ::-1]
+        
+        pi_top_3d = jnp.full((self.grid.nx, self.grid.ny, 1), pi_anchor_top)
+        self.pi_bg = jnp.concatenate([
+            pi_top_3d - pi_cumsum_rev,
+            pi_top_3d
+        ], axis=2)
         
         z_w_3d = self.grid.Z_w
         z_top = self.grid.Lz 
