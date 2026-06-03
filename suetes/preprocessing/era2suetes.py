@@ -413,14 +413,25 @@ class BoundaryProcessor:
         state['w'] = state['w'].at[:, :, -1].set(0.0)             
         state['eta_dot'] = jnp.zeros_like(state['w'])
         
-        # Surface skin potential temperature.
-        # T_skt is regridded from the ERA5 skin_temperature single-level field;
-        # the Exner conversion uses the ERA5 surface pressure (bottom layer of
-        # the horizontally regridded 3D pressure array).
+        # Surface skin virtual potential temperature.
+        # T_skt is regridded from the ERA5 skin_temperature single-level field.
         skt_2d = self.regridder.regrid_2d(stitched_era5_state['skt'], loc='m', order=3)
-        sp_2d = p_era5[:, :, -1]
+        
+        # Use the actual true surface pressure ('sp')
+        sp_2d = self.regridder.regrid_2d(stitched_era5_state['sp'], loc='m', order=3)
+        
+        # Calculate the true surface Exner function
         pi_skin = (sp_2d / self.c['p0']) ** (self.c['Rd'] / self.c['cp'])
-        state['theta_skt'] = skt_2d / pi_skin
+        
+        # Convert physical skin temperature to potential temperature
+        theta_skt_dry = skt_2d / pi_skin
+
+        # Apply virtual temperature correction to match the model's th_v state
+        # We use the lowest model level humidity (which was just interpolated above)
+        epsilon = self.c.get('epsilon', 0.622)
+        q_sfc = state['q'][:, :, 0]
+        
+        state['theta_skt'] = theta_skt_dry * (1.0 + (1.0 / epsilon - 1.0) * q_sfc)
 
         # Enforce global mass conservation (probably a bad idea for open systems!)
         # state = self._balance_global_mass(state)

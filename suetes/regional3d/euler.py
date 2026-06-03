@@ -245,7 +245,13 @@ class Euler3D:
         # Multiply the horizontal divergence sum by m (vertical divergence is unaffected by the horizontal map factor).
         tend_pi = -bg['C_pi'] * (m_m * (div_x + div_y) + div_z)
 
-        tend_th_v = jnp.zeros_like(state_prime['pi'])
+        # Calculate vertical gradient of the background state
+        dth_bg_dz_w = self.op.diff(bg['th_v'], axis=2, from_loc='m', to_loc='w') * (self.grid.dz / bg['dz_w_full'])
+        dth_bg_dz_m = self.op.avg(dth_bg_dz_w, axis=2, from_loc='w', to_loc='m')
+        
+        # The kinematic forcing for the perturbation is the vertical transport of the background state
+        w_m = self.op.avg(w, axis=2, from_loc='w', to_loc='m')
+        tend_th_v = -w_m * dth_bg_dz_m
 
         # Diffusion and physics are only done in the explicit part
         if is_explicit:

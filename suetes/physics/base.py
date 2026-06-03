@@ -1,16 +1,4 @@
-r"""
-Subgrid-Scale Physics and Parameterizations Module.
-
-Contains the physical closures required to model processes that occur at scales 
-smaller than the grid resolution, including turbulence, surface 
-friction, and moist microphysics.
-"""
-
-import jax  
-import jax.numpy as jnp     
-import flax.linen as nn
-from flax import serialization  
-import pickle
+import jax.numpy as jnp
 
 class PhysicsSuite:
     r"""
@@ -60,6 +48,9 @@ class PhysicsSuite:
                 scheme_tends = scheme.get_tendencies(state, bg)
             
             for k in scheme_tends:
+                # Dynamically add the tendency array if this is a new prognostic variable
+                if k not in tends_total:
+                    tends_total[k] = jnp.zeros_like(scheme_tends[k])
                 tends_total[k] += scheme_tends[k]
 
         if interior_mask is not None:
@@ -76,52 +67,3 @@ class PhysicsSuite:
             updates = scheme.apply_update(updated_state)
             updated_state.update(updates)
         return updated_state
-
-
-class ColumnPhysicsNet(nn.Module):
-    """1D Neural Parameterization for subgrid tendencies."""
-    hidden_dims: tuple = (128, 128, 64)
-    
-    @nn.compact
-    def __call__(self, x):
-        for dim in self.hidden_dims:
-            x = nn.Dense(dim)(x)
-            x = nn.swish(x)
-        x = nn.Dense(3, kernel_init=jax.nn.initializers.normal(stddev=1e-5), 
-                     bias_init=jax.nn.initializers.zeros)(x)
-        return x
-
-class MLPhysicsClosure:
-    def __init__(self, op, norm_stats):
-        self.op = op
-        self.mean = jnp.array(norm_stats['mean'])
-        self.std = jnp.array(norm_stats['std'])
-        self.model = ColumnPhysicsNet()
-        self.is_ml_closure = True
-
-    def get_tendencies(self, state, bg, ml_params=None):
-        if ml_params is None:
-            raise ValueError("GRAPH SEVERED: ml_params dropped before reaching the closure!")
-            
-        nn_params = ml_params['nn_params']
-        u_m = self.op.avg(state['u'], axis=0, from_loc='u', to_loc='m')
-        v_m = self.op.avg(state['v'], axis=1, from_loc='v', to_loc='m')
-        z_m = self.op.grid.Z_m
-        X = jnp.stack([u_m, v_m, state['th_v'], z_m], axis=-1)
-        X_norm = (X - self.mean) / (self.std + 1e-8)
-        
-        nx, ny, nz, _ = X_norm.shape
-        X_flat = X_norm.reshape((nx * ny * nz, 4))
-        
-        preds_flat = self.model.apply({'params': nn_params}, X_flat)
-        preds = preds_flat.reshape((nx, ny, nz, 3))
-        
-        MAX_TENDENCY = 5.0e-4 
-        tend_u_m = MAX_TENDENCY * jnp.tanh(preds[..., 0])
-        tend_v_m = MAX_TENDENCY * jnp.tanh(preds[..., 1])
-        tend_th_v_m = MAX_TENDENCY * jnp.tanh(preds[..., 2])
-        
-        tend_u = self.op.avg(tend_u_m, axis=0, from_loc='m', to_loc='u')
-        tend_v = self.op.avg(tend_v_m, axis=1, from_loc='m', to_loc='v')
-        
-        return {'u': tend_u, 'v': tend_v, 'th_v': tend_th_v_m}

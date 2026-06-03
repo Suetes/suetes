@@ -31,7 +31,7 @@ class VerticalPreconditioner:
     resolve high-frequency sound waves.
     """
     def __init__(self, physics, dt, alpha=0.55):
-        """
+        r"""
         Initializes the vertical preconditioner.
 
         Args:
@@ -156,7 +156,7 @@ class SemiLagrangianAdvector3D:
     $$ \mathbf{x}_d = \mathbf{x}_a - \Delta t \, \mathbf{v}(\mathbf{x}_{mid}, t_{mid}) $$
     """
     def __init__(self, grid, physics, dt):
-        """
+        r"""
         Initializes the Semi-Lagrangian advector.
 
         Args:
@@ -274,7 +274,7 @@ class SemiImplicitSolver3D:
     `VerticalPreconditioner` to solve for the implicit stabilizing adjustments.
     """
     def __init__(self, physics, dt):
-        """
+        r"""
         Initializes the implicit solver.
 
         Args:
@@ -357,7 +357,7 @@ class FluxFormAdvector:
     $$ \frac{\partial \rho}{\partial t} + \nabla \cdot (\rho \mathbf{v}) = 0 $$
     """
     def __init__(self, grid, dt):
-        """
+        r"""
         Initializes the FFSL advector.
 
         Args:
@@ -566,7 +566,15 @@ class SISLStepper3D:
         pi_prime_in = state_prime_n['pi'] + (1.0 - alpha) * self.dt * tends_n['pi']
 
         # Apply Eulerian physics tendencies to the thermodynamics before advection
-        th_v_in = state['th_v'] + self.dt * tends_n['th_v']
+        th_v_prime_in = th_v_prime_n + self.dt * tends_n['th_v']
+
+        # Apply Eulerian tendencies to any active tracers before advection
+        tracers_in = {}
+        for key in self.tracer_keys:
+            if key in state:
+                tracers_in[key] = state[key]
+                if key in tends_n:
+                    tracers_in[key] += self.dt * tends_n[key]
 
         # 3d kinematic advection
         u_m = self.physics.op.avg(state['u'], axis=0, from_loc='u', to_loc='m')
@@ -597,18 +605,19 @@ class SISLStepper3D:
         rhs_v = cp_advect_cubic(v_in, coords_v, False)
         rhs_w = cp_advect_cubic(w_in, coords_w, False)
         rhs_pi_prime = cp_advect_cubic(pi_prime_in, coords_m, False)
+        th_v_prime_next = cp_advect_cubic(th_v_prime_in, coords_m, False)
         
         # Advect mass with checkpointed FFSL scheme
         rho_next = cp_advect_ffsl(state['rho'], state, bg_precomputed)
 
         # Advect virtual potential temperature
-        th_v_next = cp_advect_cubic(th_v_in, coords_m, False)
+        th_v_next = th_v_prime_next + self.physics.theta_bg
         
         # Tracers use FFSL to strictly conserve mass
         tracers_next = {}
         for key in self.tracer_keys:
             if key in state:
-                rho_tr_next = cp_advect_ffsl(state['rho'] * state[key], state, bg_precomputed)
+                rho_tr_next = cp_advect_ffsl(state['rho'] * tracers_in[key], state, bg_precomputed)
                 tracers_next[key] = rho_tr_next / (rho_next + 1e-15)
 
         # =====================================================================
