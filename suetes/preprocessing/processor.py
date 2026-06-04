@@ -56,8 +56,25 @@ class ERA5Processor:
         u_surf = np.expand_dims(sl['u10'].values, axis=0)
         v_surf = np.expand_dims(sl['v10'].values, axis=0)
         
-        q_surf = np.zeros_like(p_surf) 
+        # Calculate true surface specific humidity (q_surf) from 2m dewpoint temperature
+        d2m_surf = np.expand_dims(sl['d2m'].values, axis=0)
+        epsilon = 0.622
+        # Tetens formula for saturation vapor pressure
+        e_surf = 611.2 * np.exp(17.67 * (d2m_surf - 273.15) / (d2m_surf - 29.65))
+        q_surf = (epsilon * e_surf) / (p_surf - (1.0 - epsilon) * e_surf)
+
         omega_surf = np.zeros_like(p_surf)
+
+        # Create a sub-surface anchor to prevent flat-line extrapolation in valleys.
+        # We extrapolate 3000m down using the standard lapse rate (0.0065 K/m).
+        dz_sub = 3000.0
+        z_sub = z_surf - dz_sub
+        t_sub = t_surf + (0.0065 * dz_sub)
+        p_sub = p_surf * (t_sub / t_surf) ** (9.81 / (287.05 * 0.0065))
+        q_sub = q_surf  # Assume well-mixed specific humidity below surface
+        u_sub = u_surf
+        v_sub = v_surf
+        omega_sub = omega_surf
 
         # Surface-only fields (2D), not stitched onto the 3D state.
         # skt is the skin temperature and varies hourly (used as the Dirichlet
@@ -83,13 +100,13 @@ class ERA5Processor:
 
         # Stitch them together
         stitched_state = {
-            'geopotential': jnp.array(np.concatenate([z_pl, z_surf], axis=0)),
-            'p': jnp.array(np.concatenate([p_pl, p_surf], axis=0)),
-            'T': jnp.array(np.concatenate([t_pl, t_surf], axis=0)),
-            'q': jnp.array(np.concatenate([q_pl, q_surf], axis=0)),
-            'u': jnp.array(np.concatenate([u_pl, u_surf], axis=0)),
-            'v': jnp.array(np.concatenate([v_pl, v_surf], axis=0)),
-            'omega': jnp.array(np.concatenate([omega_pl, omega_surf], axis=0)),
+            'geopotential': jnp.array(np.concatenate([z_pl, z_surf, z_sub], axis=0)),
+            'p': jnp.array(np.concatenate([p_pl, p_surf, p_sub], axis=0)),
+            'T': jnp.array(np.concatenate([t_pl, t_surf, t_sub], axis=0)),
+            'q': jnp.array(np.concatenate([q_pl, q_surf, q_sub], axis=0)),
+            'u': jnp.array(np.concatenate([u_pl, u_surf, u_sub], axis=0)),
+            'v': jnp.array(np.concatenate([v_pl, v_surf, v_sub], axis=0)),
+            'omega': jnp.array(np.concatenate([omega_pl, omega_surf, omega_sub], axis=0)),
             'skt': jnp.array(skt_2d),
             'lsm': jnp.array(lsm_2d),
             'latitude': pl['latitude'].values,

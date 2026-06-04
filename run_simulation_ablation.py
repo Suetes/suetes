@@ -77,8 +77,8 @@ def main():
     ablation_runs = [
         {"name": "1_Dry_Core", "pbl": False, "tke": False, "micro": False, "sponge": True},
         {"name": "2_Add_PBL",  "pbl": True,  "tke": False, "micro": False, "sponge": True},
-        # {"name": "3_Add_TKE",  "pbl": True,  "tke": True,  "micro": False, "sponge": True},
-        # {"name": "4_Add_Rain", "pbl": True,  "tke": True,  "micro": True,  "sponge": True},
+        {"name": "3_Add_TKE",  "pbl": True,  "tke": True,  "micro": False, "sponge": True},
+        {"name": "4_Add_Rain", "pbl": True,  "tke": True,  "micro": True,  "sponge": True},
     ]
 
     # ---------------------------------------------------------
@@ -206,7 +206,7 @@ def main():
             physics_suite.add_update_scheme(KesslerWarmRain(constants))
 
         # Always keep baseline boundary relaxation
-        physics_suite.add_tendency_scheme(NewtonianRelaxation(tau_relax_hours=24.0))
+        physics_suite.add_tendency_scheme(NewtonianRelaxation(tau_relax_hours=6.0))
 
         sponge = DaviesSponge(grid, operators, sponge_depth=sponge_depth, dt=dt, tau_bndy_factor=10.0)
         

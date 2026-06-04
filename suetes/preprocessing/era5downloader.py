@@ -28,7 +28,7 @@ import xarray as xr
 #     well below 100 hPa (say, below 150 hPa). Otherwise the top driving
 #     level coincides with the lid and the LBC is extrapolated.
 #
-#   * "buffered" (17 levels, 30-1000 hPa): appropriate for the current
+#   * "buffered" (20 levels, 30-1000 hPa): appropriate for the current
 #     run_simulation_12km.py configuration (nz=32, dz=500 m, lid ~16 km
 #     ~ 100 hPa). Provides three driving levels (70, 50, 30 hPa) above
 #     the lid for clean interpolation.
@@ -46,7 +46,7 @@ PRESSURE_LEVEL_PRESETS = {
     "buffered": [
         "30", "50", "70",
         "100", "150", "200", "250", "300", "400", "500", "600",
-        "700", "800", "850", "900", "950", "1000",
+        "700", "800", "850", "875", "900", "925", "950", "975", "1000",
     ],
     "full": [
         "1", "2", "3", "5", "7", "10", "20", "30", "50", "70",

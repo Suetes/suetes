@@ -9,7 +9,6 @@ class NewtonianRelaxation:
     $$ \frac{\partial \theta_v}{\partial t} = -\frac{1}{\tau_R} (\theta_v - \theta_{v,\text{ERA5}}) $$
     """
     def __init__(self, tau_relax_hours=6.0):
-        # Convert relaxation time to seconds
         self.tau_relax = tau_relax_hours * 3600.0
         self.target_state = None
 
@@ -28,7 +27,7 @@ class NewtonianRelaxation:
         if target_th_v is None:
             return {'th_v': jnp.zeros_like(state['th_v'])}
             
-        # Calculate the linear restoring tendency
+        # Uniform linear restoring tendency
         tend_th_v = -(state['th_v'] - target_th_v) / self.tau_relax
         
         return {'th_v': tend_th_v}

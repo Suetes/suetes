@@ -379,19 +379,22 @@ class BoundaryProcessor:
         
         # Hydrostatic pressure reconstruction
         pi_interp = self._interp_3d(self.grid.Z_m, z_era5_m, pi_era5)
-        pi_anchor_top = pi_interp[:, :, -1] 
+        
+        # Anchor to the bottom interpolated value instead of the top
+        pi_anchor_bottom = pi_interp[:, :, 0] 
         
         delta_z = self.grid.Z_m[:, :, 1:] - self.grid.Z_m[:, :, :-1]
         th_v_w = 0.5 * (state['th_v'][:, :, 1:] + state['th_v'][:, :, :-1])
+        
+        # delta_pi is the change in pi going UP one layer (it is naturally negative)
         delta_pi = -(self.c['g'] * delta_z) / (self.c['cp'] * th_v_w)
         
-        # Reverse cumsum to subtract pressure increments from the top down
-        # (JAX doesn't have a native reverse_cumsum, so we flip, sum, and flip back)
-        pi_cumsum_rev = jnp.cumsum(delta_pi[..., ::-1], axis=-1)[..., ::-1]
+        # Standard cumsum integrates upward perfectly
+        pi_cumsum = jnp.cumsum(delta_pi, axis=-1)
         
         state['pi'] = jnp.concatenate([
-            jnp.expand_dims(pi_anchor_top, axis=2) - pi_cumsum_rev,
-            jnp.expand_dims(pi_anchor_top, axis=2)
+            jnp.expand_dims(pi_anchor_bottom, axis=2),
+            jnp.expand_dims(pi_anchor_bottom, axis=2) + pi_cumsum
         ], axis=2)
         
         # Re-derive rho to strictly satisfy the Equation of State
@@ -413,24 +416,19 @@ class BoundaryProcessor:
         state['w'] = state['w'].at[:, :, -1].set(0.0)             
         state['eta_dot'] = jnp.zeros_like(state['w'])
         
-        # Surface skin virtual potential temperature.
         # T_skt is regridded from the ERA5 skin_temperature single-level field.
         skt_2d = self.regridder.regrid_2d(stitched_era5_state['skt'], loc='m', order=3)
         
-        # Use the actual true surface pressure ('sp')
-        sp_2d = self.regridder.regrid_2d(stitched_era5_state['sp'], loc='m', order=3)
+        # Calculate skin Exner function hydrostatically from the lowest model level.
+        dz_half = self.grid.Z_m[:, :, 0] - self.grid.Z_w[:, :, 0]
+        pi_skin = state['pi'][:, :, 0] + (self.c['g'] * dz_half) / (self.c['cp'] * state['th_v'][:, :, 0])
         
-        # Calculate the true surface Exner function
-        pi_skin = (sp_2d / self.c['p0']) ** (self.c['Rd'] / self.c['cp'])
-        
-        # Convert physical skin temperature to potential temperature
+        # Convert physical skin temperature to dry potential temperature
         theta_skt_dry = skt_2d / pi_skin
 
         # Apply virtual temperature correction to match the model's th_v state
-        # We use the lowest model level humidity (which was just interpolated above)
         epsilon = self.c.get('epsilon', 0.622)
         q_sfc = state['q'][:, :, 0]
-        
         state['theta_skt'] = theta_skt_dry * (1.0 + (1.0 / epsilon - 1.0) * q_sfc)
 
         # Enforce global mass conservation (probably a bad idea for open systems!)

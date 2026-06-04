@@ -244,7 +244,10 @@ class BucketLSM:
         
         # Latent Heat Flux (LHF)
         p_surf = self.c['p0'] * (state['pi'][:, :, 0] ** (self.c['cp'] / self.c['Rd']))
-        e_s_surf = 611.2 * jnp.exp(17.67 * (theta_surf - 273.15) / (theta_surf - 29.65))
+
+        # Convert dry potential temperature to true absolute temperature for Tetens formula
+        T_surf = theta_surf * state['pi'][:, :, 0]
+        e_s_surf = 611.2 * jnp.exp(17.67 * (T_surf - 273.15) / (T_surf - 29.65))
         q_s_surf = (self.epsilon * e_s_surf) / (p_surf - (1.0 - self.epsilon) * e_s_surf)
         
         beta = jnp.where(land_mask > 0.5, self.beta_land, 1.0)
