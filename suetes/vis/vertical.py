@@ -6,10 +6,12 @@ import numpy as np
 from suetes.vis.utils import _get_plot_data, _draw_domain_and_sponge, _get_level_height
 
 def plot_cross_section(grid, state, variable, y_idx, sponge_depth=30, overlay_isentropes=False, 
-                       cmap=None, vmin=None, vmax=None, title=None, ax=None, save_path=None, plot_data=None):
+                       cmap=None, vmin=None, vmax=None, title=None, ax=None, save_path=None, 
+                       plot_data=None, xlim=None, ylim=None, overlay_quiver=False, quiver_stride=4):
     """
     Generates a vertical cross-section plot along the X-axis.
     Displays the physical terrain elevation and boundary layer sponge shading.
+    Allows for horizontal/vertical zooming and vector/isentrope overlays.
     """
     x_coords = grid.x_m / 1000.0  
     Z_slice = grid.Z_w[:, y_idx, :] if variable == 'w' else grid.Z_m[:, y_idx, :]
@@ -17,10 +19,8 @@ def plot_cross_section(grid, state, variable, y_idx, sponge_depth=30, overlay_is
     
     # Pad mass-point variables down to the surface (Z_w[0]) for plotting
     if variable != 'w':
-        surface_Z = grid.Z_w[:, y_idx, 0:1] # Get exact topography height
-        surface_data = data_slice[:, 0:1]   # Duplicate the lowest model level data
-        
-        # Prepend the surface values to the arrays
+        surface_Z = grid.Z_w[:, y_idx, 0:1] 
+        surface_data = data_slice[:, 0:1]   
         Z_slice = np.concatenate([surface_Z, Z_slice], axis=1)
         data_slice = np.concatenate([surface_data, data_slice], axis=1)
     
@@ -29,19 +29,24 @@ def plot_cross_section(grid, state, variable, y_idx, sponge_depth=30, overlay_is
     else:
         interior_slice = data_slice
         
-    cmap = 'seismic' if variable == 'w' else ('Blues' if variable == 'q_c' else 'RdBu_r')
+    if cmap is None:
+        cmap = 'seismic' if variable == 'w' else ('Blues' if variable == 'q_c' else 'RdBu_r')
     
     # Calculate limits strictly based on the interior domain
-    if variable == 'w':
-        vmax = float(np.max(np.abs(interior_slice)))
-        vmin = -vmax
-    else:
-        vmax = float(np.max(interior_slice))
-        vmin = float(np.min(interior_slice))
-        if variable == 'q_c': vmin = 0.0
-    
-    if vmax <= vmin:
-        vmax = vmin + 1e-5
+    if vmin is None or vmax is None:
+        if variable == 'w':
+            vmax_calc = float(np.max(np.abs(interior_slice)))
+            vmin_calc = -vmax_calc
+        else:
+            vmax_calc = float(np.max(interior_slice))
+            vmin_calc = float(np.min(interior_slice))
+            if variable == 'q_c': vmin_calc = 0.0
+        
+        if vmax_calc <= vmin_calc:
+            vmax_calc = vmin_calc + 1e-5
+            
+        vmin = vmin if vmin is not None else vmin_calc
+        vmax = vmax if vmax is not None else vmax_calc
 
     show_plot = False
     if ax is None:
@@ -51,28 +56,58 @@ def plot_cross_section(grid, state, variable, y_idx, sponge_depth=30, overlay_is
     X_2d = np.broadcast_to(x_coords[:, None], Z_slice.shape)
     levels = np.linspace(vmin, vmax, 31)
     
-    contour = ax.contourf(X_2d, Z_slice, data_slice, levels=levels, cmap=cmap, vmin=vmin, vmax=vmax, extend='both')
+    # Generate the main contour
+    contour = ax.contourf(X_2d, Z_slice / 1000.0, data_slice, levels=levels, cmap=cmap, vmin=vmin, vmax=vmax, extend='both')
     
     if overlay_isentropes and 'th_v' in state:
         th_v_slice = state['th_v'][:, y_idx, :]
-        levels = np.arange(np.floor(np.min(th_v_slice)), np.ceil(np.max(th_v_slice)), 2.0)
-        ax.contour(np.broadcast_to(x_coords[:, None], grid.Z_m[:, y_idx, :].shape), 
-                   grid.Z_m[:, y_idx, :], th_v_slice, levels=levels, colors='black', linewidths=1.0)
+        th_levels = np.arange(np.floor(np.min(th_v_slice)), np.ceil(np.max(th_v_slice)), 2.0)
         
-    ax.fill_between(x_coords, 0, grid.Z_w[:, y_idx, 0], color='dimgray', label='Topography')
+        surf_th = th_v_slice[:, 0:1]
+        th_v_pad = np.concatenate([surf_th, th_v_slice], axis=1)
+        Z_m_pad = np.concatenate([grid.Z_w[:, y_idx, 0:1], grid.Z_m[:, y_idx, :]], axis=1) / 1000.0
+        
+        cl = ax.contour(X_2d, Z_m_pad, th_v_pad, levels=th_levels, colors='black', linewidths=1.0, alpha=0.7)
+        ax.clabel(cl, inline=True, fmt='%1.0f', fontsize=8)
+        
+    if overlay_quiver and 'u' in state and 'w' in state:
+        u_slice = 0.5 * (state['u'][:-1, y_idx, :] + state['u'][1:, y_idx, :]) if state['u'].shape[0] > grid.nx else state['u'][:, y_idx, :]
+        w_slice = state['w'][:, y_idx, :]
+        
+        nz_min = min(u_slice.shape[1], w_slice.shape[1])
+        s = quiver_stride
+        
+        X_q = X_2d[::s, :nz_min:s]
+        Z_q = (Z_slice[:, :nz_min] / 1000.0)[::s, ::s]
+        U_q = u_slice[::s, :nz_min:s]
+        W_q = w_slice[::s, :nz_min:s]
+        
+        ax.quiver(X_q, Z_q, U_q, W_q, color='purple', alpha=0.5, width=0.002)
+        
+    # Draw physical terrain
+    ax.fill_between(x_coords, 0, grid.Z_w[:, y_idx, 0] / 1000.0, color='dimgray', label='Topography')
     
+    # Domain Zoom/Crop
+    if xlim is not None: ax.set_xlim(xlim)
+    else: ax.set_xlim([x_coords.min(), x_coords.max()])
+        
+    if ylim is not None: ax.set_ylim(ylim)
+    else: ax.set_ylim([0, (grid.Z_w[:, y_idx, -1] / 1000.0).max()])
+
+    # Draw sponges only if they are within the cropped view
     if sponge_depth > 0:
         x_left = x_coords[sponge_depth]
         x_right = x_coords[-sponge_depth-1]
-        
-        ax.axvline(x=x_left, color='k', linestyle='--', linewidth=1.5)
-        ax.axvline(x=x_right, color='k', linestyle='--', linewidth=1.5, label='Sponge')
-        
-        # Use the dark shadow approach so it doesn't wash out the white center of the seismic cmap
-        ax.axvspan(x_coords[0], x_left, color='black', alpha=0.15, zorder=4)
-        ax.axvspan(x_right, x_coords[-1], color='black', alpha=0.15, zorder=4)
+        if xlim is None or (xlim[0] < x_left):
+            ax.axvline(x=x_left, color='k', linestyle='--', linewidth=1.5)
+            ax.axvspan(x_coords[0], x_left, color='black', alpha=0.15, zorder=4)
+        if xlim is None or (xlim[1] > x_right):
+            ax.axvline(x=x_right, color='k', linestyle='--', linewidth=1.5, label='Sponge' if xlim is None else None)
+            ax.axvspan(x_right, x_coords[-1], color='black', alpha=0.15, zorder=4)
 
     ax.set_title(title or f"Cross Section: {variable} (y-index: {y_idx})", fontsize=11)
+    ax.set_xlabel("Distance [km]")
+    ax.set_ylabel("Altitude [km]")
 
     if show_plot:
         plt.colorbar(contour, ax=ax, label=variable)
@@ -83,13 +118,17 @@ def plot_cross_section(grid, state, variable, y_idx, sponge_depth=30, overlay_is
         
     return contour
 
-def plot_slice_locator_dashboard(grid, state, map_var='th_v', slice_var='w', map_z=5, sponge_depth=30, constants=None, save_path=None):
+def plot_slice_locator_dashboard(grid, state, map_var='th_v', slice_var='w', map_z=5, 
+                                 sponge_depth=30, constants=None, save_path=None,
+                                 x_indices=None, y_indices=None, slice_xlim=None, slice_ylim=None):
     """Plots two locator maps and two sets of 3 vertical cross-sections."""
     import matplotlib.gridspec as gridspec
     
     # Select 3 evenly spaced indices for X and Y slices
-    y_indices = [grid.ny // 4, grid.ny // 2, 3 * grid.ny // 4]
-    x_indices = [grid.nx // 4, grid.nx // 2, 3 * grid.nx // 4]
+    if y_indices is None:
+        y_indices = [grid.ny // 4, grid.ny // 2, 3 * grid.ny // 4]
+    if x_indices is None:
+        x_indices = [grid.nx // 4, grid.nx // 2, 3 * grid.nx // 4]
     
     x_colors = ['#FF595E', '#FFCA3A', '#8AC926'] # Distinct colors for X slices (Horizontal cuts)
     y_colors = ['#1982C4', '#6A4C93', '#F15BB5'] # Distinct colors for Y slices (Vertical cuts)
@@ -142,8 +181,16 @@ def plot_slice_locator_dashboard(grid, state, map_var='th_v', slice_var='w', map
         
         X_2d = np.broadcast_to(coords[:, None], Z_coords.shape)
         c = ax.contourf(X_2d, Z_coords, slice_data, levels=levels, cmap=cmap, extend='both')
+        
         ax.fill_between(coords, 0, Z_coords[:, 0], color='dimgray')
         
+        if slice_xlim is not None:
+            ax.set_xlim(slice_xlim)
+        if slice_ylim is not None:
+            ax.set_ylim(slice_ylim)
+        else:
+            ax.set_ylim(0, 15000)
+
         if sponge_depth > 0:
             ax.axvspan(coords[0], coords[sponge_depth], color='black', alpha=0.15, zorder=4)
             ax.axvspan(coords[-sponge_depth-1], coords[-1], color='black', alpha=0.15, zorder=4)
@@ -158,7 +205,6 @@ def plot_slice_locator_dashboard(grid, state, map_var='th_v', slice_var='w', map
         if show_x_label: ax.set_xlabel("Distance [km]")
         else: ax.set_xticklabels([])
         ax.set_ylabel("Height [m]")
-        ax.set_ylim(0, 15000)
         return c
 
     # --- Bottom Left: 3 Stacked X-slices ---

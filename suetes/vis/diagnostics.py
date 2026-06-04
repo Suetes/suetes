@@ -17,9 +17,17 @@ def plot_point_timeseries(times_hours, suetes_values, era5_values,
         
     ax.plot(times_hours, era5_values,   'r--', linewidth=2, label='ERA5')
     
+    # Dynamically determine the variable name based on the specified units
+    if units in ['km/h', 'm/s']:
+        var_name = "Wind Speed"
+    elif units in ['K', 'C', 'deg C']:
+        var_name = "Near-surface Temperature"
+    else:
+        var_name = "Variable"
+    
     ax.set_xlabel('Time [hours]')
-    ax.set_ylabel(f'Temperature [{units}]')
-    ax.set_title(f'Near-surface temperature over {location_name}')
+    ax.set_ylabel(f'{var_name} [{units}]')
+    ax.set_title(f'{var_name} over {location_name}')
     ax.grid(True, ls='--', alpha=0.5)
     ax.legend()
     plt.tight_layout()

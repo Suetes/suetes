@@ -250,6 +250,9 @@ class McFarlaneVerticalDiffusion:
         # Eddy diffusivity at w-points
         K_w = l_w ** 2 * shear_w * f_w
 
+        # Diffusive CFL safety cap to prevent numerical explosion
+        K_w = jnp.minimum(K_w, 500.0)
+
         # Fluxes; zero at top and bottom (surface is handled elsewhere)
         flux_u_w = K_w * du_dz_w
         flux_v_w = K_w * dv_dz_w

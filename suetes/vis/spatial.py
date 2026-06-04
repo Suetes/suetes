@@ -6,7 +6,8 @@ import numpy as np
 from suetes.vis.utils import _get_plot_data, _draw_domain_and_sponge, _get_level_height
 
 def plot_2d_field(grid, state, variable, z_idx=5, sponge_depth=30, constants=None, 
-                  cmap='viridis', vmin=None, vmax=None, scale='linear', title=None, ax=None, save_path=None, plot_data=None):
+                  cmap='viridis', vmin=None, vmax=None, scale='linear', title=None, 
+                  ax=None, save_path=None, plot_data=None, extent=None):
     """
     Plots a horizontal cross-section of a 3D field on a geographic map projection.
     Includes an automatic antimeridian wrap fix for domains crossing the dateline.
@@ -54,6 +55,9 @@ def plot_2d_field(grid, state, variable, z_idx=5, sponge_depth=30, constants=Non
 
     im = ax.pcolormesh(lons, lats, data, transform=ccrs.PlateCarree(), cmap=cmap, vmin=vmin, vmax=vmax)
     _draw_domain_and_sponge(ax, lons, lats, sponge_depth)
+
+    if extent is not None:
+        ax.set_extent(extent, crs=ccrs.PlateCarree())
     
     ax.set_title(title or f"{variable.upper()} at Level {z_idx}", fontsize=14)
     ax.gridlines(draw_labels=show_plot, linewidth=0.5, color='gray', alpha=0.5, linestyle='--')
@@ -69,7 +73,7 @@ def plot_2d_field(grid, state, variable, z_idx=5, sponge_depth=30, constants=Non
 
 def plot_quiver_field(grid, state, bg_var='pi', u_var='u', v_var='v', z_idx=5, 
                       sponge_depth=30, constants=None, cmap='coolwarm', 
-                      title=None, ax=None, save_path=None, stride=15):
+                      title=None, ax=None, save_path=None, stride=15, extent=None):
     """Plots a contoured background field with a geographic wind quiver overlay."""
     
     bg_data = _get_plot_data(grid, state, bg_var, z_idx, constants)
@@ -110,6 +114,9 @@ def plot_quiver_field(grid, state, bg_var='pi', u_var='u', v_var='v', z_idx=5,
                   width=0.003, headwidth=4, headlength=5)
     
     _draw_domain_and_sponge(ax, lons, lats, sponge_depth)
+
+    if extent is not None:
+        ax.set_extent(extent, crs=ccrs.PlateCarree())
     
     ax.set_title(title or f"{bg_var.upper()} and Wind Vectors at Level {z_idx}", fontsize=14)
     ax.gridlines(draw_labels=show_plot, linewidth=0.5, color='gray', alpha=0.5, linestyle='--')
@@ -126,7 +133,8 @@ def plot_quiver_field(grid, state, bg_var='pi', u_var='u', v_var='v', z_idx=5,
         
     return im
 
-def plot_dashboard(grid, state_model, z_idx=5, sponge_depth=30, fields=None, time_hours=None, save_path=None):
+def plot_dashboard(grid, state_model, z_idx=5, sponge_depth=30, fields=None, time_hours=None, 
+                   save_path=None, extent=None, quiver_stride=12):
     """Generates a multi-panel overview of the model state."""
     if fields is None:
         fields = [
@@ -145,7 +153,6 @@ def plot_dashboard(grid, state_model, z_idx=5, sponge_depth=30, fields=None, tim
     
     for i, field_def in enumerate(fields):
         if field_def.get('type') == 'quiver':
-            # Route to the quiver method
             im = plot_quiver_field(
                 grid, state_model, 
                 bg_var=field_def.get('bg_var', 'pi'),
@@ -153,16 +160,17 @@ def plot_dashboard(grid, state_model, z_idx=5, sponge_depth=30, fields=None, tim
                 v_var=field_def.get('v_var', 'v'),
                 z_idx=z_idx, sponge_depth=sponge_depth, 
                 cmap=field_def.get('cmap', 'coolwarm'), 
-                title=field_def['title'], ax=axes[i], stride=12
+                title=field_def['title'], ax=axes[i], 
+                stride=quiver_stride, 
+                extent=extent 
             )
             fig.colorbar(im, ax=axes[i], orientation='horizontal', pad=0.05, fraction=0.046)
         else:
-            # Standard pcolormesh
             scale = field_def.get('scale', 'linear')
             im = plot_2d_field(
                 grid, state_model, field_def['var'], z_idx, sponge_depth, 
                 cmap=field_def.get('cmap', 'viridis'), scale=scale, 
-                title=field_def['title'], ax=axes[i]
+                title=field_def['title'], ax=axes[i], extent=extent
             )
             extend = 'both' if scale == 'sym' else 'neither'
             fig.colorbar(im, ax=axes[i], orientation='horizontal', pad=0.05, fraction=0.046, extend=extend)

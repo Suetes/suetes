@@ -148,10 +148,7 @@ def main():
         initial_state.pop('q', None)
         initial_state.pop('q_c', None)
 
-    initial_state['theta_surf'] = (
-        land_fraction * initial_state['theta_skt']
-        + (1.0 - land_fraction) * initial_state['th_v'][:, :, 0]
-    )
+    initial_state['theta_surf'] = initial_state['theta_skt']
     initial_state['target_th_v'] = initial_state['th_v']
     initial_state.pop('theta_skt', None)
 
@@ -222,13 +219,10 @@ def main():
 
     def step_fn(curr_state, step_idx):
         t_curr = step_idx * dt
-
         bc_state_t = time_manager.get_forcing(t_curr)
 
-        curr_state['theta_surf'] = (
-            land_fraction * bc_state_t['theta_skt']
-            + (1.0 - land_fraction) * bc_state_t['th_v'][:, :, 0]
-        )
+        # Let the true skin temperature (Land and SST) drive the fluxes
+        curr_state['theta_surf'] = bc_state_t['theta_skt']
         curr_state['target_th_v'] = bc_state_t['th_v']
 
         def bc_fn(state_next, _):

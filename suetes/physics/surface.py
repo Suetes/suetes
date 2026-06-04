@@ -51,6 +51,10 @@ class McFarlaneSurfaceDrag:
         abs_Ri = jnp.abs(Ri_B)
         F_unstable = 1.0 + 10.0 * abs_Ri \
                      / (1.0 + 10.0 * jnp.sqrt(abs_Ri / (87.0 * A_sq + 1e-12)))
+        # Prevents thermal runaway when the 250m deep layer encounters
+        # massive temperature gradients over hot daytime land.
+        F_unstable = jnp.minimum(F_unstable, 5.0)
+        
         F_stable = (1.0 - 5.0 * self.epsilon * Ri_B) ** 2 \
                    / (1.0 + 10.0 * (1.0 - self.epsilon) * Ri_B)
         Ri_cutoff = 1.0 / (5.0 * self.epsilon + 1e-12)
