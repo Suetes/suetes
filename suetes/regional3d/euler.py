@@ -123,7 +123,7 @@ class Euler3D:
         )
 
         # Initialize the spatial filter
-        self.diffusion = HyperFilter(self.grid, nu_h=self.nu_h, nu_v = 0.0)
+        self.diffusion = HyperFilter(self.grid, self.op, nu_h=self.nu_h, nu_v = 0.0)
 
 
     def precompute_bg(self, bg_state):

@@ -77,79 +77,93 @@ class SpatialFilter:
         return diff_tends
 
 class HyperFilter:
-    r"""
-    Applies 4th-order Hyperdiffusion to selectively damp the smallest resolvable scales.
-
-    Unlike 2nd-order diffusion, hyperdiffusion strongly preserves physical gradients 
-    at larger scales while heavily penalizing $2\Delta x$ numerical noise. The 
-    governing continuous equation is:
-
-    $$ \frac{\partial f}{\partial t} = -\nu_h \nabla_h^4 f - \nu_v \frac{\partial^4 f}{\partial z^4} $$
     """
-    def __init__(self, grid, nu_h=1e6, nu_v=1e6):
-        """
-        Initializes the 4th-order hyper-filter.
-
-        Args:
-            grid (RegionalGrid3D): The computational grid.
-            nu_h (float): Horizontal hyper-viscosity coefficient [$m^4 s^{-1}$].
-            nu_v (float): Vertical hyper-viscosity coefficient [$m^4 s^{-1}$].
-        """
+    Applies 4th-order Hyperdiffusion using true Cartesian gradients.
+    
+    Corrects for terrain-following coordinates by incorporating grid metric 
+    terms, preventing spurious diffusion along steep topography.
+    """
+    def __init__(self, grid, operators, nu_h=1e6, nu_v=1e6):
         self.grid = grid
+        self.op = operators
         self.nu_h = nu_h 
         self.nu_v = nu_v
 
-    def _laplacian_comp(self, f, axis, ds):
-        """
-        Computes the discrete 1D Laplacian using central differences.
-
-        $$ \frac{\partial^2 f}{\partial x^2} \approx \frac{f_{i+1} - 2f_i + f_{i-1}}{\Delta x^2} $$
-        """
-        pad_width = [(0, 0), (0, 0), (0, 0)]
-        pad_width[axis] = (1, 1)
-        f_pad = jnp.pad(f, pad_width, mode='edge')
+    def _cartesian_horizontal_laplacian(self, f_m, bg):
+        # True horizontal gradient in X (at u-faces)
+        df_dxi_u = self.op.diff(f_m, axis=0, from_loc='m', to_loc='u') / self.grid.dx
+        df_dz_m = self.op.avg(
+            self.op.diff(f_m, axis=2, from_loc='m', to_loc='w') / bg['dz_w_full'], 
+            axis=2, from_loc='w', to_loc='m'
+        )
+        df_dz_u = self.op.avg(df_dz_m, axis=0, from_loc='m', to_loc='u')
+        z_xi_u = self.op.diff(self.grid.Z_m, axis=0, from_loc='m', to_loc='u') / self.grid.dx
         
-        if axis == 0:
-            return (f_pad[2:, :, :] - 2.0 * f + f_pad[:-2, :, :]) / (ds**2)
-        elif axis == 1:
-            return (f_pad[:, 2:, :] - 2.0 * f + f_pad[:, :-2, :]) / (ds**2)
-        else:
-            return (f_pad[:, :, 2:] - 2.0 * f + f_pad[:, :, :-2]) / (ds**2)
+        Gx_u = df_dxi_u - z_xi_u * df_dz_u
 
-    def get_tendencies(self, state_prime, bg_precomputed=None):
-        r"""
-        Computes the hyperdiffusion tendencies for momentum and thermodynamics.
+        # True horizontal gradient in Y (at v-faces)
+        df_deta_v = self.op.diff(f_m, axis=1, from_loc='m', to_loc='v') / self.grid.dy
+        df_dz_v = self.op.avg(df_dz_m, axis=1, from_loc='m', to_loc='v')
+        z_eta_v = self.op.diff(self.grid.Z_m, axis=1, from_loc='m', to_loc='v') / self.grid.dy
+        
+        Gy_v = df_deta_v - z_eta_v * df_dz_v
 
-        To accurately compute $\nabla^4 f$, the Laplacian operator is applied 
-        iteratively: $\nabla^4 f = \nabla^2(\nabla^2 f)$.
+        # Divergence of the Cartesian gradients (back to mass points)
+        dGx_dxi_m = self.op.diff(Gx_u, axis=0, from_loc='u', to_loc='m') / self.grid.dx
+        Gx_m = self.op.avg(Gx_u, axis=0, from_loc='u', to_loc='m')
+        dGx_dz_w = self.op.diff(Gx_m, axis=2, from_loc='m', to_loc='w') / bg['dz_w_full']
+        dGx_dz_m = self.op.avg(dGx_dz_w, axis=2, from_loc='w', to_loc='m')
+        z_xi_m = self.op.avg(z_xi_u, axis=0, from_loc='u', to_loc='m')
+        
+        div_Gx = dGx_dxi_m - z_xi_m * dGx_dz_m
 
-        Args:
-            state_prime (dict): The prognostic state variables.
-            bg_precomputed (dict, optional): Background state for thermodynamic variables.
-                Defaults to None.
+        dGy_deta_m = self.op.diff(Gy_v, axis=1, from_loc='v', to_loc='m') / self.grid.dy
+        Gy_m = self.op.avg(Gy_v, axis=1, from_loc='v', to_loc='m')
+        dGy_dz_w = self.op.diff(Gy_m, axis=2, from_loc='m', to_loc='w') / bg['dz_w_full']
+        dGy_dz_m = self.op.avg(dGy_dz_w, axis=2, from_loc='w', to_loc='m')
+        z_eta_m = self.op.avg(z_eta_v, axis=1, from_loc='v', to_loc='m')
 
-        Returns:
-            dict: Dictionary of hyperdiffusion tendencies.
-        """
+        div_Gy = dGy_deta_m - z_eta_m * dGy_dz_m
+
+        return div_Gx + div_Gy
+
+    def _vertical_laplacian(self, f_m, bg):
+        # Pure vertical diffusion
+        df_dz_w = self.op.diff(f_m, axis=2, from_loc='m', to_loc='w') / bg['dz_w_full']
+        return self.op.diff(df_dz_w, axis=2, from_loc='w', to_loc='m') / bg['dz_m_full']
+
+    def get_tendencies(self, state_prime, bg_precomputed):
         diff_tends = {}
         for k in ['u', 'v', 'w', 'th_v']:
             if k in state_prime:
-                if k == 'th_v' and bg_precomputed is not None:
-                    f = state_prime['th_v'] - bg_precomputed['th_v']
+                # Map field to mass points for stable tensor math
+                if k == 'u':
+                    f_m = self.op.avg(state_prime['u'], axis=0, from_loc='u', to_loc='m')
+                elif k == 'v':
+                    f_m = self.op.avg(state_prime['v'], axis=1, from_loc='v', to_loc='m')
+                elif k == 'w':
+                    f_m = self.op.avg(state_prime['w'], axis=2, from_loc='w', to_loc='m')
+                else: 
+                    f_m = state_prime['th_v'] - bg_precomputed['th_v']
+
+                # 1st Laplacian
+                lap1_h = self._cartesian_horizontal_laplacian(f_m, bg_precomputed)
+                lap1_v = self._vertical_laplacian(f_m, bg_precomputed)
+
+                # 2nd Laplacian (Hyperdiffusion)
+                hyper_h = -self.nu_h * self._cartesian_horizontal_laplacian(lap1_h, bg_precomputed)
+                hyper_v = -self.nu_v * self._vertical_laplacian(lap1_v, bg_precomputed)
+
+                tend_m = hyper_h + hyper_v
+
+                # Stagger back to appropriate face
+                if k == 'u':
+                    diff_tends['u'] = self.op.avg(tend_m, axis=0, from_loc='m', to_loc='u')
+                elif k == 'v':
+                    diff_tends['v'] = self.op.avg(tend_m, axis=1, from_loc='m', to_loc='v')
+                elif k == 'w':
+                    diff_tends['w'] = self.op.avg(tend_m, axis=2, from_loc='m', to_loc='w')
                 else:
-                    f = state_prime[k]
-                
-                # Compute Horizontal Hyperdiffusion
-                lap_x = self._laplacian_comp(f, axis=0, ds=self.grid.dx)
-                hyper_x = -self.nu_h * self._laplacian_comp(lap_x, axis=0, ds=self.grid.dx)
-                
-                lap_y = self._laplacian_comp(f, axis=1, ds=self.grid.dy)
-                hyper_y = -self.nu_h * self._laplacian_comp(lap_y, axis=1, ds=self.grid.dy)
-                
-                # Compute Vertical Hyperdiffusion
-                lap_z = self._laplacian_comp(f, axis=2, ds=self.grid.dz)
-                hyper_z = -self.nu_v * self._laplacian_comp(lap_z, axis=2, ds=self.grid.dz)
-                
-                diff_tends[k] = hyper_x + hyper_y + hyper_z
-                
+                    diff_tends['th_v'] = tend_m
+                    
         return diff_tends

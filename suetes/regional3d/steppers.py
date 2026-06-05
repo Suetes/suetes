@@ -146,6 +146,7 @@ class VerticalPreconditioner:
             'eta_dot': precond_eta_dot
         }
 
+
 class SemiLagrangianAdvector3D:
     r"""
     Computes fluid parcel trajectories and interpolates scalar quantities.
@@ -335,7 +336,7 @@ class SemiImplicitSolver3D:
                 'eta_dot': L_out['eta_dot'] 
             }
 
-        x_sol_scaled, info = gmres(A_fn, rhs_scaled, x0=rhs_scaled, tol=1e-4, maxiter=5, restart=10, M=M_fn)
+        x_sol_scaled, info = gmres(A_fn, rhs_scaled, x0=rhs_scaled, tol=1e-6, maxiter=20, restart=10, M=M_fn)
         
         return {
             'u': x_sol_scaled['u'], 

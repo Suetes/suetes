@@ -18,7 +18,7 @@ class SmagorinskyLillySGS:
     \end{align}
     $$
     """
-    def __init__(self, grid, operators, constants, Cs=0.15, Pr_t=1.0, critical_Ri=0.25):
+    def __init__(self, grid, operators, constants, dt, Cs=0.15, Pr_t=1.0, critical_Ri=0.25):
         """
         Args:
             grid (RegionalGrid3D): The computational grid.
@@ -31,6 +31,7 @@ class SmagorinskyLillySGS:
         self.grid = grid
         self.op = operators
         self.c = constants
+        self.dt = dt
         self.Cs = Cs
         self.Pr_t = Pr_t
         self.Ri_c = critical_Ri
@@ -75,9 +76,17 @@ class SmagorinskyLillySGS:
         Ri = N2_m / (S_mag**2)
         f_Ri = jnp.sqrt(jnp.maximum(0.0, 1.0 - Ri / self.Ri_c))
 
-        # Calculate Eddy Viscosity (nu_t)
+        # Calculate Unbounded Eddy Viscosity (nu_t)
         Delta = (self.grid.dx * self.grid.dy * bg['dz_m_full']) ** (1.0/3.0)
-        nu_t_m = (self.Cs * Delta)**2 * S_mag * f_Ri
+        nu_t_m_unbounded = (self.Cs * Delta)**2 * S_mag * f_Ri
+
+        # Explicit diffusive CFL limit: nu < dz^2 / (4 * dt). 
+        # We apply a 0.8 safety factor to ensure strict stability.
+        max_nu_t = (bg['dz_m_full']**2) / (4.0 * self.dt) * 0.8
+        nu_t_m = jnp.minimum(nu_t_m_unbounded, max_nu_t)
+
+        nu_t_m = nu_t_m_unbounded
+
 
         # Pre-calculate face viscosities for the flux divergence
         nu_t_u = self.op.avg(nu_t_m, axis=0, from_loc='m', to_loc='u')

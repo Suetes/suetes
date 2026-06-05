@@ -29,9 +29,10 @@ from suetes.regional3d.steppers import SISLStepper3D
 from suetes.regional3d.boundaries import DaviesSponge
 
 from suetes.physics.base import PhysicsSuite
-from suetes.physics.forcing import NewtonianRelaxation
 from suetes.physics.surface import McFarlaneSurfaceDrag
-from suetes.physics.turbulence import McFarlaneVerticalDiffusion
+from suetes.physics.turbulence import SmagorinskyLillySGS
+from suetes.physics.gravity_waves import McFarlaneGWD
+from suetes.physics.forcing import NewtonianRelaxation
 
 from suetes.vis.visualizer import Visualizer
 
@@ -50,11 +51,11 @@ def main():
     nx, ny, nz = 200, 200, 40
     dx, dy, dz = 2000.0, 2000.0, 350.0
     sponge_depth = 15
-    smooth_sigma = 0.1  # Less smoothing to preserve steep Long Range Mountains
+    smooth_sigma = 0.2  # Less smoothing to preserve steep Long Range Mountains
     
     # Reduced dt for high winds and steep terrain at 2km resolution
-    dt = 20.0
-    sim_hours = 13  # Feb 14 00z to Feb 16 00z
+    dt = 5.0
+    sim_hours = 12  # Feb 14 00z to Feb 14 12z
     sim_time_seconds = sim_hours * 3600.0
     num_era5_states = int(sim_hours) + 1
 
@@ -140,7 +141,7 @@ def main():
     initial_state['target_th_v'] = initial_state['th_v']
     initial_state.pop('theta_skt', None)
 
-    z0_ocean, z0_land = 1e-4, 0.1
+    z0_ocean, z0_land = 1e-4, 1.0  
     epsilon_ocean, epsilon_land = 0.3, 0.0
     z_0_field = land_fraction * z0_land + (1.0 - land_fraction) * z0_ocean
     epsilon_field = land_fraction * epsilon_land + (1.0 - land_fraction) * epsilon_ocean
@@ -157,28 +158,45 @@ def main():
     )
     interior_mask = sponge.get_interior_mask()
 
+    # Define a synthetic subgrid orographic variance field for GWD.
+    # In a full run, compute this from your high-res GEBCO DEM dataset.
+    # For now, we seed a baseline 2D array mirroring the ridge line.
+    h_variance_field = jnp.where(land_fraction > 0.5, 2500.0, 0.0) # 50m standard deviation squared
+
     physics_suite = PhysicsSuite()
 
+    # A. Surface Layer Drag
     pbl_scheme = McFarlaneSurfaceDrag(
         grid, operators, constants,
         z_0=z_0_field, epsilon=epsilon_field,
         theta_surf=initial_state['theta_surf'],
     )
-    vert_diff_scheme = McFarlaneVerticalDiffusion(
-        grid, operators, constants,
-        epsilon=epsilon_field[..., None],
+    
+    # B. 3D Subgrid Scale Turbulence Closure instead of 1D vertical mixing
+    sgs_turb_scheme = SmagorinskyLillySGS(
+        grid, operators, constants, dt=dt,
+        Cs=0.15, Pr_t=1.0, critical_Ri=0.25
     )
+    
+    # C. Orographic Gravity Wave Drag
+    gwd_scheme = McFarlaneGWD(
+        grid, operators, constants,
+        h_variance=h_variance_field, F_c=0.7, mu=1.5e-5
+    )
+
+    # D. Newtonian relaxation
     nudging_scheme = NewtonianRelaxation(tau_relax_hours=6.0)
 
     physics_suite.add_tendency_scheme(pbl_scheme)
-    physics_suite.add_tendency_scheme(vert_diff_scheme)
+    physics_suite.add_tendency_scheme(sgs_turb_scheme)
+    physics_suite.add_tendency_scheme(gwd_scheme)
     physics_suite.add_tendency_scheme(nudging_scheme)
 
     physics = Euler3D(
         grid, operators, constants, dt=dt,
         initial_era5_state=initial_state,
         damp_height=9000.0, max_damp=3.0,
-        nu_div_factor=0.1, nu_h_factor=0.2,
+        nu_div_factor=0.2, nu_h_factor=0.2,
         physics_suite=physics_suite, 
         interior_mask=interior_mask,
     )
@@ -263,19 +281,48 @@ def main():
 
     target_hours = [6, 8, 10, 12]
     
-    print("[PLOT] Generating temporal evolution dashboards...")
+    print("-" * 60)
+    print("[PLOT] Generating temporal evolution dashboards and slices...")
+    
+    # Define the critical hours of the storm
+    target_hours = [6, 8, 10, 12]
+    
+    # A. Setup limits for the Horizontal Dashboards
+    lon_min, lon_max = lon_c - 0.75, lon_c + 0.75
+    lat_min, lat_max = lat_c - 0.75, lat_c + 0.75
+    wreckhouse_extent = [lon_min, lon_max, lat_min, lat_max]
+
+    # B. Setup limits for the Vertical Cross-Sections
+    y_targets = [96, 100, 104]  # Clustered right over Wreckhouse
+    x_targets = [96, 100, 104] 
+    zoom_x_km = [-50.0, 50.0]   # 100km horizontal window
+    zoom_z_m = [0, 5000]        # Focus strictly on the lower 5km
+
+    visualizer = Visualizer()
+
     for h in target_hours:
         # Ensure the hour exists in our snapshots list
         if h < len(snapshots):
             state_at_h = snapshots[h]
             
+            # 1. Generate the Horizontal Dashboard
             visualizer.plot_dashboard(
                 grid, state_at_h, z_idx=2, sponge_depth=sponge_depth,
                 time_hours=h, extent=wreckhouse_extent,
                 quiver_stride=6, 
                 save_path=os.path.join(output_dir, f"{RUN_NAME}_zoomed_dash_{h}h.png"),
             )
-            print(f"  -> Saved dashboard for T={h}h")
+            
+            # 2. Generate the Vertical Slice Locator Dashboard
+            visualizer.plot_slice_locator_dashboard(
+                grid, state_at_h, map_var='th_v', slice_var='w', map_z=2,
+                sponge_depth=sponge_depth,
+                x_indices=x_targets, y_indices=y_targets, 
+                slice_xlim=zoom_x_km, slice_ylim=zoom_z_m,
+                save_path=os.path.join(output_dir, f"{RUN_NAME}_zoomed_slices_w_{h}h.png"),
+            )
+            
+            print(f"  -> Saved horizontal and vertical quasi-3D plots for T={h}h")
 
     # ---------------------------------------------------------
     # 5. TIME SERIES EXTRACTION FOR LOCAL POINTS

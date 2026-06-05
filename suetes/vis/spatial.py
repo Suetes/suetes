@@ -73,13 +73,18 @@ def plot_2d_field(grid, state, variable, z_idx=5, sponge_depth=30, constants=Non
 
 def plot_quiver_field(grid, state, bg_var='pi', u_var='u', v_var='v', z_idx=5, 
                       sponge_depth=30, constants=None, cmap='coolwarm', 
-                      title=None, ax=None, save_path=None, stride=15, extent=None):
+                      title=None, ax=None, save_path=None, stride=15, extent=None, convert_to_kmh=True):
     """Plots a contoured background field with a geographic wind quiver overlay."""
     
     bg_data = _get_plot_data(grid, state, bg_var, z_idx, constants)
     u_grid = _get_plot_data(grid, state, u_var, z_idx, constants)
     v_grid = _get_plot_data(grid, state, v_var, z_idx, constants)
     
+    # convert_to_kmh: If True, multiply winds by 3.6 (from m/s to km/h).
+    scale_factor = 3.6 if convert_to_kmh else 1.0
+    u_grid = u_grid * scale_factor
+    v_grid = v_grid * scale_factor
+
     Xi, Yi = np.meshgrid(grid.x_m, grid.y_m, indexing='ij')
     lats, lons = grid.proj.get_lat_lon(Xi, Yi)
     
@@ -122,7 +127,9 @@ def plot_quiver_field(grid, state, bg_var='pi', u_var='u', v_var='v', z_idx=5,
     ax.gridlines(draw_labels=show_plot, linewidth=0.5, color='gray', alpha=0.5, linestyle='--')
 
     # Add a reference arrow for magnitude
-    ax.quiverkey(q, X=0.9, Y=1.05, U=15, label='15 m/s', labelpos='E', coordinates='axes')
+    ref_speed = 50 if convert_to_kmh else 15
+    ref_unit = "km/h" if convert_to_kmh else "m/s"
+    ax.quiverkey(q, X=0.9, Y=1.05, U=ref_speed, label=f'{ref_speed} {ref_unit}', labelpos='E', coordinates='axes')
 
     if show_plot:
         cbar = plt.colorbar(im, ax=ax, orientation='horizontal', pad=0.1)
