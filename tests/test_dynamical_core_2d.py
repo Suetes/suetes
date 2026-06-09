@@ -62,6 +62,30 @@ def setup_terrain_test_env():
     
     return grid, physics, dt
 
+import pytest
+
+@pytest.fixture(scope="module")
+def env_2d():
+    grid, physics, dt = setup_terrain_test_env()
+    advector = SemiLagrangianAdvector(grid, physics, dt)
+    return grid, physics, dt, advector
+
+@pytest.fixture
+def grid(env_2d):
+    return env_2d[0]
+
+@pytest.fixture
+def physics(env_2d):
+    return env_2d[1]
+
+@pytest.fixture
+def dt(env_2d):
+    return env_2d[2]
+
+@pytest.fixture
+def advector(env_2d):
+    return env_2d[3]
+
 # ====================================================================
 # DIAGNOSTIC TESTS (ALIGNED WITH 3D CORE)
 # ====================================================================

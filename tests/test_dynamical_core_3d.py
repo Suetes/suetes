@@ -13,6 +13,62 @@ from suetes.regional3d.euler import Euler3D
 from suetes.regional3d.boundaries import DaviesSponge
 from suetes.shared.transforms import SleveSimple
 
+import pytest
+
+# Module-level variables and fixtures
+dt = 100.0
+nx_val, ny_val, nz_val = 32, 32, 15
+dx_val, dy_val, dz_val = 1000.0, 1000.0, 500.0
+lat_c, lon_c = 45.0, 0.0
+constants = {
+    'g': 9.81, 
+    'cp': 1004.0, 
+    'Rd': 287.0, 
+    'cvd': 717.0, 
+    'p0': 100000.0
+}
+
+@pytest.fixture(scope="module")
+def env_3d():
+    def mountain_h(x, y):
+        return 1500.0 * jnp.exp(-(x**2 + y**2) / (5000.0**2))
+    grid = RegionalGrid3D(nx_val, ny_val, nz_val, dx_val, dy_val, dz_val, lat_c, lon_c, h_func=mountain_h)
+    advector = SemiLagrangianAdvector3D(grid, DummyPhysics(grid), dt)
+    op = CGridOperator3D(grid)
+    physics = Euler3D(grid, op, constants, dt=dt, N_bv=0.01)
+    return grid, advector, physics, op
+
+@pytest.fixture
+def grid(env_3d):
+    return env_3d[0]
+
+@pytest.fixture
+def advector(env_3d):
+    return env_3d[1]
+
+@pytest.fixture
+def physics(env_3d):
+    return env_3d[2]
+
+@pytest.fixture
+def op(env_3d):
+    return env_3d[3]
+
+@pytest.fixture
+def dt_fixture(): return dt
+@pytest.fixture
+def nx(): return nx_val
+@pytest.fixture
+def ny(): return ny_val
+@pytest.fixture
+def nz(): return nz_val
+@pytest.fixture
+def dx(): return dx_val
+
+# Rename the fixture 'dt' specifically for test function arguments
+@pytest.fixture
+def dt(dt_fixture): return dt_fixture
+
 # Dummy physics object to satisfy the advector initialization
 class DummyPhysics:
     def __init__(self, grid):

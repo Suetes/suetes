@@ -15,6 +15,19 @@ from suetes.preprocessing.topography import TopographyProcessor
 from suetes.preprocessing.era2suetes import BoundaryProcessor
 from suetes.vis.visualizer import Visualizer
 
+import pytest
+
+required_files = [
+    "suetes/data/suetes_test_run_pressure_levels.nc",
+    "suetes/data/suetes_test_run_single_levels.nc",
+    "suetes/data/gebco_data.nc"
+]
+missing_files = [f for f in required_files if not os.path.exists(f)]
+pytestmark = pytest.mark.skipif(
+    bool(missing_files),
+    reason=f"Missing required test data files: {missing_files}"
+)
+
 def get_test_env():
     # Downscaled slightly from production (150x150) for faster CI testing
     nx, ny, nz = 150, 150, 40 

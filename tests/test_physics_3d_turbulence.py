@@ -50,7 +50,7 @@ def test_smagorinsky_3d_shear():
     state['u'] = jet_u
     
     # Instantiate the SGS scheme
-    sgs = SmagorinskyLillySGS(grid, operators, CONSTANTS, Cs=0.15)
+    sgs = SmagorinskyLillySGS(grid, operators, CONSTANTS, dt=100.0, Cs=0.15)
     
     # Calculate tendencies
     tends = sgs.get_tendencies(state, bg)
