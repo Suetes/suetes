@@ -1,10 +1,14 @@
 """
 Time Integration and Advection Module.
 
-Implements a Semi-Implicit Semi-Lagrangian (SISL) integration scheme. 
-This architecture bypasses the restrictive Eulerian CFL limit by treating 
-advection geometrically (trajectory tracing) and treating stiff acoustic 
-and gravity wave modes implicitly via a GMRES solver.
+Implements both Split-Explicit (Eulerian) and Semi-Implicit Semi-Lagrangian (SISL) integration schemes.
+
+The SISL architecture bypasses the restrictive Eulerian CFL limit by treating
+advection geometrically (trajectory tracing) and treating stiff acoustic
+and gravity wave modes implicitly via a GMRES solver. This is the suggested solver for large scale dynamics
+
+For small-scale dynamics, the Split-Explicit architecture is the suggested solver.
+
 """
 
 import jax
@@ -15,7 +19,78 @@ from jax.lax.linalg import tridiagonal_solve
 import jax.scipy.ndimage as jnd
 
 from suetes.regional3d.operators import tensor_product_interp_3d
-from suetes.regional3d.physics import SimpleMicrophysics
+from suetes.regional3d.euler import Euler3D
+
+
+def build_dynamical_core(core_type, grid, operators, constants, initial_state, 
+                         physics_suite=None, interior_mask=None, **kwargs):
+    """
+    Factory builder that instantiates the dynamical core and corresponding stepper.
+    Safely handles default stability parameters while accepting user overrides.
+
+    Args:
+        core_type (str): 'sisl' or 'split-explicit'
+        grid, operators, constants: Geometry and operator objects
+        initial_state (dict): Initial atmospheric conditions
+        physics_suite, interior_mask: Physical subgrid configurations
+        **kwargs: Parameter overrides (e.g., dt, damp_height, nu_h_factor)
+    
+    Returns:
+        tuple: (stepper_instance, large_time_step_dt)
+    """
+    core_str = core_type.lower()
+    
+    if core_str == "sisl":
+        # Safe default parameters for standard SISL runs
+        params = {
+            "dt": 120.0,
+            "damp_height": 9000.0,
+            "max_damp": 3.0,
+            "nu_div_factor": 0.1,
+            "nu_h_factor": 0.1,
+            "N_bv": 0.01,
+        }
+        # Apply any explicit user overrides passed via kwargs
+        params.update(kwargs)
+        
+        physics = Euler3D(
+            grid, operators, constants, dt=params["dt"],
+            initial_era5_state=initial_state,
+            damp_height=params["damp_height"], max_damp=params["max_damp"],
+            nu_div_factor=params["nu_div_factor"], nu_h_factor=params["nu_h_factor"],
+            N_bv=params["N_bv"],
+            physics_suite=physics_suite, interior_mask=interior_mask,
+        )
+        stepper = SISLStepper3D(physics, params["dt"])
+        return stepper, params["dt"]
+        
+    elif core_str == "split-explicit":
+        # Safe default parameters for standard Split-Explicit runs
+        params = {
+            "dt": 40.0,
+            "ns": 3,
+            "damp_height": 12000.0,  # Raised by default to absorb explicit gravity waves
+            "max_damp": 3.0,
+            "nu_div_factor": 0.03,   # Lowered by default due to smaller explicit dt
+            "nu_h_factor": 0.03,
+            "N_bv": 0.01,
+        }
+        params.update(kwargs)
+        
+        physics = Euler3D(
+            grid, operators, constants, dt=params["dt"],
+            initial_era5_state=initial_state,
+            damp_height=params["damp_height"], max_damp=params["max_damp"],
+            nu_div_factor=params["nu_div_factor"], nu_h_factor=params["nu_h_factor"],
+            N_bv=params["N_bv"],
+            physics_suite=physics_suite, interior_mask=interior_mask,
+        )
+        stepper = SplitExplicitStepper3D(physics, dt=params["dt"], ns=params["ns"])
+        return stepper, params["dt"]
+        
+    else:
+        raise ValueError(f"Unknown core_type: '{core_type}'. Use 'sisl' or 'split-explicit'.")
+
 
 class VerticalPreconditioner:
     r"""
@@ -347,6 +422,7 @@ class SemiImplicitSolver3D:
             'eta_dot': x_sol_scaled['eta_dot'] / bg_precomputed['dz_w_full']
         }
 
+
 class FluxFormAdvector:
     r"""
     Implements a Flux-Form Semi-Lagrangian (FFSL) advection scheme.
@@ -446,6 +522,7 @@ class FluxFormAdvector:
 
 
 class SISLStepper3D:
+
     r"""
     Coordinates the complete Semi-Implicit Semi-Lagrangian (SISL) integration cycle.
     
@@ -711,3 +788,452 @@ class SISLStepper3D:
         state_next['rho'] = p0 / (Rd * state_next['th_v']) * (state_next['pi'] ** (cvd / Rd))
 
         return state_next
+
+
+class SplitExplicitStepper3D:
+    """
+    Coordinates a WRF-style Split-Explicit Runge-Kutta 3 (RK3) time integration cycle.
+    Bypasses the Semi-Implicit Semi-Lagrangian (SISL) framework.
+    """
+    def __init__(self, physics, dt, ns):
+        """
+        Args:
+            physics (Euler3D): The dynamical core configuration.
+            dt (float): Large time step for low-frequency modes [s].
+            ns (int): Ratio of the RK3 time step to the acoustic time step.
+        """
+        self.physics = physics
+        self.dt = dt
+        self.ns = ns  
+        
+        # Dynamically assign acoustic steps per RK3 stage to respect CFL limits
+        self.ns_stage1 = max(1, round(self.ns / 3))
+        self.ns_stage2 = max(1, round(self.ns / 2))
+        self.ns_stage3 = self.ns
+        
+        self.dtau_stage1 = (self.dt / 3.0) / float(self.ns_stage1)
+        self.dtau_stage2 = (self.dt / 2.0) / float(self.ns_stage2)
+        self.dtau_stage3 = self.dt / float(self.ns_stage3)
+
+    def step(self, state, t, forcing, bc_fn, ml_params=None):
+        """
+        Executes a single split-explicit RK3 time step.
+        """
+        bg_state_ref = {
+            'rho': self.physics.c['p0'] / (self.physics.c['Rd'] * self.physics.theta_bg) * \
+                   (self.physics.pi_bg ** (self.physics.c['cvd'] / self.physics.c['Rd'])),
+            'pi': self.physics.pi_bg,
+            'th_v': self.physics.theta_bg
+        }
+        bg_precomputed = self.physics.precompute_bg(bg_state_ref)
+
+        state_t = state
+        
+        # Diagnose the initial state boundaries before calculating slow tendencies
+        state_t['eta_dot'], state_t['w'] = self._diagnose_eta_dot(state_t)
+
+        # =====================================================================
+        # PRE-COMPUTE STIFF PHYSICS AND DIFFUSION ONCE AT TIME T
+        # =====================================================================
+        phys_tends = {}
+        diff_tends = {}
+        
+        # Build the perturbation state exactly as euler.py expects
+        th_v_prime = state_t['th_v'] - self.physics.theta_bg
+        state_prime_t = {
+            'u': state_t['u'], 'v': state_t['v'], 'w': state_t['w'], 
+            'th_v': state_t['th_v'], 'pi': state_t['pi'] - self.physics.pi_bg, 
+            'eta_dot': state_t['eta_dot'],
+            'th_v_prime_u': self.physics.op.avg(th_v_prime, axis=0, from_loc='m', to_loc='u'),
+            'th_v_prime_v': self.physics.op.avg(th_v_prime, axis=1, from_loc='m', to_loc='v'),
+            'th_v_prime_w': self.physics.op.avg(th_v_prime, axis=2, from_loc='m', to_loc='w')
+        }
+        for key in state_t:
+            if key not in state_prime_t:
+                state_prime_t[key] = state_t[key]
+
+        if self.physics.physics_suite is not None:
+            phys_tends = self.physics.physics_suite.get_explicit_tendencies(
+                state_prime_t, bg_precomputed, 
+                interior_mask=self.physics.interior_mask, 
+                ml_params=ml_params
+            )
+            
+        if self.physics.nu_h > 0.0 or self.physics.nu_div > 0.0:
+            diff_tends = self.physics.diffusion.get_tendencies(state_prime_t, bg_precomputed)
+
+        # Temporarily hide physics and diffusion from the dynamical core's RK3 sub-steps
+        original_suite = self.physics.physics_suite
+        original_nu_h = self.physics.nu_h
+        
+        self.physics.physics_suite = None
+        self.physics.nu_h = 0.0
+
+        # =====================================================================
+        # RK3 - STAGE 1 (\Phi^*)
+        # =====================================================================
+        slow_forcings_1 = self._compute_slow_tendencies(state_t, bg_precomputed, phys_tends, diff_tends, ml_params)
+        
+        state_star = self._acoustic_loop(
+            state_init=state_t, state_current=state_t, 
+            slow_forcings=slow_forcings_1, bg=bg_precomputed, 
+            dtau=self.dtau_stage1, num_steps=self.ns_stage1
+        )
+        state_star['eta_dot'], state_star['w'] = self._diagnose_eta_dot(state_star)
+
+        # =====================================================================
+        # RK3 - STAGE 2 (\Phi^{**})
+        # =====================================================================
+        slow_forcings_2 = self._compute_slow_tendencies(state_star, bg_precomputed, phys_tends, diff_tends, ml_params)
+        
+        state_double_star = self._acoustic_loop(
+            state_init=state_t, state_current=state_star, 
+            slow_forcings=slow_forcings_2, bg=bg_precomputed, 
+            dtau=self.dtau_stage2, num_steps=self.ns_stage2
+        )
+        state_double_star['eta_dot'], state_double_star['w'] = self._diagnose_eta_dot(state_double_star)
+
+        # =====================================================================
+        # RK3 - STAGE 3 (\Phi^{t + \Delta t})
+        # =====================================================================
+        slow_forcings_3 = self._compute_slow_tendencies(state_double_star, bg_precomputed, phys_tends, diff_tends, ml_params)
+        
+        state_next = self._acoustic_loop(
+            state_init=state_t, state_current=state_double_star, 
+            slow_forcings=slow_forcings_3, bg=bg_precomputed, 
+            dtau=self.dtau_stage3, num_steps=self.ns_stage3
+        )
+
+        # Restore the physics suite and diffusion constants
+        self.physics.physics_suite = original_suite
+        self.physics.nu_h = original_nu_h
+
+        # =====================================================================
+        # FINAL STATE ASSEMBLY & BOUNDARIES
+        # =====================================================================
+
+        # Physical state updates (e.g., Saturation adjustment)
+        if self.physics.physics_suite is not None:
+            state_next = self.physics.physics_suite.apply_state_updates(state_next)
+
+        # Apply lateral boundary relaxation (Davies Sponge) EXACTLY ONCE
+        state_next = bc_fn(state_next, forcing)
+        
+        # Diagnose eta_dot based on the final blended boundary winds
+        state_next['eta_dot'], state_next['w'] = self._diagnose_eta_dot(state_next)
+
+        # Final thermodynamic reconciliation (Equation of State)
+        cvd, Rd, p0 = self.physics.c['cvd'], self.physics.c['Rd'], self.physics.c['p0']
+        state_next['rho'] = p0 / (Rd * state_next['th_v']) * (state_next['pi'] ** (cvd / Rd))
+
+        return state_next
+
+    def _diagnose_eta_dot(self, state):
+        """
+        Diagnoses contravariant vertical velocity to maintain mass conservation.
+        Dynamically corrects boundary W to gracefully handle unbalanced initial conditions.
+        """
+        u_m = self.physics.op.avg(state['u'], axis=0, from_loc='u', to_loc='m')
+        u_w = self.physics.op.avg(u_m, axis=2, from_loc='m', to_loc='w')
+        v_m = self.physics.op.avg(state['v'], axis=1, from_loc='v', to_loc='m')
+        v_w = self.physics.op.avg(v_m, axis=2, from_loc='m', to_loc='w')
+        
+        m_w = jnp.expand_dims(self.physics.grid.m_factors['w'], axis=-1)
+        
+        # Enforce physical kinematic boundary condition: flow must glide over the slope
+        w_sfc = m_w[:, :, 0] * (u_w[:, :, 0] * self.physics.grid.z_xi_w[:, :, 0] + v_w[:, :, 0] * self.physics.grid.z_eta_w[:, :, 0])
+        w_updated = state['w'].at[:, :, 0].set(w_sfc).at[:, :, -1].set(0.0)
+        
+        # Diagnose mass flux across layers
+        eta_dot_dz = w_updated - m_w * (u_w * self.physics.grid.z_xi_w + v_w * self.physics.grid.z_eta_w)
+        eta_dot = eta_dot_dz / self.physics.grid.dz_w_full
+        
+        # Strictly seal boundaries
+        eta_dot = eta_dot.at[:, :, 0].set(0.0).at[:, :, -1].set(0.0)
+        
+        return eta_dot, w_updated
+
+    def _upwind_flux_3rd_order(self, flux, field, axis):
+        """
+        Computes 3rd-order upwind biased face values for a field driven by a velocity flux.
+        Includes a numerical noise-gate to preserve machine-precision symmetry at flow stagnation points.
+        """
+        pad_width = [(0, 0)] * 3
+        pad_width[axis] = (2, 2)
+        q = jnp.pad(field, pad_width, mode='edge')
+        
+        s_idx = lambda start, end: tuple(
+            slice(start, end) if i == axis else slice(None)
+            for i in range(3)
+        )
+        
+        q_im2 = q[s_idx(0, -3)]
+        q_im1 = q[s_idx(1, -2)]
+        q_i   = q[s_idx(2, -1)]
+        q_ip1 = q[s_idx(3, None)]
+        
+        q_4th = (7.0 / 12.0) * (q_i + q_im1) - (1.0 / 12.0) * (q_ip1 + q_im2)
+        q_bias = (1.0 / 12.0) * ((q_ip1 - q_im2) - 3.0 * (q_i - q_im1))
+        
+        # Gate out floating-point noise at stagnation points (< 1e-12 m/s)
+        # and use the mathematical sign to smoothly apply the upwind bias.
+        clean_flux = jnp.where(jnp.abs(flux) < 1e-12, 0.0, flux)
+        q_face = q_4th + jnp.sign(clean_flux) * q_bias
+        
+        return flux * q_face
+
+    def _compute_slow_tendencies(self, current_state, bg, phys_tends, diff_tends, ml_params):
+        """
+        Evaluates and isolates the slow-frequency RHS forcing terms,
+        using an advective form 3rd-order upwind Eulerian flux engine.
+        Appends the static physical parameterization tendencies evaluated at step start.
+        """
+        th_v_prime = current_state['th_v'] - self.physics.theta_bg
+        state_prime = {
+            'u': current_state['u'], 'v': current_state['v'], 'w': current_state['w'], 
+            'th_v': current_state['th_v'], 'pi': current_state['pi'] - self.physics.pi_bg, 
+            'eta_dot': current_state.get('eta_dot', jnp.zeros_like(current_state['w'])),
+            'th_v_prime_u': self.physics.op.avg(th_v_prime, axis=0, from_loc='m', to_loc='u'),
+            'th_v_prime_v': self.physics.op.avg(th_v_prime, axis=1, from_loc='m', to_loc='v'),
+            'th_v_prime_w': self.physics.op.avg(th_v_prime, axis=2, from_loc='m', to_loc='w')
+        }
+
+        for key in current_state:
+            if key not in state_prime:
+                state_prime[key] = current_state[key]
+        
+        # Calculate dynamical core explicit tendencies (physics/diffusion are temporarily hidden)
+        tends = self.physics.get_tendencies(state_prime, bg, is_explicit=True, ml_params=ml_params)
+        
+        # Add the cached stiff physics and diffusion tendencies computed at the start of the timestep
+        for k in ['u', 'v', 'w', 'th_v']:
+            if phys_tends and k in phys_tends:
+                tends[k] += phys_tends[k]
+            if diff_tends and k in diff_tends:
+                tends[k] += diff_tends[k]
+        
+        m_m = jnp.expand_dims(self.physics.grid.m_factors['m'], axis=-1)
+        m_u = jnp.expand_dims(self.physics.grid.m_factors['u'], axis=-1)
+        m_v = jnp.expand_dims(self.physics.grid.m_factors['v'], axis=-1)
+        
+        u_m = self.physics.op.avg(current_state['u'], axis=0, from_loc='u', to_loc='m')
+        v_m = self.physics.op.avg(current_state['v'], axis=1, from_loc='v', to_loc='m')
+        w_m = self.physics.op.avg(current_state['w'], axis=2, from_loc='w', to_loc='m')
+        
+        U = state_prime['u'] / m_u
+        V = state_prime['v'] / m_v
+        W = state_prime['eta_dot'] * bg['dz_w_full']
+        
+        div_U = self.physics.op.diff(U, axis=0, from_loc='u', to_loc='m')
+        div_V = self.physics.op.diff(V, axis=1, from_loc='v', to_loc='m')
+        div_W = self.physics.op.diff(W, axis=2, from_loc='w', to_loc='m') * (self.physics.grid.dz / bg['dz_m_full'])
+        
+        # --- Field 1: Virtual Potential Temperature (th_v) ---
+        flux_x_th = self._upwind_flux_3rd_order(U, th_v_prime, axis=0)
+        flux_y_th = self._upwind_flux_3rd_order(V, th_v_prime, axis=1)
+        flux_z_th = self._upwind_flux_3rd_order(W, th_v_prime, axis=2)
+        
+        adv_x_th = self.physics.op.diff(flux_x_th, axis=0, from_loc='u', to_loc='m')
+        adv_y_th = self.physics.op.diff(flux_y_th, axis=1, from_loc='v', to_loc='m')
+        adv_z_th = self.physics.op.diff(flux_z_th, axis=2, from_loc='w', to_loc='m') * (self.physics.grid.dz / bg['dz_m_full'])
+        
+        tend_th_v_adv = - (m_m**2) * (adv_x_th - th_v_prime * div_U + adv_y_th - th_v_prime * div_V) - (adv_z_th - th_v_prime * div_W)
+        tends['th_v'] += tend_th_v_adv
+        
+        # --- Field 2: Zonal Momentum (u) ---
+        flux_x_u = self._upwind_flux_3rd_order(U, u_m, axis=0)
+        flux_y_u = self._upwind_flux_3rd_order(V, u_m, axis=1)
+        flux_z_u = self._upwind_flux_3rd_order(W, u_m, axis=2)
+        
+        adv_x_u = self.physics.op.diff(flux_x_u, axis=0, from_loc='u', to_loc='m')
+        adv_y_u = self.physics.op.diff(flux_y_u, axis=1, from_loc='v', to_loc='m')
+        adv_z_u = self.physics.op.diff(flux_z_u, axis=2, from_loc='w', to_loc='m') * (self.physics.grid.dz / bg['dz_m_full'])
+        
+        tend_u_adv_m = - (m_m**2) * (adv_x_u - u_m * div_U + adv_y_u - u_m * div_V) - (adv_z_u - u_m * div_W)
+        tends['u'] += self.physics.op.avg(tend_u_adv_m, axis=0, from_loc='m', to_loc='u')
+        
+        # --- Field 3: Meridional Momentum (v) ---
+        flux_x_v = self._upwind_flux_3rd_order(U, v_m, axis=0)
+        flux_y_v = self._upwind_flux_3rd_order(V, v_m, axis=1)
+        flux_z_v = self._upwind_flux_3rd_order(W, v_m, axis=2)
+        
+        adv_x_v = self.physics.op.diff(flux_x_v, axis=0, from_loc='u', to_loc='m')
+        adv_y_v = self.physics.op.diff(flux_y_v, axis=1, from_loc='v', to_loc='m')
+        adv_z_v = self.physics.op.diff(flux_z_v, axis=2, from_loc='w', to_loc='m') * (self.physics.grid.dz / bg['dz_m_full'])
+        
+        tend_v_adv_m = - (m_m**2) * (adv_x_v - v_m * div_U + adv_y_v - v_m * div_V) - (adv_z_v - v_m * div_W)
+        tends['v'] += self.physics.op.avg(tend_v_adv_m, axis=1, from_loc='m', to_loc='v')
+        
+        # --- Field 4: Vertical Momentum (w) ---
+        flux_x_w = self._upwind_flux_3rd_order(U, w_m, axis=0)
+        flux_y_w = self._upwind_flux_3rd_order(V, w_m, axis=1)
+        flux_z_w = self._upwind_flux_3rd_order(W, w_m, axis=2)
+        
+        adv_x_w = self.physics.op.diff(flux_x_w, axis=0, from_loc='u', to_loc='m')
+        adv_y_w = self.physics.op.diff(flux_y_w, axis=1, from_loc='v', to_loc='m')
+        adv_z_w = self.physics.op.diff(flux_z_w, axis=2, from_loc='w', to_loc='m') * (self.physics.grid.dz / bg['dz_m_full'])
+        
+        tend_w_adv_m = - (m_m**2) * (adv_x_w - w_m * div_U + adv_y_w - w_m * div_V) - (adv_z_w - w_m * div_W)
+        tends['w'] += self.physics.op.avg(tend_w_adv_m, axis=2, from_loc='m', to_loc='w')
+        
+        return tends
+
+    def _acoustic_loop(self, state_init, state_current, slow_forcings, bg, dtau, num_steps):
+        """
+        Executes the explicit forward-backward horizontal and vertically implicit
+        acoustic time-split integration subloop using pure perturbation updates.
+        """
+        u_prime_prime   = state_init['u'] - state_current['u']
+        v_prime_prime   = state_init['v'] - state_current['v']
+        w_prime_prime   = state_init['w'] - state_current['w']
+        pi_prime_prime  = state_init['pi'] - state_current['pi']
+        
+        cp = self.physics.c['cp']
+        m_u = jnp.expand_dims(self.physics.grid.m_factors['u'], axis=-1)
+        m_v = jnp.expand_dims(self.physics.grid.m_factors['v'], axis=-1)
+        m_m = jnp.expand_dims(self.physics.grid.m_factors['m'], axis=-1)
+
+        for step in range(num_steps):
+            # =================================================================
+            # PART 1: ADVANCE HORIZONTAL MOMENTUM (FORWARD STEP)
+            # =================================================================
+            
+            # Evaluate divergence damping inside the acoustic sub-step
+            u_curr_total = state_current['u'] + u_prime_prime
+            v_curr_total = state_current['v'] + v_prime_prime
+            
+            du_dx = self.physics.op.diff(u_curr_total, axis=0, from_loc='u', to_loc='m')
+            dv_dy = self.physics.op.diff(v_curr_total, axis=1, from_loc='v', to_loc='m')
+            div_h_kinematic = du_dx + dv_dy
+            
+            grad_div_x = self.physics.op.diff(div_h_kinematic, axis=0, from_loc='m', to_loc='u')
+            grad_div_y = self.physics.op.diff(div_h_kinematic, axis=1, from_loc='m', to_loc='v')
+            # ----------------------------------------------------------------------------
+
+            grad_pi_pp_x = self.physics.op.diff(pi_prime_prime, axis=0, from_loc='m', to_loc='u')
+            grad_pi_pp_y = self.physics.op.diff(pi_prime_prime, axis=1, from_loc='m', to_loc='v')
+            
+            grad_pi_pp_z_w = self.physics.op.diff(pi_prime_prime, axis=2, from_loc='m', to_loc='w') * (self.physics.grid.dz / bg['dz_w_full'])
+            grad_pi_pp_z_m = self.physics.op.avg(grad_pi_pp_z_w, axis=2, from_loc='w', to_loc='m')
+            
+            grad_pi_pp_z_u = self.physics.op.avg(grad_pi_pp_z_m, axis=0, from_loc='m', to_loc='u')
+            grad_pi_pp_z_v = self.physics.op.avg(grad_pi_pp_z_m, axis=1, from_loc='m', to_loc='v')
+            
+            z_xi_u = self.physics.op.diff(self.physics.grid.Z_m, axis=0, from_loc='m', to_loc='u')
+            z_eta_v = self.physics.op.diff(self.physics.grid.Z_m, axis=1, from_loc='m', to_loc='v')
+            
+            grad_pi_x_cart = grad_pi_pp_x - z_xi_u * grad_pi_pp_z_u
+            grad_pi_y_cart = grad_pi_pp_y - z_eta_v * grad_pi_pp_z_v
+
+            # Add the divergence damping to the explicit acoustic integration
+            u_prime_prime += dtau * (slow_forcings['u'] - cp * bg['th_v_u'] * grad_pi_x_cart * m_u + self.physics.nu_div * grad_div_x)
+            v_prime_prime += dtau * (slow_forcings['v'] - cp * bg['th_v_v'] * grad_pi_y_cart * m_v + self.physics.nu_div * grad_div_y)
+
+            u_prime_prime = u_prime_prime.at[0, :, :].set(state_init['u'][0, :, :] - state_current['u'][0, :, :])
+            u_prime_prime = u_prime_prime.at[-1, :, :].set(state_init['u'][-1, :, :] - state_current['u'][-1, :, :])
+            v_prime_prime = v_prime_prime.at[:, 0, :].set(state_init['v'][:, 0, :] - state_current['v'][:, 0, :])
+            v_prime_prime = v_prime_prime.at[:, -1, :].set(state_init['v'][:, -1, :] - state_current['v'][:, -1, :])
+
+            # =================================================================
+            # PART 2: ADVANCE PRESSURE & VERTICAL VELOCITY (BACKWARD STEP)
+            # =================================================================
+            flux_x_pp = (u_prime_prime * bg['rho_u'] * bg['th_v_u'] * bg['dz_u']) / m_u
+            flux_y_pp = (v_prime_prime * bg['rho_v'] * bg['th_v_v'] * bg['dz_v']) / m_v
+            
+            div_x_pp = self.physics.op.diff(flux_x_pp, axis=0, from_loc='u', to_loc='m') / bg['dz_m_full']
+            div_y_pp = self.physics.op.diff(flux_y_pp, axis=1, from_loc='v', to_loc='m') / bg['dz_m_full']
+            div_h_pp = m_m * (div_x_pp + div_y_pp)
+            
+            pi_prime_prime, w_prime_prime = self._solve_vertical_acoustic_column(
+                pi_pp=pi_prime_prime, 
+                w_pp=w_prime_prime, 
+                u_pp=u_prime_prime,
+                v_pp=v_prime_prime,
+                div_h=div_h_pp, 
+                slow_f_pi=slow_forcings['pi'], 
+                slow_f_w=slow_forcings['w'], 
+                th_v_w_bg=bg['th_v_w'],
+                C_pi=bg['C_pi'],
+                dz_m=bg['dz_m_full'],
+                dz_w=bg['dz_w_full'],
+                bg=bg,
+                dtau=dtau
+            )
+
+            # Reconstruct the total w field and damp it backward-implicitly 
+            # using the acoustic dtau to prevent rigid lid reflection
+            w_total = state_current['w'] + w_prime_prime
+            w_total_damped = w_total / (1.0 + dtau * self.physics.tau_damp)
+            w_prime_prime = w_total_damped - state_current['w']
+
+        state_updated = {
+            'u': state_current['u'] + u_prime_prime,
+            'v': state_current['v'] + v_prime_prime,
+            'w': state_current['w'] + w_prime_prime,
+            'pi': state_current['pi'] + pi_prime_prime,
+            'th_v': state_init['th_v'] + dtau * num_steps * slow_forcings['th_v'],
+            'rho': state_current['rho'],
+            'eta_dot': state_current.get('eta_dot', jnp.zeros_like(w_prime_prime))
+        }
+
+        for key in state_current:
+            if key not in state_updated:
+                state_updated[key] = state_current[key]
+        
+        return state_updated
+
+    def _solve_vertical_acoustic_column(self, pi_pp, w_pp, u_pp, v_pp, div_h, slow_f_pi, slow_f_w, 
+                                        th_v_w_bg, C_pi, dz_m, dz_w, bg, dtau):
+        """
+        Solves the coupled 1D vertical acoustic equations implicitly.
+        """
+        alpha = 0.55
+        cp = self.physics.c['cp']
+        
+        u_pp_m = self.physics.op.avg(u_pp, axis=0, from_loc='u', to_loc='m')
+        u_pp_w = self.physics.op.avg(u_pp_m, axis=2, from_loc='m', to_loc='w')
+        v_pp_m = self.physics.op.avg(v_pp, axis=1, from_loc='v', to_loc='m')
+        v_pp_w = self.physics.op.avg(v_pp_m, axis=2, from_loc='m', to_loc='w')
+        m_w = jnp.expand_dims(self.physics.grid.m_factors['w'], axis=-1)
+
+        w_sfc_pp = m_w[:, :, 0] * (u_pp_w[:, :, 0] * self.physics.grid.z_xi_w[:, :, 0] + v_pp_w[:, :, 0] * self.physics.grid.z_eta_w[:, :, 0])
+        
+        # Predict explicit w
+        grad_pi_pp_now = self.physics.op.diff(pi_pp, axis=2, from_loc='m', to_loc='w') * (self.physics.grid.dz / dz_w)
+        w_explicit_rhs = w_pp + dtau * (slow_f_w - cp * th_v_w_bg * grad_pi_pp_now)
+        
+        w_avg_explicit = (1.0 - alpha) * w_pp + alpha * w_explicit_rhs
+        w_avg_explicit = w_avg_explicit.at[:, :, 0].set(w_sfc_pp).at[:, :, -1].set(0.0)
+        
+        # Predict explicit divergence
+        eta_dot_avg_explicit_dz = w_avg_explicit - m_w * (u_pp_w * self.physics.grid.z_xi_w + v_pp_w * self.physics.grid.z_eta_w)
+        eta_dot_avg_explicit_dz = eta_dot_avg_explicit_dz.at[:, :, 0].set(0.0).at[:, :, -1].set(0.0)
+        
+        flux_z_explicit = eta_dot_avg_explicit_dz * bg['rho_w'] * bg['th_v_w']
+        div_z_explicit = (self.physics.op.diff(flux_z_explicit, axis=2, from_loc='w', to_loc='m') * self.physics.grid.dz) / dz_m
+
+        # The RHS is the step-wise explicit change in pi, not the total pi!
+        delta_pi_explicit = dtau * (slow_f_pi - C_pi * (div_h + div_z_explicit))
+
+        # Setup Implicit Matrix
+        gamma = (alpha * dtau)**2 * cp * th_v_w_bg * bg['rho_w'] * bg['th_v_w'] / dz_w
+        gamma = gamma.at[:, :, 0].set(0.0).at[:, :, -1].set(0.0) 
+        
+        lower = - (C_pi / dz_m) * gamma[:, :, :-1]
+        upper = - (C_pi / dz_m) * gamma[:, :, 1:]
+        main  = 1.0 - lower - upper
+        
+        # Solve for delta_pi
+        rhs_helmholtz = delta_pi_explicit[..., None]
+        delta_pi_expanded = tridiagonal_solve(lower, main, upper, rhs_helmholtz)
+        delta_pi = delta_pi_expanded[..., 0]
+        
+        # Update pi and correct w
+        pi_pp_next = pi_pp + delta_pi
+        
+        # Velocity is corrected solely by the gradient of the pressure increment!
+        grad_delta_pi = self.physics.op.diff(delta_pi, axis=2, from_loc='m', to_loc='w') * (self.physics.grid.dz / dz_w)
+        w_pp_next = w_explicit_rhs - alpha * dtau * cp * th_v_w_bg * grad_delta_pi
+        w_pp_next = w_pp_next.at[:, :, 0].set(w_sfc_pp).at[:, :, -1].set(0.0)
+        
+        return pi_pp_next, w_pp_next
