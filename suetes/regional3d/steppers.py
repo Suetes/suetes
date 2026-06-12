@@ -1,16 +1,3 @@
-"""
-Time Integration and Advection Module.
-
-Implements both Split-Explicit (Eulerian) and Semi-Implicit Semi-Lagrangian (SISL) integration schemes.
-
-The SISL architecture bypasses the restrictive Eulerian CFL limit by treating
-advection geometrically (trajectory tracing) and treating stiff acoustic
-and gravity wave modes implicitly via a GMRES solver. This is the suggested solver for large scale dynamics
-
-For small-scale dynamics, the Split-Explicit architecture is the suggested solver.
-
-"""
-
 import jax
 from jax import vmap
 import jax.numpy as jnp
@@ -791,9 +778,19 @@ class SISLStepper3D:
 
 
 class SplitExplicitStepper3D:
-    """
+    r"""
     Coordinates a WRF-style Split-Explicit Runge-Kutta 3 (RK3) time integration cycle.
-    Bypasses the Semi-Implicit Semi-Lagrangian (SISL) framework.
+    
+    This scheme separates the integration of slow-moving advective and physical
+    modes ($\mathcal{S}$) from fast-moving acoustic and gravity waves. The slow modes 
+    are advanced using a 3rd-order Runge-Kutta scheme, while the fast perturbation modes 
+    ($\Phi''$) are advanced using a smaller acoustic time step $\Delta \tau$ in a 
+    forward-backward explicit horizontal and implicit vertical sub-cycling loop:
+
+    $$ \Phi^{t+\Delta t} = \text{RK3}(\Phi^t, \mathcal{S}) + \text{Acoustic}(\Phi'', \Delta \tau) $$
+
+    By bypassing the Semi-Implicit Semi-Lagrangian (SISL) framework, this method is 
+    strictly Eulerian and well-suited for high-resolution, small-scale dynamics.
     """
     def __init__(self, physics, dt, ns):
         """
@@ -816,8 +813,25 @@ class SplitExplicitStepper3D:
         self.dtau_stage3 = self.dt / float(self.ns_stage3)
 
     def step(self, state, t, forcing, bc_fn, ml_params=None):
-        """
+        r"""
         Executes a single split-explicit RK3 time step.
+
+        The integration is split into three RK3 stages where the slow tendencies 
+        $\mathcal{S}(\Phi)$ are computed, and an inner acoustic loop advances the fast modes.
+        
+        $$ \Phi^* = \Phi^t + \frac{\Delta t}{3} \mathcal{S}(\Phi^t) $$
+        $$ \Phi^{**} = \Phi^t + \frac{\Delta t}{2} \mathcal{S}(\Phi^*) $$
+        $$ \Phi^{t+\Delta t} = \Phi^t + \Delta t \mathcal{S}(\Phi^{**}) $$
+
+        Args:
+            state (dict): Current prognostic state.
+            t (float): Current simulation time [s].
+            forcing (dict): External forcing conditions.
+            bc_fn (callable): Boundary condition blending operator.
+            ml_params (dict, optional): Machine learning parameterization weights. Defaults to None.
+
+        Returns:
+            dict: The updated prognostic state at $t + \Delta t$.
         """
         bg_state_ref = {
             'rho': self.physics.c['p0'] / (self.physics.c['Rd'] * self.physics.theta_bg) * \
@@ -929,9 +943,23 @@ class SplitExplicitStepper3D:
         return state_next
 
     def _diagnose_eta_dot(self, state):
-        """
-        Diagnoses contravariant vertical velocity to maintain mass conservation.
-        Dynamically corrects boundary W to gracefully handle unbalanced initial conditions.
+        r"""
+        Diagnoses the contravariant vertical velocity $\dot{\eta}$ to maintain mass conservation.
+
+        Dynamically corrects boundary vertical velocity $w$ to gracefully handle 
+        unbalanced initial conditions. It enforces the physical kinematic boundary 
+        condition $w_{sfc} = \mathbf{V}_h \cdot \nabla Z$ and integrates the mass flux 
+        across layers to find the cross-coordinate velocity:
+
+        $$ \dot{\eta} = \frac{1}{\Delta z_w} \left( w - m_w \left( u \frac{\partial Z}{\partial x} + v \frac{\partial Z}{\partial y} \right) \right) $$
+
+        Args:
+            state (dict): Current atmospheric state containing 3D winds.
+
+        Returns:
+            tuple: A tuple containing:
+                - eta_dot (jnp.ndarray): Contravariant vertical velocity [1/s].
+                - w_updated (jnp.ndarray): Vertical velocity $w$ with enforced boundaries [m/s].
         """
         u_m = self.physics.op.avg(state['u'], axis=0, from_loc='u', to_loc='m')
         u_w = self.physics.op.avg(u_m, axis=2, from_loc='m', to_loc='w')
@@ -954,9 +982,25 @@ class SplitExplicitStepper3D:
         return eta_dot, w_updated
 
     def _upwind_flux_3rd_order(self, flux, field, axis):
-        """
+        r"""
         Computes 3rd-order upwind biased face values for a field driven by a velocity flux.
-        Includes a numerical noise-gate to preserve machine-precision symmetry at flow stagnation points.
+
+        The interpolation is given by a 4th-order centered average plus a 3rd-order 
+        upwind bias term, controlled by the sign of the local flux $U$:
+
+        $$ q_{face} = \frac{7}{12}(q_i + q_{i-1}) - \frac{1}{12}(q_{i+1} + q_{i-2}) + \text{sgn}(U) \frac{1}{12} \left[ (q_{i+1} - q_{i-2}) - 3(q_i - q_{i-1}) \right] $$
+
+        This includes a numerical noise-gate to preserve machine-precision symmetry 
+        at flow stagnation points. The 3rd-order scheme effectively limits numerical
+        dispersion while retaining desirable artificial diffusion properties to stabilize advection.
+
+        Args:
+            flux (jnp.ndarray): The velocity flux driving the transport.
+            field (jnp.ndarray): The scalar or momentum field being advected.
+            axis (int): The spatial dimension axis (0 for x, 1 for y, 2 for z).
+
+        Returns:
+            jnp.ndarray: The flux-weighted face values.
         """
         pad_width = [(0, 0)] * 3
         pad_width[axis] = (2, 2)
@@ -983,10 +1027,24 @@ class SplitExplicitStepper3D:
         return flux * q_face
 
     def _compute_slow_tendencies(self, current_state, bg, phys_tends, diff_tends, ml_params):
-        """
-        Evaluates and isolates the slow-frequency RHS forcing terms,
-        using an advective form 3rd-order upwind Eulerian flux engine.
-        Appends the static physical parameterization tendencies evaluated at step start.
+        r"""
+        Evaluates and isolates the slow-frequency RHS forcing terms $\mathcal{S}(\Phi)$.
+
+        Computes the low-frequency advective terms using a 3rd-order upwind Eulerian 
+        flux engine for momentum and thermodynamics, and appends static physical 
+        parameterization and diffusion tendencies evaluated at the start of the step:
+
+        $$ \mathcal{S}(\Phi) = - \mathbf{v} \cdot \nabla \Phi + \mathcal{F}_{physics} + \mathcal{F}_{diffusion} $$
+
+        Args:
+            current_state (dict): The intermediate state in the current RK3 stage.
+            bg (dict): Precomputed hydrostatic background state metrics.
+            phys_tends (dict): Cached explicit physical parameterization tendencies.
+            diff_tends (dict): Cached explicit diffusion tendencies.
+            ml_params (dict): Machine learning parameterization weights.
+
+        Returns:
+            dict: The total slow RHS forcing tendencies for $u, v, w$, and $\theta_v$.
         """
         th_v_prime = current_state['th_v'] - self.physics.theta_bg
         state_prime = {
@@ -1079,9 +1137,29 @@ class SplitExplicitStepper3D:
         return tends
 
     def _acoustic_loop(self, state_init, state_current, slow_forcings, bg, dtau, num_steps):
-        """
+        r"""
         Executes the explicit forward-backward horizontal and vertically implicit
-        acoustic time-split integration subloop using pure perturbation updates.
+        acoustic time-split integration subloop.
+
+        Advances the perturbation variables ($u'', v'', w'', \pi''$) over a time interval
+        using a smaller acoustic time step $\Delta \tau$. Horizontal momentum is advanced 
+        explicitly (forward step):
+
+        $$ u''^{n+1} = u''^n + \Delta \tau \left( \mathcal{S}_u - c_p \theta_v \frac{\partial \pi''^n}{\partial x} \right) $$
+
+        Vertical momentum and pressure are solved implicitly (backward step) to bypass 
+        restrictive vertical stability constraints.
+
+        Args:
+            state_init (dict): The state at the beginning of the full RK3 step.
+            state_current (dict): The state at the beginning of the current RK3 stage.
+            slow_forcings (dict): The evaluated slow RHS tendencies $\mathcal{S}$.
+            bg (dict): Precomputed hydrostatic background state metrics.
+            dtau (float): The acoustic time step $\Delta \tau$ for this RK3 stage [s].
+            num_steps (int): The number of acoustic steps to take in this stage.
+
+        Returns:
+            dict: The updated state after completing the acoustic integration for the stage.
         """
         u_prime_prime   = state_init['u'] - state_current['u']
         v_prime_prime   = state_init['v'] - state_current['v']
@@ -1184,8 +1262,38 @@ class SplitExplicitStepper3D:
 
     def _solve_vertical_acoustic_column(self, pi_pp, w_pp, u_pp, v_pp, div_h, slow_f_pi, slow_f_w, 
                                         th_v_w_bg, C_pi, dz_m, dz_w, bg, dtau):
-        """
+        r"""
         Solves the coupled 1D vertical acoustic equations implicitly.
+
+        Eliminates the vertical velocity to form a 1D vertical Helmholtz equation for 
+        the pressure increment $\delta \pi$, solved via a fast tridiagonal matrix solver:
+
+        $$ \delta \pi - C_\pi \Delta \tau^2 \frac{\partial}{\partial z} \left( c_p \bar{\theta}_v \bar{\rho} \frac{\partial \delta \pi}{\partial z} \right) = \text{RHS}_{explicit} $$
+
+        Where the RHS contains the step-wise explicit changes in pressure and divergence.
+        By solving this system implicitly, the model safely bypasses the restrictive 
+        vertical Courant-Friedrichs-Lewy (CFL) condition usually associated with tightly 
+        packed vertical grids and vertically propagating sound waves.
+
+        Args:
+            pi_pp (jnp.ndarray): Current pressure perturbation $\pi''$.
+            w_pp (jnp.ndarray): Current vertical velocity perturbation $w''$.
+            u_pp (jnp.ndarray): Current zonal velocity perturbation $u''$.
+            v_pp (jnp.ndarray): Current meridional velocity perturbation $v''$.
+            div_h (jnp.ndarray): Horizontal divergence of the perturbation winds.
+            slow_f_pi (jnp.ndarray): Slow forcing tendency for pressure.
+            slow_f_w (jnp.ndarray): Slow forcing tendency for vertical velocity.
+            th_v_w_bg (jnp.ndarray): Background virtual potential temperature at w-points.
+            C_pi (jnp.ndarray): Thermodynamic compressibility profile.
+            dz_m (jnp.ndarray): Vertical grid spacing at mass points.
+            dz_w (jnp.ndarray): Vertical grid spacing at w-points.
+            bg (dict): Precomputed background state metrics.
+            dtau (float): Acoustic time step $\Delta \tau$ [s].
+
+        Returns:
+            tuple: A tuple containing:
+                - pi_pp_next (jnp.ndarray): Updated pressure perturbation $\pi''$.
+                - w_pp_next (jnp.ndarray): Updated vertical velocity perturbation $w''$.
         """
         alpha = 0.55
         cp = self.physics.c['cp']
