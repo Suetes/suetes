@@ -10,7 +10,9 @@ plugins:
   - mkdocstrings:
       handlers:
         python:
-          paths: ["."] 
+          paths: ["."]
+          options:
+            filters: []
 
 markdown_extensions:
   - pymdownx.arithmatex:

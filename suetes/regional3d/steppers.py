@@ -819,10 +819,14 @@ class SplitExplicitStepper3D:
         The integration is split into three RK3 stages where the slow tendencies 
         $\mathcal{S}(\Phi)$ are computed, and an inner acoustic loop advances the fast modes.
         
-        $$ \Phi^* = \Phi^t + \frac{\Delta t}{3} \mathcal{S}(\Phi^t) $$
-        $$ \Phi^{**} = \Phi^t + \frac{\Delta t}{2} \mathcal{S}(\Phi^*) $$
-        $$ \Phi^{t+\Delta t} = \Phi^t + \Delta t \mathcal{S}(\Phi^{**}) $$
-
+        $$
+        \begin{align}
+        &\Phi^*  = \Phi^t + \frac{\Delta t}{3} \mathcal{S}(\Phi^t), \\
+        &\Phi^{**} = \Phi^t + \frac{\Delta t}{2} \mathcal{S}(\Phi^*), \\
+        &\Phi^{t+\Delta t} = \Phi^t + \Delta t \mathcal{S}(\Phi^{**}).
+        \end{align}
+        $$
+        
         Args:
             state (dict): Current prognostic state.
             t (float): Current simulation time [s].
