@@ -74,7 +74,9 @@ class SmagorinskyLillySGS:
         N2_m = self.op.avg((self.c['g'] / bg['th_v_w']) * dth_dz_w, axis=2, from_loc='w', to_loc='m')
 
         Ri = N2_m / (S_mag**2)
-        f_Ri = jnp.sqrt(jnp.maximum(0.0, 1.0 - Ri / self.Ri_c))
+        val = 1.0 - Ri / self.Ri_c
+        safe_val = jnp.maximum(val, 1e-5) # Prevents exactly 0.0 inside the sqrt
+        f_Ri = jnp.where(val > 0.0, jnp.sqrt(safe_val), 0.0)
 
         # Calculate Unbounded Eddy Viscosity (nu_t)
         Delta = (self.grid.dx * self.grid.dy * bg['dz_m_full']) ** (1.0/3.0)
@@ -84,9 +86,6 @@ class SmagorinskyLillySGS:
         # We apply a 0.8 safety factor to ensure strict stability.
         max_nu_t = (bg['dz_m_full']**2) / (4.0 * self.dt) * 0.8
         nu_t_m = jnp.minimum(nu_t_m_unbounded, max_nu_t)
-
-        nu_t_m = nu_t_m_unbounded
-
 
         # Pre-calculate face viscosities for the flux divergence
         nu_t_u = self.op.avg(nu_t_m, axis=0, from_loc='m', to_loc='u')
@@ -218,11 +217,13 @@ class McFarlaneVerticalDiffusion:
         """
         abs_Ri = jnp.abs(Ri)
         # Unstable branch (Ri < 0): f > 1, enhanced mixing
-        f_unstable = 1.0 + 10.0 * abs_Ri / (1.0 + 10.0 * jnp.sqrt(abs_Ri / 87.0))
+        safe_abs_Ri = jnp.maximum(abs_Ri, 1e-5) # Protect the sqrt
+        f_unstable = 1.0 + 10.0 * abs_Ri / (1.0 + 10.0 * jnp.sqrt(safe_abs_Ri / 87.0))
+
         # Stable branch (0 <= Ri <= 1/(5*eps)): f < 1, reduced mixing
         f_stable = (1.0 - 5.0 * self.epsilon * Ri) ** 2 \
                    / (1.0 + 10.0 * (1.0 - self.epsilon) * Ri)
-        Ri_cutoff = 1.0 / (5.0 * self.epsilon + 1e-12)
+        Ri_cutoff = 1.0 / (5.0 * self.epsilon + 1e-5)
         f = jnp.where(Ri < 0.0, f_unstable, f_stable)
         f = jnp.where(Ri > Ri_cutoff, 0.0, f)
         return f

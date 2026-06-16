@@ -49,17 +49,25 @@ class McFarlaneSurfaceDrag:
         sign conventions, implemented here as an explicit + sign.
         """
         abs_Ri = jnp.abs(Ri_B)
+        safe_abs_Ri = jnp.maximum(abs_Ri, 1e-5) 
+        
         F_unstable = 1.0 + 10.0 * abs_Ri \
-                     / (1.0 + 10.0 * jnp.sqrt(abs_Ri / (87.0 * A_sq + 1e-12)))
-        # Prevents thermal runaway when the 250m deep layer encounters
-        # massive temperature gradients over hot daytime land.
+                     / (1.0 + 10.0 * jnp.sqrt(safe_abs_Ri / (87.0 * A_sq + 1e-5)))
         F_unstable = jnp.minimum(F_unstable, 5.0)
         
-        F_stable = (1.0 - 5.0 * self.epsilon * Ri_B) ** 2 \
-                   / (1.0 + 10.0 * (1.0 - self.epsilon) * Ri_B)
-        Ri_cutoff = 1.0 / (5.0 * self.epsilon + 1e-12)
+        # 2. Stable Branch (Protect against the -0.1 division-by-zero trap!)
+        # Force Ri_B to be at least 0.0 exclusively for this calculation
+        safe_Ri_B_stable = jnp.maximum(Ri_B, 0.0) 
+        
+        F_stable = (1.0 - 5.0 * self.epsilon * safe_Ri_B_stable) ** 2 \
+                   / (1.0 + 10.0 * (1.0 - self.epsilon) * safe_Ri_B_stable)
+                   
+        # 3. Cutoff and Masking (Update 1e-12 to 1e-5 for FP32 safety)
+        Ri_cutoff = 1.0 / (5.0 * self.epsilon + 1e-5)
+        
         F = jnp.where(Ri_B < 0.0, F_unstable, F_stable)
         F = jnp.where(Ri_B > Ri_cutoff, 0.0, F)
+        
         return F
 
     def get_tendencies(self, state, bg):

@@ -9,8 +9,6 @@ virtual potential temperature ($\theta_v$) on a terrain-following Arakawa C-grid
 import jax
 import jax.numpy as jnp
 from suetes.regional3d.diffusion import HyperFilter
-from suetes.regional3d.physics import BulkAerodynamicPBL
-
 
 class Euler3D:
     r"""

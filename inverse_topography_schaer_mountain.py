@@ -1,11 +1,12 @@
 import os
-import time
 import numpy as np
 
 import jax
-jax.config.update("jax_enable_x64", True)
+jax.config.update("jax_enable_x64", False)
+
 import jax.numpy as jnp
 import optax
+
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 
@@ -23,7 +24,7 @@ os.makedirs(output_dir, exist_ok=True)
 # =====================================================================
 # CONFIGURATION SWITCHES
 # =====================================================================
-CORE_TYPE = "sisl"  # Toggle to "sisl" or "split-explicit"
+CORE_TYPE = "split-explicit"  # Toggle to "sisl" or "split-explicit"
 
 # --- 1. SETUP PARAMETERS ---
 nx, ny, nz = 300, 3, 50
