@@ -27,8 +27,6 @@ from suetes.shared.driver import Simulation
 from suetes.regional3d.steppers import build_dynamical_core
 from suetes.regional3d.geometry import RegionalGrid3D
 from suetes.regional3d.operators import CGridOperator3D
-from suetes.regional3d.euler import Euler3D
-from suetes.regional3d.steppers import SISLStepper3D
 from suetes.regional3d.boundaries import DaviesSponge
 
 from suetes.physics.base import PhysicsSuite
@@ -57,7 +55,7 @@ def main():
     smooth_sigma = 0.2  
     
     dt = 5.0
-    sim_hours = 1.0
+    sim_hours = 1.25
     sim_time_seconds = sim_hours * 3600.0
     num_era5_states = math.ceil(sim_hours) + 1
     
@@ -102,7 +100,7 @@ def main():
     suetes_bc_states = bridge.build_or_load_timeseries(
         era5_proc=era5_proc, num_states=num_era5_states, cache_path=bc_cache_path_native, coarsen_window=None
     )
-    time_manager = TimeManager(suetes_bc_states, [float(i * 3600.0) for i in range(num_era5_states)], grid)
+    time_manager = TimeManager(suetes_bc_states, [i * 3600.0 for i in range(num_era5_states)], grid)
 
     # ---------------------------------------------------------
     # 2. INITIAL STATE & TARGET INDICES
@@ -139,8 +137,8 @@ def main():
     core_kwargs = {
         "dt": dt, 
         "ns": 4, 
-        "nu_div_factor": 0.05, 
-        "nu_h_factor": 0.05, 
+        "nu_div_factor": 0.2, 
+        "nu_h_factor": 0.2, 
         "damp_height": 9000.0, 
         "max_damp": 3.0
     }
@@ -159,12 +157,12 @@ def main():
     # ---------------------------------------------------------
     # 4. ADJOINT OBJECTIVE DEFINITION
     # ---------------------------------------------------------
+
     def wreckhouse_sensitivity_objective(init_u, init_v, init_th_v):
         state = dict(initial_state)
         state['u'] = init_u
         state['v'] = init_v
         state['th_v'] = init_th_v
-        state['max_wh_wind_exp'] = 0.0  
 
         # Discard intra-step physics activations
         @jax.checkpoint
@@ -178,7 +176,7 @@ def main():
                 time_manager.get_forcing(t_curr)
             )
             
-            # Update the state before the physics step, this ensures Newtonian Relaxation and Surface Drag have the correct targets.
+            # Update the state before the physics step
             updated_curr_state = dict(curr_state)
             updated_curr_state['theta_surf'] = bc_state_t['theta_skt']
             updated_curr_state['target_th_v'] = bc_state_t['th_v']
@@ -195,15 +193,6 @@ def main():
             next_state['theta_surf'] = updated_curr_state['theta_surf']
             next_state['target_th_v'] = updated_curr_state['target_th_v']
             
-            # Track the objective
-            u_p = 0.5 * (next_state['u'][i_w, j_w, 0] + next_state['u'][i_w+1, j_w, 0])
-            v_p = 0.5 * (next_state['v'][i_w, j_w, 0] + next_state['v'][i_w, j_w+1, 0])
-            current_wind = jnp.sqrt(u_p**2 + v_p**2 + 1e-4)
-            
-            # Exponentially smoothed maximal wind (to make sure we don't get any spikes which would happen if we tracked only the max wind itself)
-            alpha = 0.5 
-            next_state['max_wh_wind_exp'] = curr_state['max_wh_wind_exp'] + jnp.exp(alpha * current_wind)
-            
             return next_state
 
         sim = Simulation(step_fn=diff_step_fn, dt=dt)
@@ -212,7 +201,27 @@ def main():
             state, t_start=0.0, t_end=sim_time_seconds, chunk_steps=CHUNK_STEPS
         )
         
-        return final_state['max_wh_wind_exp']
+        # --- Evaluate objective with a spatial footprint ---
+        # Define a 3x3 window around the target (to smooth out gradients)
+        window_size = 1
+        
+        # u needs an extra index in the x-direction (axis 0) for interpolation
+        u_slice = final_state['u'][i_w-window_size : i_w+window_size+2, 
+                                   j_w-window_size : j_w+window_size+1, 0]
+        
+        # v needs an extra index in the y-direction (axis 1) for interpolation
+        v_slice = final_state['v'][i_w-window_size : i_w+window_size+1, 
+                                   j_w-window_size : j_w+window_size+2, 0]
+        
+        # Staggering interpolation to mass points (both will now be 3x3)
+        u_p = 0.5 * (u_slice[:-1, :] + u_slice[1:, :])
+        v_p = 0.5 * (v_slice[:, :-1] + v_slice[:, 1:])
+        
+        # Calculate wind magnitude for the whole patch
+        wind_patch = jnp.sqrt(u_p**2 + v_p**2 + 1e-8)
+        
+        # Return the mean of the patch to distribute the adjoint forcing
+        return jnp.mean(wind_patch)
 
     # ---------------------------------------------------------
     # 5. EXECUTE FORWARD & BACKWARD PASS
@@ -282,12 +291,10 @@ def main():
 
         # --- PLOT 2: ADJOINT ZONAL WIND (u) SLICES ---
         sens_state_u = dict(initial_state)
-        
-        # Inject the mass-centered u-gradient into the th_v carrier key
-        sens_state_u['th_v'] = grad_u_m 
+        sens_state_u['grad_u_m'] = grad_u_m 
         
         visualizer.plot_slice_locator_dashboard(
-            grid, sens_state_u, map_var='th_v', slice_var='th_v', map_z=2,
+            grid, sens_state_u, map_var='grad_u_m', slice_var='grad_u_m', map_z=2,
             sponge_depth=sponge_depth,
             x_indices=x_targets, y_indices=y_targets, 
             slice_xlim=zoom_x_km, slice_ylim=zoom_z_m,
@@ -297,13 +304,34 @@ def main():
 
         # --- PLOT 3: ADJOINT KINEMATIC DASHBOARD (Optimal Perturbations) ---
         sens_state_wind = dict(initial_state)
-        sens_state_wind['th_v'] = grad_wind_mag
-        sens_state_wind['u'] = grad_u
-        sens_state_wind['v'] = grad_v
+        
+        # 1. Interpolate staggered horizontal dimensions to mass centers (3D volumes)
+        sens_state_wind['grad_u'] = 0.5 * (grad_u[:-1, :, :] + grad_u[1:, :, :])
+        sens_state_wind['grad_v'] = 0.5 * (grad_v[:, :-1, :] + grad_v[:, 1:, :])
+        
+        # 2. Add the thermodynamic gradient volume with the EXACT key string expected
+        sens_state_wind['grad_th_v'] = grad_th_v
+        
+        # 3. Match the background field magnitude key
+        if grad_wind_mag.ndim == 2:
+            sens_state_wind['grad_wind_mag'] = jnp.repeat(grad_wind_mag[:, :, jnp.newaxis], grid.nz, axis=2)
+        else:
+            sens_state_wind['grad_wind_mag'] = grad_wind_mag
 
+        # 4. Clean, non-redundant diagnostic fields mapping to the unique keys above
+        adjoint_fields = [
+            {'var': 'grad_u', 'cmap': 'seismic', 'title': 'Zonal Sensitivity (grad_u)', 'scale': 'sym'},
+            {'var': 'grad_v', 'cmap': 'seismic', 'title': 'Meridional Sensitivity (grad_v)', 'scale': 'sym'},
+            {'var': 'grad_th_v', 'cmap': 'seismic', 'title': 'Thermodynamic Sensitivity (grad_th_v)', 'scale': 'sym'},
+            {'type': 'quiver', 'bg_var': 'grad_wind_mag', 'u_var': 'grad_u', 'v_var': 'grad_v', 
+             'cmap': 'Reds', 'title': 'Adjoint Impact & Sensitivity Vectors'} 
+        ]
+
+        # 5. Execute with extent=None for full 400x400 km domain view
         visualizer.plot_dashboard(
             grid, sens_state_wind, z_idx=2, sponge_depth=sponge_depth,
-            time_hours=0, extent=wreckhouse_extent,
+            fields=adjoint_fields, 
+            time_hours=0, extent=None,  # Clean crop removed
             quiver_stride=6, 
             save_path=os.path.join(output_dir, f"{RUN_NAME}_ADJOINT_wind_dash.png")
         )

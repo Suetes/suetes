@@ -1190,10 +1190,7 @@ class SplitExplicitStepper3D:
             
             grad_div_x = self.physics.op.diff(div_h_kinematic, axis=0, from_loc='m', to_loc='u')
             grad_div_y = self.physics.op.diff(div_h_kinematic, axis=1, from_loc='m', to_loc='v')
-            
-            # Hide the divergence gradients from the backward pass
-            # grad_div_x = jax.lax.stop_gradient(grad_div_x)
-            # grad_div_y = jax.lax.stop_gradient(grad_div_y)
+            # ----------------------------------------------------------------------------
 
             grad_pi_pp_x = self.physics.op.diff(pi_prime_prime, axis=0, from_loc='m', to_loc='u')
             grad_pi_pp_y = self.physics.op.diff(pi_prime_prime, axis=1, from_loc='m', to_loc='v')
