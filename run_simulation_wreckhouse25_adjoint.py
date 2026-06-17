@@ -12,6 +12,9 @@ os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 import time
 import math
 import jax
+
+jax.config.update("jax_debug_nans", True)
+
 import jax.numpy as jnp
 import numpy as np
 
@@ -52,10 +55,10 @@ def main():
     nx, ny, nz = 200, 200, 40
     dx, dy, dz = 2000.0, 2000.0, 350.0
     sponge_depth = 15
-    smooth_sigma = 0.2  
+    smooth_sigma = 0.2 
     
     dt = 5.0
-    sim_hours = 1.25
+    sim_hours = 2.0
     sim_time_seconds = sim_hours * 3600.0
     num_era5_states = math.ceil(sim_hours) + 1
     
@@ -318,13 +321,18 @@ def main():
         else:
             sens_state_wind['grad_wind_mag'] = grad_wind_mag
 
-        # 4. Clean, non-redundant diagnostic fields mapping to the unique keys above
+        # --- ADD THIS NORMALIZATION ---
+        safe_mag = sens_state_wind['grad_wind_mag'] + 1e-12
+        sens_state_wind['grad_u_norm'] = sens_state_wind['grad_u'] / safe_mag
+        sens_state_wind['grad_v_norm'] = sens_state_wind['grad_v'] / safe_mag
+
+        # 4. Clean, non-redundant diagnostic fields
         adjoint_fields = [
             {'var': 'grad_u', 'cmap': 'seismic', 'title': 'Zonal Sensitivity (grad_u)', 'scale': 'sym'},
             {'var': 'grad_v', 'cmap': 'seismic', 'title': 'Meridional Sensitivity (grad_v)', 'scale': 'sym'},
             {'var': 'grad_th_v', 'cmap': 'seismic', 'title': 'Thermodynamic Sensitivity (grad_th_v)', 'scale': 'sym'},
-            {'type': 'quiver', 'bg_var': 'grad_wind_mag', 'u_var': 'grad_u', 'v_var': 'grad_v', 
-             'cmap': 'Reds', 'title': 'Adjoint Impact & Sensitivity Vectors'} 
+            {'type': 'quiver', 'bg_var': 'grad_wind_mag', 'u_var': 'grad_u_norm', 'v_var': 'grad_v_norm', 
+            'cmap': 'Reds', 'title': 'Adjoint Impact & Direction (Unit Vectors)'} 
         ]
 
         # 5. Execute with extent=None for full 400x400 km domain view

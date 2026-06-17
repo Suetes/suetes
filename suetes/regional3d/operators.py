@@ -5,6 +5,7 @@ Provides finite-difference stencils, spatial averaging operators, and
 high-order interpolators for integrating PDEs on an Arakawa C-grid.
 """
 
+import jax
 import jax.numpy as jnp
 import jax.scipy.ndimage as jnd
 
@@ -29,14 +30,29 @@ class CGridOperator3D:
     def _apply_padding(self, f, axis, from_loc, to_loc):
         """
         Applies padding to ensure boundary values are available for centered stencils.
-
-        For momentum fields (u, v, w), we pad with the 'edge' value (first/last
-        row) to implement a Neumann boundary condition (zero gradient).
+        
+        Uses stop_gradient on the duplicated edge cells. This ensures the forward 
+        pass smoothly extrapolates (open boundary), but the adjoint pass drops 
+        the boundary sensitivities rather than accumulating them.
         """
-        pad_width = [(0, 0), (0, 0), (0, 0)]
         if from_loc == 'm' and to_loc in ['u', 'v', 'w']:
-            pad_width[axis] = (1, 1)
-            return jnp.pad(f, pad_width, mode='edge')
+            
+            # Slice out the edge values and detach them from the adjoint graph
+            if axis == 0:
+                left_edge  = jax.lax.stop_gradient(f[0:1, ...])
+                right_edge = jax.lax.stop_gradient(f[-1:, ...])
+                return jnp.concatenate([left_edge, f, right_edge], axis=0)
+                
+            elif axis == 1:
+                left_edge  = jax.lax.stop_gradient(f[:, 0:1, ...])
+                right_edge = jax.lax.stop_gradient(f[:, -1:, ...])
+                return jnp.concatenate([left_edge, f, right_edge], axis=1)
+                
+            elif axis == 2:
+                left_edge  = jax.lax.stop_gradient(f[:, :, 0:1])
+                right_edge = jax.lax.stop_gradient(f[:, :, -1:])
+                return jnp.concatenate([left_edge, f, right_edge], axis=2)
+
         return f
 
     def diff(self, f, axis, from_loc, to_loc):
