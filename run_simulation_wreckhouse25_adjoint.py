@@ -13,8 +13,6 @@ import time
 import math
 import jax
 
-jax.config.update("jax_debug_nans", True)
-
 import jax.numpy as jnp
 import numpy as np
 

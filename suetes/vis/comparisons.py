@@ -178,3 +178,88 @@ def plot_ablation_spectrum(grid, states_dict, variable='w', z_idx=5, sponge_dept
     if save_path: plt.savefig(save_path, dpi=200, bbox_inches='tight')
     else: plt.show()
     plt.close()
+
+
+def plot_worst_case_dashboard(grid, time_axis_mins, ts_era5, ts_baseline, ts_worst_case, 
+                              pert_th_v_2d, state_baseline, state_worst_case, 
+                              loc_idx, sponge_depth=30, save_path=None):
+    """
+    Generates a 4-panel dashboard showcasing the Adjoint worst-case impact.
+    Includes Time Series (ERA5, Baseline, Worst-Case), optimal perturbation map, 
+    and cross-sections of the baseline flow vs. the wind anomaly.
+    """
+    import matplotlib.gridspec as gridspec
+    
+    i_w, j_w = loc_idx
+    
+    fig = plt.figure(figsize=(18, 11))
+    gs = gridspec.GridSpec(2, 2, figure=fig, hspace=0.25, wspace=0.15)
+    
+    # --- Panel A: Time Series ---
+    ax_ts = fig.add_subplot(gs[0, 0])
+    ax_ts.plot(time_axis_mins, ts_era5, 'r--', linewidth=2, label='ERA5 Driver')
+    ax_ts.plot(time_axis_mins, ts_baseline, 'b-', linewidth=2, alpha=0.7, label='Baseline Suetes')
+    ax_ts.plot(time_axis_mins, ts_worst_case, 'k-', linewidth=2.5, label='Worst-Case (Adjoint)')
+    
+    wind_baseline = ts_baseline[-1]
+    wind_worst_case = ts_worst_case[-1]
+    ax_ts.set_title(f"Surface Wind Speed Evolution at Target\nAmplification: +{wind_worst_case - wind_baseline:.1f} km/h", fontweight='bold', fontsize=14)
+    ax_ts.set_xlabel("Time since perturbation (Minutes)", fontsize=12)
+    ax_ts.set_ylabel("Wind Speed (km/h)", fontsize=12)
+    ax_ts.grid(True, linestyle='--', alpha=0.6)
+    ax_ts.legend(fontsize=11)
+    
+    # --- Panel B: Optimal Perturbation Map ---
+    ax_map = fig.add_subplot(gs[0, 1], projection=ccrs.PlateCarree(central_longitude=grid.lon_c))
+    vmax_pert = float(np.max(np.abs(pert_th_v_2d)))
+    if vmax_pert == 0: vmax_pert = 0.1
+    
+    # Create a dummy state to satisfy the plot_2d_field signature
+    dummy_state = {'th_v': np.zeros((grid.nx, grid.ny, grid.nz))} 
+    im_pert = plot_2d_field(grid, dummy_state, 'th_v', z_idx=0, sponge_depth=sponge_depth, 
+                            cmap='RdBu_r', vmin=-vmax_pert, vmax=vmax_pert, scale='sym',
+                            title=r"Optimal Upstream Thermal Perturbation ($\Delta \theta_v$)", 
+                            ax=ax_map, plot_data=pert_th_v_2d)
+    
+    # Overlay Target Star
+    Xi, Yi = np.meshgrid(grid.x_m, grid.y_m, indexing='ij')
+    lats, lons = grid.proj.get_lat_lon(Xi, Yi)
+    if lons.max() - lons.min() > 180.0: lons = np.where(lons < 0, lons + 360.0, lons)
+    ax_map.plot(lons[i_w, j_w], lats[i_w, j_w], 'k*', markersize=16, transform=ccrs.PlateCarree(), label='Target')
+    ax_map.legend(loc='lower right')
+    
+    fig.colorbar(im_pert, ax=ax_map, orientation='horizontal', pad=0.08, fraction=0.046, label='Thermal Shift (K)')
+    
+    # --- Prepare Cross Section Data ---
+    u_base_m = 0.5 * (state_baseline['u'][:-1, :, :] + state_baseline['u'][1:, :, :])
+    u_worst_m = 0.5 * (state_worst_case['u'][:-1, :, :] + state_worst_case['u'][1:, :, :])
+    u_diff = (u_worst_m - u_base_m) * 3.6  # km/h
+    
+    # --- Panel C: Baseline Cross Section ---
+    ax_base = fig.add_subplot(gs[1, 0])
+    c_base = plot_cross_section(grid, state_baseline, 'u', y_idx=j_w, sponge_depth=sponge_depth,
+                            title="Baseline Zonal Wind (km/h) across Terrain", ax=ax_base, 
+                            plot_data=u_base_m[:, j_w, :] * 3.6, overlay_isentropes=True,
+                            vmin=-50.0, vmax=150.0) # Explicitly cap the bounds
+    ax_base.set_ylim([0, 4.0]) # Cap at 4km altitude to highlight the mountain wave
+    fig.colorbar(c_base, ax=ax_base, orientation='horizontal', pad=0.15, label='Baseline Zonal Wind (km/h)')
+    
+    # --- Panel D: Anomaly Cross Section ---
+    ax_diff = fig.add_subplot(gs[1, 1])
+    # Extract the interior to calculate color bounds without edge artifacts
+    interior_diff = u_diff[sponge_depth:-sponge_depth, j_w, :] if sponge_depth > 0 else u_diff[:, j_w, :]
+    vmax_diff = float(np.max(np.abs(interior_diff)))
+    if vmax_diff == 0: vmax_diff = 1.0
+    
+    c_diff = plot_cross_section(grid, state_worst_case, 'u', y_idx=j_w, sponge_depth=sponge_depth,
+                                cmap='seismic', vmin=-vmax_diff, vmax=vmax_diff,
+                                title=r"Zonal Wind Anomaly ($\Delta \mathbf{u}$) Induced by Adjoint", 
+                                ax=ax_diff, plot_data=u_diff[:, j_w, :])
+    ax_diff.set_ylim([0, 4.0])
+    fig.colorbar(c_diff, ax=ax_diff, orientation='horizontal', pad=0.15, label='Wind Difference (km/h)')
+    
+    plt.suptitle(f"Suetes Downscaling: Adjoint Optimal Perturbation Impact", fontsize=18, y=0.98)
+    plt.tight_layout()
+    if save_path: plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    else: plt.show()
+    plt.close()
