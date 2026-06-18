@@ -37,6 +37,17 @@ from suetes.vis.visualizer import Visualizer
 
 DATA_DIR = "suetes/data"
 
+
+def create_wind_tracker(target_i, target_j):
+        ts = []
+        def callback(u, v):
+            # Calculate magnitude at target point
+            u_p = 0.5 * (u[target_i, target_j, 0] + u[target_i+1, target_j, 0])
+            v_p = 0.5 * (v[target_i, target_j, 0] + v[target_i, target_j+1, 0])
+            speed = float(np.sqrt(u_p**2 + v_p**2)) * 3.6
+            ts.append(speed)
+        return ts, callback
+
 def main():
     # =====================================================================
     # 0. CONFIGURATION & GEOMETRY
@@ -56,11 +67,13 @@ def main():
 
     # Timings
     dt = 5.0
-    t_spinup_hours = 3.0
-    t_peak_hours = 4.0
+    t_spinup_hours = 6.0
+    t_peak_hours = 7.0
+    t_total_hours = 9.0
     
     t_spinup_end = t_spinup_hours * 3600.0
     t_peak = t_peak_hours * 3600.0
+    t_total_end = t_total_hours * 3600.0
     
     CHUNK_STEPS = 90
     sim_hours = 12 # This is our maximal runtime, but we don't go this far
@@ -197,8 +210,22 @@ def main():
     print("-" * 60)
     print(f"[PHASE 1] Spinning up forward model from t=0 to t={t_spinup_hours}h...")
     
+    ts_baseline, track_baseline = create_wind_tracker(i_w, j_w)
+    
+    @jax.checkpoint
+    def forward_step_fn_baseline(curr_state, step_idx, forcing=None, bc_fn=None):
+        next_state, max_w = forward_step_fn(curr_state, step_idx, forcing, bc_fn)
+        # Extract and save just the single float value on the fly
+        jax.debug.callback(track_baseline, next_state['u'], next_state['v'], ordered=True)
+        return next_state, max_w
+
+    sim_baseline = Simulation(step_fn=forward_step_fn_baseline, dt=dt)
+    
+    # Capture the t=0 initial point
+    track_baseline(initial_state['u'], initial_state['v'])
+    
     start_time = time.time()
-    state_t5 = sim_forward.run(
+    state_t5 = sim_baseline.run(
         initial_state, t_start=0.0, t_end=t_spinup_end, chunk_steps=int(3600.0 / dt)
     )
     print(f"  -> Spin-up complete in {time.time() - start_time:.1f}s")
@@ -282,69 +309,69 @@ def main():
     worst_case_state_t5['th_v'] = state_t5['th_v'] + pert_th_v
 
     # =====================================================================
-    # PHASE 4: THE WORST CASE SIMULATION & VISUALIZATION
+    # PHASE 4: THE WORST CASE SIMULATION (9-HOUR RUN)
     # =====================================================================
     print("-" * 60)
-    print(f"[PHASE 4] Running baseline and worst-case simulations forward to T={t_peak_hours}h...")
+    print(f"[PHASE 4] Running baseline and worst-case simulations to T={t_total_hours}h...")
     
     from suetes.vis.comparisons import plot_worst_case_dashboard
 
-    baseline_history = []
-    worst_case_history = []
+    # Initialize worst-case tracker and pad with the Phase 1 spin-up history
+    ts_worst_case, track_worst_case = create_wind_tracker(i_w, j_w)
+    ts_worst_case.extend(ts_baseline) 
     
-    def run_forward_window(init_state, history_list):
-        history_list.append({k: np.asarray(v) for k, v in init_state.items() if k in ['u', 'v']})
-        
-        @jax.checkpoint
-        def capture_step_fn(curr_state, step_idx, forcing=None, bc_fn=None):
-            next_state, max_w = forward_step_fn(curr_state, step_idx, forcing, bc_fn)
-            jax.debug.callback(
-                lambda s: history_list.append({k: np.asarray(v) for k, v in s.items() if k in ['u', 'v']}), 
-                {'u': next_state['u'], 'v': next_state['v']}, 
-                ordered=True
-            )
-            return next_state, max_w
+    @jax.checkpoint
+    def forward_step_fn_worst_case(curr_state, step_idx, forcing=None, bc_fn=None):
+        next_state, max_w = forward_step_fn(curr_state, step_idx, forcing, bc_fn)
+        jax.debug.callback(track_worst_case, next_state['u'], next_state['v'], ordered=True)
+        return next_state, max_w
 
-        sim_capture = Simulation(step_fn=capture_step_fn, dt=dt)
-        return sim_capture.run(init_state, t_start=t_spinup_end, t_end=t_peak, chunk_steps=int(3600.0 / dt))
+    sim_worst_case = Simulation(step_fn=forward_step_fn_worst_case, dt=dt)
 
-    # Run both simulations
-    final_baseline = run_forward_window(state_t5, baseline_history)
-    final_worst_case = run_forward_window(worst_case_state_t5, worst_case_history)
-
-    # Extract Suetes time series
-    def extract_wind_ts(history_list):
-        ts = []
-        for s in history_list:
-            u_p = 0.5 * (s['u'][i_w, j_w, 0] + s['u'][i_w+1, j_w, 0])
-            v_p = 0.5 * (s['v'][i_w, j_w, 0] + s['v'][i_w, j_w+1, 0])
-            ts.append(float(np.sqrt(u_p**2 + v_p**2)) * 3.6)
-        return ts
-
-    ts_baseline = extract_wind_ts(baseline_history)
-    ts_worst_case = extract_wind_ts(worst_case_history)
+    # --- PART A: Run to the peak (T=5h to T=7h) ---
+    print(f"  -> Advancing to peak target (T={t_peak_hours}h)...")
     
-    # Extract ERA5 driver time series (interpolated temporally)
+    state_baseline_t7 = sim_baseline.run(
+        state_t5, t_start=t_spinup_end, t_end=t_peak, chunk_steps=int(3600.0 / dt)
+    )
+    
+    state_worst_case_t7 = sim_worst_case.run(
+        worst_case_state_t5, t_start=t_spinup_end, t_end=t_peak, chunk_steps=int(3600.0 / dt)
+    )
+
+    # --- PART B: Run the rest of the way (T=7h to T=9h) ---
+    print(f"  -> Advancing to end of simulation (T={t_total_hours}h)...")
+    
+    _ = sim_baseline.run(
+        state_baseline_t7, t_start=t_peak, t_end=t_total_end, chunk_steps=int(3600.0 / dt)
+    )
+    
+    _ = sim_worst_case.run(
+        state_worst_case_t7, t_start=t_peak, t_end=t_total_end, chunk_steps=int(3600.0 / dt)
+    )
+
+    # Extract ERA5 driver time series up to T=9h
     ts_era5 = []
-    time_axis_mins = np.linspace(0, (t_peak_hours - t_spinup_hours) * 60, len(ts_baseline))
+    time_axis_mins = np.linspace(0, t_total_hours * 60, len(ts_baseline))
     
     for mins in time_axis_mins:
-        t_sec = t_spinup_end + (mins * 60.0)
-        # Pull the interpolated forcing state for this exact second
+        t_sec = mins * 60.0
         bc_state = time_manager.get_forcing(t_sec) 
         u_p = 0.5 * (bc_state['u'][i_w, j_w, 0] + bc_state['u'][i_w+1, j_w, 0])
         v_p = 0.5 * (bc_state['v'][i_w, j_w, 0] + bc_state['v'][i_w, j_w+1, 0])
         ts_era5.append(float(np.sqrt(u_p**2 + v_p**2)) * 3.6)
 
-    # Impact logs
+    # Calculate exact index for the T=7h peak to print metrics
+    peak_idx = int((t_peak_hours * 3600.0) / dt)
+    
     print("-" * 60)
     print("=== FINAL IMPACT RESULTS ===")
-    print(f" ERA5 coarse wind:      {ts_era5[-1]:.1f} km/h")
-    print(f" Baseline wind speed:   {ts_baseline[-1]:.1f} km/h")
-    print(f" Worst-case wind speed: {ts_worst_case[-1]:.1f} km/h")
-    print(f" Net amplification:     +{ts_worst_case[-1] - ts_baseline[-1]:.1f} km/h")
+    print(f" ERA5 coarse wind (T={t_peak_hours}h):      {ts_era5[peak_idx]:.1f} km/h")
+    print(f" Baseline wind speed (T={t_peak_hours}h):   {ts_baseline[peak_idx]:.1f} km/h")
+    print(f" Worst-case wind speed (T={t_peak_hours}h): {ts_worst_case[peak_idx]:.1f} km/h")
+    print(f" Net amplification at peak:       +{ts_worst_case[peak_idx] - ts_baseline[peak_idx]:.1f} km/h")
 
-    # Generate dashboard
+    # Generate dashboard using the T=7h states for the cross-sections
     print("[PLOT] Generating adjoint impact dashboard...")
     plot_worst_case_dashboard(
         grid=grid,
@@ -352,9 +379,9 @@ def main():
         ts_era5=ts_era5,
         ts_baseline=ts_baseline,
         ts_worst_case=ts_worst_case,
-        pert_th_v_2d=pert_th_v[:, :, 0],  # Pass just the surface thermal perturbation
-        state_baseline=final_baseline,
-        state_worst_case=final_worst_case,
+        pert_th_v_2d=pert_th_v[:, :, 0], 
+        state_baseline=state_baseline_t7,       # Uses the T=7h slice
+        state_worst_case=state_worst_case_t7,   # Uses the T=7h slice
         loc_idx=(i_w, j_w),
         sponge_depth=sponge_depth,
         save_path=os.path.join(output_dir, f"{RUN_NAME}_dashboard.png")
