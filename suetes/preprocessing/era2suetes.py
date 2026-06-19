@@ -1,7 +1,7 @@
 """
 ERA5 to Suetes Data Bridge.
 
-Handles the mathematically rigorous translation of external reanalysis data onto 
+Handles the translation of external reanalysis data onto 
 the native numerical grid, including horizontal reprojection, thermodynamic 
 reconciliation, and hydrostatic reconstruction.
 """
@@ -14,12 +14,28 @@ import numpy as np
 import scipy.ndimage as ndimage_cpu
 
 
+@jax.jit
+def _regrid_levels_jax(vol, cy, cx):
+    """Compiled, vmapped horizontal regrid of ALL vertical levels at once.
+
+    vol: (nz, nlat, nlon) ERA5 field; cy, cx: fractional ERA5 indices of the
+    (curvilinear) target cells. Returns (nz, *target_shape). Bilinear (order=1),
+    edge-clamped (mode='nearest') to match scipy. Runs multi-threaded on the XLA
+    CPU backend (and on GPU if not pinned to CPU) -- replaces the single-threaded
+    per-level scipy loop. jit caches by shape, so it compiles once and is reused
+    across all states.
+    """
+    return jax.vmap(
+        lambda lvl: jnd.map_coordinates(lvl, [cy, cx], order=1, mode="nearest")
+    )(vol)
+
+
 class TimeManager:
     """
     Manages the temporal interpolation of forcing fields.
 
     Given a list of historical ERA5 states, this class provides a mechanism
-    to retrieve the correct analytical forcing values for any point in time
+    to retrieve the correct forcing values for any point in time
     during the simulation run, using linear interpolation between time steps.
 
     Memory layout: the full stack of bc_states is held on host (CPU) memory
@@ -130,7 +146,6 @@ class HorizontalRegridder:
         Xi, Yi = np.meshgrid(x_coords, y_coords, indexing='ij')
         target_lat, target_lon = self.grid.proj.get_lat_lon(Xi, Yi)
         
-        # Ensure we are using numpy here, not jnp
         target_lat = np.array(target_lat)
         target_lon = np.array(target_lon)
         
@@ -147,23 +162,16 @@ class HorizontalRegridder:
 
     def regrid_3d(self, field_era5_3d, loc='m'):
         """
-        Regrids a 3D ERA5 field onto the native grid.
-        
-        Uses pre-computed indices for computational efficiency.
+        Regrids a 3D ERA5 field onto the native (curvilinear) grid.
+
+        All vertical levels are regridded in one compiled, vmapped JAX call
+        (``_regrid_levels_jax``) -- multi-threaded on the XLA CPU backend --
+        instead of the old single-threaded per-level scipy loop.
         """
-        coords = self.target_indices[loc]
-        field_np = np.array(field_era5_3d)
-        
-        # Map coordinates layer by layer using standard SciPy with order=3
-        regridded_layers = []
-        for z in range(field_np.shape[0]):
-            layer = ndimage_cpu.map_coordinates(field_np[z], coords, order=1, mode='nearest')
-            regridded_layers.append(layer)
-            
-        regridded = np.stack(regridded_layers, axis=0)
-        
-        # Convert back to JAX array and transpose to (X, Y, Z) expected by the model
-        return jnp.array(np.transpose(regridded, (1, 2, 0)))
+        coords = self.target_indices[loc]                      # (2, *target)
+        vol = jnp.asarray(np.asarray(field_era5_3d))           # (nz, nlat, nlon)
+        regridded = _regrid_levels_jax(vol, jnp.asarray(coords[0]), jnp.asarray(coords[1]))
+        return jnp.transpose(regridded, (1, 2, 0))
 
     def regrid_2d(self, field_era5_2d, loc='m', order=3):
         """
@@ -328,7 +336,7 @@ class BoundaryProcessor:
         """
         # Horizontal Regridding 
         # We must regrid the ERA5 heights to the staggered locations so the 
-        # vertical interpolator has the correct physical z-coordinate for every face!
+        # vertical interpolator has the correct physical z-coordinate for every face
         z_era5_m = self.regridder.regrid_3d(stitched_era5_state['geopotential'] / self.c['g'], loc='m')
         z_era5_u = self.regridder.regrid_3d(stitched_era5_state['geopotential'] / self.c['g'], loc='u')
         z_era5_v = self.regridder.regrid_3d(stitched_era5_state['geopotential'] / self.c['g'], loc='v')
@@ -430,10 +438,7 @@ class BoundaryProcessor:
         epsilon = self.c.get('epsilon', 0.622)
         q_sfc = state['q'][:, :, 0]
         state['theta_skt'] = theta_skt_dry * (1.0 + (1.0 / epsilon - 1.0) * q_sfc)
-
-        # Enforce global mass conservation (probably a bad idea for open systems!)
-        # state = self._balance_global_mass(state)
-        
+      
         return state
 
     def process_static(self, stitched_era5_state):

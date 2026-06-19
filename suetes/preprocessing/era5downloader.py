@@ -123,24 +123,47 @@ class ERA5Manager:
         ]
 
     def download_regional_subset(self, year, month, days, area,
-                                 prefix="test_case"):
+                                 prefix="test_case", client=None):
         """
         Download ERA5 single and pressure level data if not already cached.
+
+        ``client`` lets a caller pass a per-thread cdsapi client for concurrent
+        downloads (see :meth:`download_regional_daily`); defaults to self.client.
 
         Returns
         -------
         (single_level_filepath, pressure_level_filepath) : (str, str)
         """
+        cl = client or self.client
         sl_filepath = os.path.join(self.data_dir, f"{prefix}_single_levels.nc")
         pl_filepath = os.path.join(self.data_dir, f"{prefix}_pressure_levels.nc")
         times = [f"{str(i).zfill(2)}:00" for i in range(24)]
+        n_expected = len(days) * 24
 
-        if os.path.exists(sl_filepath):
-            print(f"[DATA] Single levels already exist at {sl_filepath}. "
+        def _complete(path):
+            # A bare existence check silently reuses interrupted/partial downloads.
+            # Verify the file actually opens and has the expected timesteps.
+            if not os.path.exists(path):
+                return False
+            try:
+                import netCDF4
+                with netCDF4.Dataset(path, "r") as _d:
+                    for _t in ("valid_time", "time"):
+                        if _t in _d.dimensions:
+                            return _d.dimensions[_t].size == n_expected
+            except Exception:
+                return False
+            return False
+
+        if _complete(sl_filepath):
+            print(f"[DATA] Single levels already exist (verified) at {sl_filepath}. "
                   "Skipping download.")
         else:
+            if os.path.exists(sl_filepath):
+                os.remove(sl_filepath)
+                print("[DATA] Single-levels file incomplete -- re-downloading.")
             print(f"[DATA] Fetching Single Levels for {year}-{month}...")
-            self.client.retrieve(
+            cl.retrieve(
                 "reanalysis-era5-single-levels",
                 {
                     "product_type": ["reanalysis"],
@@ -161,16 +184,19 @@ class ERA5Manager:
                 sl_filepath,
             )
 
-        if os.path.exists(pl_filepath):
-            print(f"[DATA] Pressure levels already exist at {pl_filepath}. "
+        if _complete(pl_filepath):
+            print(f"[DATA] Pressure levels already exist (verified) at {pl_filepath}. "
                   "Skipping download.")
         else:
+            if os.path.exists(pl_filepath):
+                os.remove(pl_filepath)
+                print("[DATA] Pressure-levels file incomplete -- re-downloading.")
             print(f"[DATA] Fetching Pressure Levels for {year}-{month} "
                   f"(preset='{self._preset_name}', "
                   f"{len(self.pressure_levels)} levels: "
                   f"{self.pressure_levels[0]} to "
                   f"{self.pressure_levels[-1]} hPa)...")
-            self.client.retrieve(
+            cl.retrieve(
                 "reanalysis-era5-pressure-levels",
                 {
                     "product_type": ["reanalysis"],
@@ -193,6 +219,51 @@ class ERA5Manager:
 
         print("[DATA] Data is ready for the model!")
         return sl_filepath, pl_filepath
+
+    def download_regional_daily(self, year, month, days, area, prefix="test_case",
+                                workers=1):
+        """Download ERA5 one day per file -- resumable, manageable chunks.
+
+        Each day is fetched into its own ``{prefix}_{year}{month}{dd}_*.nc`` pair
+        by delegating to :meth:`download_regional_subset` (sharing its per-file
+        integrity-check + skip-if-complete logic). Interrupted/partial days are
+        re-downloaded on the next call, so it resumes instead of restarting.
+
+        ``workers`` > 1 issues day requests CONCURRENTLY (the days are independent),
+        each on its own cdsapi client. CDS limits the number of concurrent active
+        requests per user, so keep this small (~2-4): beyond the limit the extra
+        requests simply queue server-side. Order of the returned lists always
+        matches ``days``.
+
+        Consume the returned lists lazily with ``ERA5Processor`` (open_mfdataset).
+
+        Returns
+        -------
+        (single_level_filepaths, pressure_level_filepaths) : (list[str], list[str])
+            Per-day file paths, in the order of ``days``.
+        """
+        day_list = [str(d).zfill(2) for d in days]
+
+        def _one(dd):
+            day_prefix = f"{prefix}_{year}{month}{dd}"
+            print(f"[DATA] --- day {year}-{month}-{dd} ---")
+            # Per-thread client when running concurrently (cdsapi clients are not
+            # meant to be shared across simultaneous retrieves).
+            cl = cdsapi.Client() if workers and workers > 1 else self.client
+            return self.download_regional_subset(year=year, month=month, days=[dd],
+                                                 area=area, prefix=day_prefix, client=cl)
+
+        if workers and workers > 1:
+            from concurrent.futures import ThreadPoolExecutor
+            print(f"[DATA] downloading {len(day_list)} days with {workers} parallel workers")
+            with ThreadPoolExecutor(max_workers=workers) as ex:
+                results = list(ex.map(_one, day_list))   # map preserves input order
+        else:
+            results = [_one(dd) for dd in day_list]
+
+        sl_paths = [sl for sl, _ in results]
+        pl_paths = [pl for _, pl in results]
+        return sl_paths, pl_paths
 
     def download_point_columns(self, year, month, days, points_dict, prefix="scm_training"):
         """
@@ -220,7 +291,7 @@ class ERA5Manager:
             if os.path.exists(sl_filepath):
                 print(f"[DATA] Single levels for {loc_name} already exist. Skipping.")
             else:
-                self.client.retrieve(
+                cl.retrieve(
                     "reanalysis-era5-single-levels",
                     {
                         "product_type": ["reanalysis"],
@@ -252,7 +323,7 @@ class ERA5Manager:
                     
                     if not os.path.exists(temp_file):
                         print(f"       -> Requesting day {day}...")
-                        self.client.retrieve(
+                        cl.retrieve(
                             "reanalysis-era5-pressure-levels",
                             {
                                 "product_type": ["reanalysis"],

@@ -1,0 +1,60 @@
+# nam22_config.yaml -- single source of truth for the CORDEX NAM-22 case.
+# Consumed by suetes.shared.config.load_config (preprocessing CLI + runner).
+# Values below reproduce the validated 22 km, 42 h radiation run.
+
+domain:
+  name: "nam22"
+  lat_c: 47.5
+  lon_c: -97.0
+  nx: 310
+  ny: 260
+  nz: 32
+  dx: 22000.0        # CORDEX NAM-22 grid spacing (22 km)
+  dy: 22000.0
+  dz: 500.0
+
+time:
+  year: "2025"
+  month: "07"
+  days: ["18", "19", "20"]
+  sim_hours: 42       # num_states = sim_hours + 1 (43 hourly ERA5 states)
+
+vertical:
+  kappa: 1.0          # >1 -> near-surface stretching (StretchedSleveSimple)
+  scale_s: 10000.0
+  n: 1.0
+
+core:
+  type: "split-explicit"
+  dt: 40.0
+  nu_h: 0.03
+  ns: 3
+  alpha: 0.7
+
+physics:
+  radiation: true
+  nudge: true
+  microphysics: true   # Kessler warm rain
+  convection: true     # Betts-Miller adjustment
+  rh_crit: 0.80
+  rad_coarse: 8
+  rad_every_h: 1.0
+  afgl: true
+
+constants:
+  g: 9.81
+  Rd: 287.0
+  cp: 1004.0
+  cvd: 717.0
+  p0: 100000.0
+  epsilon: 0.622
+
+io:
+  data_dir: "suetes/data"
+  fig_dir: "suetes/plots/radiation"
+  store_format: "zarr"   # chunked, lazily-streamed (scales to long windows)
+  coarsen_window: 3
+  sponge_depth: 15
+  smooth_sigma: 2.0
+  pressure_levels: "buffered"
+  buffer_deg: 3.0

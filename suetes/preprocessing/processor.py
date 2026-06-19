@@ -23,11 +23,24 @@ class ERA5Processor:
         Initializes the processor and loads the dataset files.
 
         Args:
-            pl_path (str): File path to the ERA5 pressure-level data.
-            sl_path (str): File path to the ERA5 single-level data.
+            pl_path (str | list[str]): ERA5 pressure-level data -- a single file,
+                a list of daily files, or a glob pattern.
+            sl_path (str | list[str]): ERA5 single-level data (same forms).
+
+        A list/glob is opened lazily with ``xarray.open_mfdataset`` and
+        concatenated along time, so per-timestep reads only load the relevant
+        day-chunk -- the read-side counterpart to the daily download.
         """
-        self.ds_pl = xr.open_dataset(pl_path)
-        self.ds_sl = xr.open_dataset(sl_path)
+        self.ds_pl = self._open_dataset(pl_path)
+        self.ds_sl = self._open_dataset(sl_path)
+
+    @staticmethod
+    def _open_dataset(path):
+        if isinstance(path, (list, tuple)):
+            return xr.open_mfdataset(list(path), combine="by_coords")
+        if isinstance(path, str) and any(ch in path for ch in "*?["):
+            return xr.open_mfdataset(path, combine="by_coords")
+        return xr.open_dataset(path)
 
     def get_stitched_state(self, time_idx=0, coarsen_window=None):
         """
