@@ -16,6 +16,7 @@ dependencies = [
     "cartopy",
     "pandas",
     "optax",
+    "netcdf4",
     "cdsapi"
 ]
 

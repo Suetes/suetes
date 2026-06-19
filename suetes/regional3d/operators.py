@@ -21,6 +21,7 @@ class CGridOperator3D:
             grid (RegionalGrid3D): The computational grid geometry.
         """
         self.grid = grid
+        self.use_stop_grad = True
         # Pre-broadcast the mass weighting factors for use in derivatives
         self.m_factors = {
             loc: jnp.expand_dims(m_2d, axis=-1) 
@@ -31,26 +32,26 @@ class CGridOperator3D:
         """
         Applies padding to ensure boundary values are available for centered stencils.
         
-        Uses stop_gradient on the duplicated edge cells. This ensures the forward 
-        pass smoothly extrapolates (open boundary), but the adjoint pass drops 
-        the boundary sensitivities rather than accumulating them.
+        Uses stop_gradient on the duplicated edge cells if self.use_stop_grad is True.
+        This ensures the forward pass smoothly extrapolates (open boundary), but the
+        adjoint pass drops the boundary sensitivities rather than accumulating them.
         """
         if from_loc == 'm' and to_loc in ['u', 'v', 'w']:
             
-            # Slice out the edge values and detach them from the adjoint graph
+            # Slice out the edge values and detach them from the adjoint graph if enabled
             if axis == 0:
-                left_edge  = jax.lax.stop_gradient(f[0:1, ...])
-                right_edge = jax.lax.stop_gradient(f[-1:, ...])
+                left_edge  = jax.lax.stop_gradient(f[0:1, ...]) if self.use_stop_grad else f[0:1, ...]
+                right_edge = jax.lax.stop_gradient(f[-1:, ...]) if self.use_stop_grad else f[-1:, ...]
                 return jnp.concatenate([left_edge, f, right_edge], axis=0)
                 
             elif axis == 1:
-                left_edge  = jax.lax.stop_gradient(f[:, 0:1, ...])
-                right_edge = jax.lax.stop_gradient(f[:, -1:, ...])
+                left_edge  = jax.lax.stop_gradient(f[:, 0:1, ...]) if self.use_stop_grad else f[:, 0:1, ...]
+                right_edge = jax.lax.stop_gradient(f[:, -1:, ...]) if self.use_stop_grad else f[:, -1:, ...]
                 return jnp.concatenate([left_edge, f, right_edge], axis=1)
                 
             elif axis == 2:
-                left_edge  = jax.lax.stop_gradient(f[:, :, 0:1])
-                right_edge = jax.lax.stop_gradient(f[:, :, -1:])
+                left_edge  = jax.lax.stop_gradient(f[:, :, 0:1]) if self.use_stop_grad else f[:, :, 0:1]
+                right_edge = jax.lax.stop_gradient(f[:, :, -1:]) if self.use_stop_grad else f[:, :, -1:]
                 return jnp.concatenate([left_edge, f, right_edge], axis=2)
 
         return f

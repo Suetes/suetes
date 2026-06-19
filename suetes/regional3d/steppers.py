@@ -398,7 +398,11 @@ class SemiImplicitSolver3D:
                 'eta_dot': L_out['eta_dot'] 
             }
 
-        x_sol_scaled, info = gmres(A_fn, rhs_scaled, x0=rhs_scaled, tol=1e-4, maxiter=20, restart=20, M=M_fn)
+        self.physics.op.use_stop_grad = False
+        try:
+            x_sol_scaled, info = gmres(A_fn, rhs_scaled, x0=rhs_scaled, tol=1e-4, maxiter=20, restart=20, M=M_fn)
+        finally:
+            self.physics.op.use_stop_grad = True
         
         return {
             'u': x_sol_scaled['u'], 
