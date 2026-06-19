@@ -16,7 +16,7 @@ from suetes.shared.transforms import SleveSimple
 import pytest
 
 # Module-level variables and fixtures
-dt = 100.0
+DT_VAL = 100.0
 nx_val, ny_val, nz_val = 32, 32, 15
 dx_val, dy_val, dz_val = 1000.0, 1000.0, 500.0
 lat_c, lon_c = 45.0, 0.0
@@ -33,9 +33,9 @@ def env_3d():
     def mountain_h(x, y):
         return 1500.0 * jnp.exp(-(x**2 + y**2) / (5000.0**2))
     grid = RegionalGrid3D(nx_val, ny_val, nz_val, dx_val, dy_val, dz_val, lat_c, lon_c, h_func=mountain_h)
-    advector = SemiLagrangianAdvector3D(grid, DummyPhysics(grid), dt)
+    advector = SemiLagrangianAdvector3D(grid, DummyPhysics(grid), DT_VAL)
     op = CGridOperator3D(grid)
-    physics = Euler3D(grid, op, constants, dt=dt, N_bv=0.01)
+    physics = Euler3D(grid, op, constants, dt=DT_VAL, N_bv=0.01)
     return grid, advector, physics, op
 
 @pytest.fixture
@@ -55,7 +55,7 @@ def op(env_3d):
     return env_3d[3]
 
 @pytest.fixture
-def dt_fixture(): return dt
+def dt_fixture(): return DT_VAL
 @pytest.fixture
 def nx(): return nx_val
 @pytest.fixture
@@ -363,7 +363,7 @@ def setup_terrain_test_env():
     grid = RegionalGrid3D(nx, ny, nz, dx, dy, dz, 0.0, 0.0, h_func=schaer_2d, transform=sleve)
     op = CGridOperator3D(grid)
     constants = {'g': 9.81, 'cp': 1004.0, 'cvd': 717.0, 'Rd': 287.0, 'p0': 100000.0}
-    physics = Euler3D(grid, op, constants, dt=dt, damp_height=grid.Lz, N_bv=0.01)
+    physics = Euler3D(grid, op, constants, dt=DT_VAL, damp_height=grid.Lz, N_bv=0.01)
     
     bg_state_ref = {
         'rho': physics.c['p0'] / (physics.c['Rd'] * physics.theta_bg) * \
