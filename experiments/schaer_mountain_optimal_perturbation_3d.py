@@ -10,12 +10,17 @@ import matplotlib.patches as patches
 from suetes.regional3d.geometry import RegionalGrid3D
 from suetes.regional3d.euler import Euler3D
 from suetes.regional3d.operators import CGridOperator3D
-from suetes.regional3d.steppers import SISLStepper3D
+from suetes.regional3d.steppers import build_dynamical_core
 from suetes.regional3d.boundaries import BenchmarkXSponge
 from suetes.shared.driver import Simulation
 
 output_dir = "suetes/plots/inversion"
 os.makedirs(output_dir, exist_ok=True)
+
+# =====================================================================
+# CONFIGURATION SWITCHES
+# =====================================================================
+CORE_TYPE = "split-explicit"  # Toggle to "sisl" or "split-explicit"
 
 # --- 1. SCHÄR MOUNTAIN PROFILE ---
 def schaer_mountain(x, y):
@@ -70,12 +75,28 @@ def bc_fn(state_in, forcing=None):
     }
     return x_sponge.blend(state_in, ext_state)
 
-# --- 4. THE ADJOINT METRIC FUNCTION ---
+# --- 4. BUILD DYNAMICAL CORE ---
+if CORE_TYPE.lower() == "sisl":
+    core_kwargs = {
+        "dt": dt, "nu_div_factor": 0.0, "nu_h_factor": 0.0, 
+        "damp_height": 12000.0, "max_damp": 0.5, "N_bv": 0.01
+    }
+elif CORE_TYPE.lower() == "split-explicit":
+    core_kwargs = {
+        "dt": dt, "ns": 6, "nu_div_factor": 0.0, "nu_h_factor": 0.0, 
+        "damp_height": 12000.0, "max_damp": 0.5, "N_bv": 0.01
+    }
+
+stepper, _ = build_dynamical_core(
+    core_type=CORE_TYPE, grid=grid, operators=op, constants=constants,
+    initial_state=initial_state, **core_kwargs
+)
+
+sim = Simulation(step_fn=stepper.step, dt=dt)
+
+# --- 5. THE ADJOINT METRIC FUNCTION ---
 x_t0, x_t1 = 190, 220
 z_t0, z_t1 = 8, 20
-
-stepper = SISLStepper3D(physics, dt)
-sim = Simulation(step_fn=stepper.step, dt=dt)
 
 def compute_forecast_metric(x0_state):
     # Utilize the shared differentiable driver
@@ -85,8 +106,8 @@ def compute_forecast_metric(x0_state):
     target_energy = w_final[x_t0:x_t1, 1, z_t0:z_t1] ** 2
     return jnp.sum(target_energy)
 
-# --- 5. RUN SENSITIVITIES ---
-print("\n[ADJOINT] Compiling and running ideal forward/backward trajectories...")
+# --- 6. RUN SENSITIVITIES ---
+print(f"\n[ADJOINT] Compiling and running ideal forward/backward trajectories ({CORE_TYPE.upper()})...")
 start_time = time.time()
 
 adjoint_fn = jax.value_and_grad(compute_forecast_metric)
@@ -154,19 +175,18 @@ def plot_field(data, title, filename, cmap='RdBu_r', add_box=False):
 # Forward State at T=1h (Where the waves are)
 plot_field(final_fwd_state['w'][:, 1, :], 
            rf'Forward State W at T = {t_end/3600}h', 
-           'schaer_fwd_w.png', add_box=True)
+           f'schaer_fwd_w_{CORE_TYPE.lower()}.png', add_box=True)
 
 # Sensitivity to Temperature at T=0 (Where the signal came from)
 plot_field(sensitivities_cpu['th_v'][:, 1, :], 
-           rf'Adjoint Sensitivity ($\partial J / \partial \theta_v$) at T = 0', 
-           'schaer_adj_th_v.png')
+           rf'Adjoint Sensitivity ($\partial J / \partial \theta_v$) at T = 0 ({CORE_TYPE.upper()})', 
+           f'schaer_adj_th_v_{CORE_TYPE.lower()}.png')
 
 # Sensitivity to Horizontal Wind at T=0
-# Note: U is staggered, so its dimension is nx+1. We interpolate it to mass points for plotting.
 u_sens_m = 0.5 * (sensitivities_cpu['u'][:-1, 1, :] + sensitivities_cpu['u'][1:, 1, :])
 plot_field(u_sens_m, 
-           rf'Adjoint Sensitivity ($\partial J / \partial u$) at T = 0', 
-           'schaer_adj_u.png')
+           rf'Adjoint Sensitivity ($\partial J / \partial u$) at T = 0 ({CORE_TYPE.upper()})', 
+           f'schaer_adj_u_{CORE_TYPE.lower()}.png')
 
 print("[PLOT] Success! Check the inversion folder.")
 
@@ -177,7 +197,6 @@ print("\n[EXPERIMENT] Testing Optimal vs. Random Perturbations...")
 sens_th_v = sensitivities_cpu['th_v']
 
 # Create the Optimal Perturbation (Gradient Ascent)
-# Scale it so the maximum temperature change is 1.0 Kelvin
 max_sens = jnp.max(jnp.abs(sens_th_v))
 optimal_pert = (sens_th_v / max_sens) * 1.0
 
@@ -202,8 +221,8 @@ def evaluate_perturbation(pert_th_v):
     perturbed_state['th_v'] = initial_state['th_v'] + pert_th_v
     
     # Update density (rho) using the Equation of State to maintain acoustic balance
-    perturbed_state['rho'] = physics.c['p0'] / (physics.c['Rd'] * perturbed_state['th_v']) * \
-                             (perturbed_state['pi'] ** (physics.c['cvd'] / physics.c['Rd']))
+    perturbed_state['rho'] = constants['p0'] / (constants['Rd'] * perturbed_state['th_v']) * \
+                             (perturbed_state['pi'] ** (constants['cvd'] / constants['Rd']))
                              
     # Run the fast forward solver
     final_pert_state, _ = jax.lax.scan(fast_forward, perturbed_state, jnp.arange(num_steps))
@@ -217,7 +236,7 @@ def evaluate_perturbation(pert_th_v):
 baseline_w = final_fwd_state['w'][:, 1, :]
 _, final_opt_state = evaluate_perturbation(optimal_pert)
 opt_diff_w = final_opt_state['w'][:, 1, :] - baseline_w
-vmax_shared = float(jnp.max(jnp.abs(opt_diff_w))) * 1.1  # Add 10% padding
+vmax_shared = float(jnp.max(jnp.abs(opt_diff_w))) * 1.1
 
 # 4. Run and Plot all configurations
 fig, axs = plt.subplots(2, 2, figsize=(20, 12))
@@ -235,12 +254,10 @@ for idx, (title, pert_th_v) in enumerate(configs_to_test):
     
     ax = axs[idx]
     
-    # Use the shared vmax here
     contour = ax.contourf(X_plot_curr, Z_w_plot, w_diff, 
                           levels=jnp.linspace(-vmax_shared, vmax_shared, 41), 
                           cmap='RdBu_r', extend='both')
     
-    # Fill the Schaer mountain terrain
     ax.fill_between(x_plot_1d, 0, mountain_terrain, color='black')
     
     # Draw Target Box
@@ -259,10 +276,9 @@ for idx, (title, pert_th_v) in enumerate(configs_to_test):
     if idx >= 2: ax.set_xlabel('Distance (km)')
     if idx % 2 == 0: ax.set_ylabel('Altitude (km)')
 
-# Add a single colorbar for the whole figure
 fig.subplots_adjust(right=0.92)
 cbar_ax = fig.add_axes([0.94, 0.15, 0.02, 0.7])
 fig.colorbar(contour, cax=cbar_ax, label='Change in W (m/s)')
 
-plt.savefig(f'{output_dir}/schaer_adjoint_validation.png', dpi=150, bbox_inches='tight')
-print(f"\nValidation complete. Saved to {output_dir}/schaer_adjoint_validation.png")
+plt.savefig(f'{output_dir}/schaer_adjoint_validation_{CORE_TYPE.lower()}.png', dpi=150, bbox_inches='tight')
+print(f"\nValidation complete. Saved to {output_dir}/schaer_adjoint_validation_{CORE_TYPE.lower()}.png")

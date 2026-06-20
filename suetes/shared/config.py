@@ -93,6 +93,25 @@ class IOConfig:
 
 
 @dataclass
+class RenderConfig:
+    levels_z: list = field(default_factory=lambda: [0, 5, 15, 30])
+    levels_m: list = field(default_factory=lambda: [500.0, 3000.0, 5000.0, 10000.0])
+    energy_levels: list = field(default_factory=lambda: [5])
+    energy_var: str = "w"
+    compare_var: str = "th_v"
+    compare_levels_z: list = field(default_factory=lambda: [0])
+    strip_var: str = "th_v"
+    strip_levels_z: list = field(default_factory=lambda: [0, 5, 15, 30])
+    hovmoller_var: str = "th_v"
+    points: list = field(default_factory=list)
+    slices: list = field(default_factory=list)
+    target_hours: list = field(default_factory=list)
+    zoom_extent: list = field(default_factory=list)
+    quiver_stride: int = 10
+
+
+
+@dataclass
 class SuetesConfig:
     domain: DomainConfig = field(default_factory=DomainConfig)
     time: TimeConfig = field(default_factory=TimeConfig)
@@ -101,6 +120,7 @@ class SuetesConfig:
     physics: PhysicsConfig = field(default_factory=PhysicsConfig)
     constants: ConstantsConfig = field(default_factory=ConstantsConfig)
     io: IOConfig = field(default_factory=IOConfig)
+    render: RenderConfig = field(default_factory=RenderConfig)
 
     def as_dict(self):
         return asdict(self)
@@ -127,6 +147,7 @@ def load_config(path) -> SuetesConfig:
         physics=section(PhysicsConfig, "physics"),
         constants=section(ConstantsConfig, "constants"),
         io=section(IOConfig, "io"),
+        render=section(RenderConfig, "render"),
     )
 
 
@@ -213,7 +234,8 @@ def resolve_params(cfg: SuetesConfig):
         rad_every_h=float(os.environ.get("RAD_EVERY_H", ph.rad_every_h)),
         afgl=((os.environ["AFGL"] == "1") if "AFGL" in os.environ else ph.afgl),
         use_rad=_flag("NO_RAD", ph.radiation), use_nudge=_flag("NO_NUDGE", ph.nudge),
-        use_micro=_flag("NO_MICRO", ph.microphysics), use_conv=_flag("NO_CONV", ph.convection),
+                use_micro=_flag("NO_MICRO", ph.microphysics), use_conv=_flag("NO_CONV", ph.convection),
+        render=cfg.render,
     )
     # ERA5 download filename keyed by the GEOGRAPHIC domain ONLY (centre + physical
     # extent Lx=nx*dx, Ly=ny*dy + buffer + pressure preset) -- NOT the model

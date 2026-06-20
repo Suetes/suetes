@@ -21,10 +21,11 @@ from suetes.regional3d.steppers import SISLStepper3D
 from suetes.regional3d.boundaries import DaviesSponge
 from suetes.preprocessing.topography import TopographyProcessor
 from suetes.shared.transforms import SleveSimple
-from suetes.regional3d.physics import (
-    PhysicsSuite, McFarlaneVerticalDiffusion, 
-    MLPhysicsClosure, McFarlaneSurfaceDrag, NewtonianRelaxation
-)
+from suetes.physics.base import PhysicsSuite
+from suetes.physics.turbulence import McFarlaneVerticalDiffusion
+from suetes.physics.ml import MLPhysicsClosure
+from suetes.physics.surface import McFarlaneSurfaceDrag
+from suetes.physics.forcing import NewtonianRelaxation
 
 DATA_DIR = 'suetes/data'
 

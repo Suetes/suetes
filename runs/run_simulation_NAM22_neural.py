@@ -28,11 +28,11 @@ from suetes.regional3d.operators import CGridOperator3D
 from suetes.regional3d.euler import Euler3D
 from suetes.regional3d.steppers import SISLStepper3D
 from suetes.regional3d.boundaries import DaviesSponge
-from suetes.regional3d.physics import (
-    PhysicsSuite,
-    McFarlaneVerticalDiffusion, McFarlaneSurfaceDrag,
-    NewtonianRelaxation, MLPhysicsClosure
-)
+from suetes.physics.base import PhysicsSuite
+from suetes.physics.turbulence import McFarlaneVerticalDiffusion
+from suetes.physics.surface import McFarlaneSurfaceDrag
+from suetes.physics.forcing import NewtonianRelaxation
+from suetes.physics.ml import MLPhysicsClosure
 from suetes.vis.visualizer import Visualizer
 
 DATA_DIR = "suetes/data"
@@ -81,7 +81,7 @@ def main():
     bridge = BoundaryProcessor(grid, raw_t0['latitude'], raw_t0['longitude'], constants)
     
     static_fields = bridge.process_static(raw_t0)
-    land_fraction = jnp.asarray(static_fields['land_fraction'], dtype=jnp.float64)
+    land_fraction = jnp.asarray(static_fields['land_fraction'], dtype=float)
 
     # LOAD BOUNDARIES
     bc_cache_path_coarse = os.path.join(DATA_DIR, f"{cache_prefix}_cw{coarsen_window}_coarse.pkl")
@@ -100,7 +100,7 @@ def main():
     initial_state['target_th_v'] = initial_state['th_v']
     initial_state['land_fraction'] = land_fraction
     initial_state.pop('theta_skt', None)
-    initial_state = jax.tree.map(lambda x: jnp.asarray(x, dtype=jnp.float64), initial_state)
+    initial_state = jax.tree.map(lambda x: jnp.asarray(x, dtype=float), initial_state)
 
     z_0_field = land_fraction * 0.1 + (1.0 - land_fraction) * 1e-4
     epsilon_field = land_fraction * 0.0 + (1.0 - land_fraction) * 0.3
@@ -150,8 +150,8 @@ def main():
             t_curr = step_idx * dt
             bc_state_t = time_manager.get_forcing(t_curr)
 
-            dynamic_theta_surf = (land_fraction * jnp.asarray(bc_state_t['theta_skt'], dtype=jnp.float64) + 
-                                  (1.0 - land_fraction) * jnp.asarray(bc_state_t['th_v'][:, :, 0], dtype=jnp.float64))
+            dynamic_theta_surf = (land_fraction * jnp.asarray(bc_state_t['theta_skt'], dtype=float) + 
+                                  (1.0 - land_fraction) * jnp.asarray(bc_state_t['th_v'][:, :, 0], dtype=float))
 
             def bc_fn(state_next, _):
                 return sponge.blend(state_next, bc_state_t)
@@ -165,7 +165,7 @@ def main():
                 next_state = stepper.step(curr_state, t_curr, forcing=None, bc_fn=bc_fn)
 
             next_state['theta_surf'] = dynamic_theta_surf
-            next_state['target_th_v'] = jnp.asarray(bc_state_t['th_v'], dtype=jnp.float64)
+            next_state['target_th_v'] = jnp.asarray(bc_state_t['th_v'], dtype=float)
             next_state['land_fraction'] = land_fraction
 
             is_hourly = ((step_idx + 1) % chunk_steps) == 0

@@ -1,24 +1,30 @@
 import os
-import time
 import numpy as np
 
 import jax
-jax.config.update("jax_enable_x64", True)
+jax.config.update("jax_enable_x64", False)
+
 import jax.numpy as jnp
 import optax
+
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 
 from suetes.regional3d.geometry import RegionalGrid3D
 from suetes.regional3d.euler import Euler3D
 from suetes.regional3d.operators import CGridOperator3D
-from suetes.regional3d.steppers import SISLStepper3D
+from suetes.regional3d.steppers import build_dynamical_core
 from suetes.regional3d.boundaries import BenchmarkXSponge
 from suetes.shared.driver import Simulation
 from suetes.shared.optimization import OptaxSolver
 
 output_dir = "suetes/plots/inversion"
 os.makedirs(output_dir, exist_ok=True)
+
+# =====================================================================
+# CONFIGURATION SWITCHES
+# =====================================================================
+CORE_TYPE = "split-explicit"  # Toggle to "sisl" or "split-explicit"
 
 # --- 1. SETUP PARAMETERS ---
 nx, ny, nz = 300, 3, 50
@@ -50,14 +56,14 @@ def objective_fn(z_params):
 
     grid = RegionalGrid3D(nx, ny, nz, dx, dy, dz, lat_center=45.0, lon_center=0.0, h_func=h_func)
     op = CGridOperator3D(grid)
-    physics = Euler3D(grid, op, constants, dt=dt, N_bv=0.01, damp_height=12000.0, 
-                      max_damp=0.5, nu_div_factor=0.0, nu_h_factor=0.0, physics_suite=None)
-
+    
+    # Temporarily instantiate physics to establish the background reference state
+    tmp_phys = Euler3D(grid, op, constants, dt=dt, N_bv=0.01)
     bg_ref = {
-        'rho': physics.c['p0'] / (physics.c['Rd'] * physics.theta_bg) * \
-               (physics.pi_bg ** (physics.c['cvd'] / physics.c['Rd'])),
-        'pi': physics.pi_bg,
-        'th_v': physics.theta_bg
+        'rho': tmp_phys.c['p0'] / (tmp_phys.c['Rd'] * tmp_phys.theta_bg) * \
+               (tmp_phys.pi_bg ** (tmp_phys.c['cvd'] / tmp_phys.c['Rd'])),
+        'pi': tmp_phys.pi_bg,
+        'th_v': tmp_phys.theta_bg
     }
 
     state = {
@@ -70,6 +76,26 @@ def objective_fn(z_params):
         'th_v': bg_ref['th_v']
     }
 
+    if CORE_TYPE.lower() == "sisl":
+        core_kwargs = {
+            "dt": dt, "nu_div_factor": 0.0, "nu_h_factor": 0.0, 
+            "damp_height": 12000.0, "max_damp": 0.5, "N_bv": 0.01
+        }
+    elif CORE_TYPE.lower() == "split-explicit":
+        core_kwargs = {
+            "dt": dt, "ns": 6, "nu_div_factor": 0.0, "nu_h_factor": 0.0, 
+            "damp_height": 12000.0, "max_damp": 0.5, "N_bv": 0.01
+        }
+
+    stepper, _ = build_dynamical_core(
+        core_type=CORE_TYPE, grid=grid, operators=op, constants=constants,
+        initial_state=state, **core_kwargs
+    )
+    
+    # Inject checkpointing for reverse-mode autodiff memory savings
+    if CORE_TYPE.lower() == "sisl":
+        stepper.use_checkpointing = True
+
     def bc_fn(state_in, forcing=None):
         ext_state = {
             'u': jnp.ones_like(state_in['u']) * u_bg,
@@ -80,7 +106,6 @@ def objective_fn(z_params):
         }
         return x_sponge.blend(state_in, ext_state)
 
-    stepper = SISLStepper3D(physics, dt, use_checkpointing=True)
     sim = Simulation(step_fn=stepper.step, dt=dt)
     
     final_state = sim.run_differentiable(state, 0.0, t_end, bc_fn=bc_fn, chunk_steps=50)
@@ -103,6 +128,7 @@ optimizer = optax.chain(
     optax.scale(-1.0)                     
 )
 
+print(f"\n[OPTIMIZATION] Launching {CORE_TYPE.upper()} inverse topography optimization...")
 solver = OptaxSolver(objective_fn, optimizer, has_aux=True)
 optimal_z, history = solver.fit(
     z_params, 
@@ -126,7 +152,7 @@ print("\n[PLOT] Saving optimal design...")
 x_1d = jnp.linspace(-nx*dx/2, nx*dx/2, nx) / 1000.0
 
 plt.figure(figsize=(10, 5))
-plt.title("Evolution of optimal topography")
+plt.title(f"Evolution of optimal topography ({CORE_TYPE.capitalize()})")
 
 # Plot history in fading blue
 for i, A_step in enumerate(history_A):
@@ -148,8 +174,8 @@ plt.xlabel("Distance (km)")
 plt.ylabel("Elevation (m)")
 plt.xlim([-25, 25])
 plt.legend()
-plt.savefig(f"{output_dir}/inverse_topography_evolution.png", dpi=150)
-print("Done! Check 'inverse_topography_evolution.png'.")
+plt.savefig(f"{output_dir}/inverse_topography_evolution_{CORE_TYPE.lower()}.png", dpi=150)
+print(f"Done! Check 'inverse_topography_evolution_{CORE_TYPE.lower()}.png'.")
 
 # --- 5. VALIDATION: OPTIMAL VS. RANDOM MOUNTAIN ALLOCATIONS ---
 print("\n[VALIDATION] Running forward simulations for comparison...")
@@ -179,14 +205,13 @@ def evaluate_topography(A_params):
 
     grid = RegionalGrid3D(nx, ny, nz, dx, dy, dz, lat_center=45.0, lon_center=0.0, h_func=h_func)
     op = CGridOperator3D(grid)
-    physics = Euler3D(grid, op, constants, dt=dt, N_bv=0.01, damp_height=12000.0, 
-                      max_damp=0.5, nu_div_factor=0.0, nu_h_factor=0.0, physics_suite=None)
-
+    
+    tmp_phys = Euler3D(grid, op, constants, dt=dt, N_bv=0.01)
     bg_ref = {
-        'rho': physics.c['p0'] / (physics.c['Rd'] * physics.theta_bg) * \
-               (physics.pi_bg ** (physics.c['cvd'] / physics.c['Rd'])),
-        'pi': physics.pi_bg,
-        'th_v': physics.theta_bg
+        'rho': tmp_phys.c['p0'] / (tmp_phys.c['Rd'] * tmp_phys.theta_bg) * \
+               (tmp_phys.pi_bg ** (tmp_phys.c['cvd'] / tmp_phys.c['Rd'])),
+        'pi': tmp_phys.pi_bg,
+        'th_v': tmp_phys.theta_bg
     }
 
     state = {
@@ -199,9 +224,25 @@ def evaluate_topography(A_params):
         'th_v': bg_ref['th_v']
     }
 
-    stepper = SISLStepper3D(physics, dt, use_checkpointing=False) 
+    if CORE_TYPE.lower() == "sisl":
+        core_kwargs = {
+            "dt": dt, "nu_div_factor": 0.0, "nu_h_factor": 0.0, 
+            "damp_height": 12000.0, "max_damp": 0.5, "N_bv": 0.01
+        }
+    elif CORE_TYPE.lower() == "split-explicit":
+        core_kwargs = {
+            "dt": dt, "ns": 6, "nu_div_factor": 0.0, "nu_h_factor": 0.0, 
+            "damp_height": 12000.0, "max_damp": 0.5, "N_bv": 0.01
+        }
 
-    # Use the new BenchmarkXSponge instead of mask_x
+    stepper, _ = build_dynamical_core(
+        core_type=CORE_TYPE, grid=grid, operators=op, constants=constants,
+        initial_state=state, **core_kwargs
+    )
+    
+    if CORE_TYPE.lower() == "sisl":
+        stepper.use_checkpointing = False
+
     def bc_fn(state_in, forcing=None):
         ext_state = {
             'u': jnp.ones_like(state_in['u']) * u_bg,
@@ -270,5 +311,5 @@ for idx, (title, A_params) in enumerate(configs_to_test):
     if idx % 2 == 0: ax.set_ylabel('Altitude (km)')
 
 plt.tight_layout()
-plt.savefig(f'{output_dir}/inverse_topography_validation.png', dpi=150, bbox_inches='tight')
-print(f"Validation complete. Saved to {output_dir}/inverse_topography_validation.png")
+plt.savefig(f'{output_dir}/inverse_topography_validation_{CORE_TYPE.lower()}.png', dpi=150, bbox_inches='tight')
+print(f"Validation complete. Saved to {output_dir}/inverse_topography_validation_{CORE_TYPE.lower()}.png")

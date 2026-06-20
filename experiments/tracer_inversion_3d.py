@@ -10,8 +10,8 @@ import matplotlib.pyplot as plt
 from suetes.regional3d.geometry import RegionalGrid3D
 from suetes.regional3d.euler import Euler3D
 from suetes.regional3d.operators import CGridOperator3D
-from suetes.regional3d.steppers import SISLStepper3D
-from suetes.regional3d.physics import PhysicsSuite
+from suetes.regional3d.steppers import build_dynamical_core
+from suetes.physics.base import PhysicsSuite
 from suetes.regional3d.boundaries import BenchmarkXSponge
 
 from suetes.shared.driver import Simulation
@@ -19,6 +19,11 @@ from suetes.shared.optimization import OptaxSolver
 
 output_dir = "suetes/plots/tracer_inversion"
 os.makedirs(output_dir, exist_ok=True)
+
+# =====================================================================
+# CONFIGURATION SWITCHES
+# =====================================================================
+CORE_TYPE = "split-explicit"  # Toggle to "sisl" or "split-explicit"
 
 # --- 1. SETUP DOMAIN & PHYSICS ---
 nx, ny, nz = 200, 3, 40  
@@ -89,8 +94,25 @@ print("[SIMULATION] Generating true target observations...")
 true_params = {'x': -15.0, 'z': 3.5, 'A': 10.0}
 true_state = create_state_with_tracer(true_params['x'], true_params['z'], true_params['A'])
 
-# Use a custom fast-forward scan here to capture the history for plotting without autodiff overhead
-stepper_fwd = SISLStepper3D(physics, dt, use_checkpointing=False)
+# Configure dynamic core properties
+if CORE_TYPE.lower() == "sisl":
+    core_kwargs = {
+        "dt": dt, "nu_div_factor": 0.0, "nu_h_factor": 0.0, 
+        "damp_height": 8000.0, "max_damp": 0.5, "N_bv": 0.01
+    }
+elif CORE_TYPE.lower() == "split-explicit":
+    core_kwargs = {
+        "dt": dt, "ns": 6, "nu_div_factor": 0.0, "nu_h_factor": 0.0, 
+        "damp_height": 8000.0, "max_damp": 0.5, "N_bv": 0.01
+    }
+
+# Build forward stepper
+stepper_fwd, _ = build_dynamical_core(
+    core_type=CORE_TYPE, grid=grid, operators=op, constants=constants,
+    initial_state=true_state, physics_suite=suite, **core_kwargs
+)
+if hasattr(stepper_fwd, "use_checkpointing"):
+    stepper_fwd.use_checkpointing = False
 
 @jax.jit
 def generate_target_data(init_state):
@@ -111,7 +133,14 @@ times_mins = [0.0] + [(i * dt) / 60.0 for i in snapshot_indices]
 
 
 # --- 4. THE INVERSE PROBLEM ---
-stepper_adj = SISLStepper3D(physics, dt, use_checkpointing=True)
+# Build adjoint stepper
+stepper_adj, _ = build_dynamical_core(
+    core_type=CORE_TYPE, grid=grid, operators=op, constants=constants,
+    initial_state=true_state, physics_suite=suite, **core_kwargs
+)
+if hasattr(stepper_adj, "use_checkpointing"):
+    stepper_adj.use_checkpointing = True
+
 sim_adj = Simulation(step_fn=stepper_adj.step, dt=dt)
 
 def objective_fn(params):
@@ -165,7 +194,7 @@ for idx, ax in enumerate(axs1):
 
 axs1[-1].set_xlabel("Distance (km)")
 plt.tight_layout()
-plt.savefig(f"{output_dir}/tracer_snapshots.png", dpi=150)
+plt.savefig(f"{output_dir}/tracer_snapshots_{CORE_TYPE.lower()}.png", dpi=150)
 
 # 5b. Plot Optimization Trajectory
 fig2, axs2 = plt.subplots(2, 1, figsize=(12, 10))
@@ -210,5 +239,5 @@ axs2[1].set_ylabel("Altitude (km)")
 axs2[1].legend()
 
 plt.tight_layout()
-plt.savefig(f"{output_dir}/tracer_source_inversion_terrain.png", dpi=150)
-print(f"Done! Check '{output_dir}/tracer_snapshots.png' and '{output_dir}/tracer_source_inversion_terrain.png'")
+plt.savefig(f"{output_dir}/tracer_source_inversion_terrain_{CORE_TYPE.lower()}.png", dpi=150)
+print(f"Done! Check tracer_snapshots_{CORE_TYPE.lower()}.png and tracer_source_inversion_terrain_{CORE_TYPE.lower()}.png")

@@ -17,7 +17,10 @@ from suetes.regional3d.operators import CGridOperator3D
 from suetes.regional3d.euler import Euler3D
 from suetes.regional3d.steppers import SISLStepper3D
 from suetes.regional3d.boundaries import DaviesSponge
-from suetes.regional3d.physics import PhysicsSuite, BulkAerodynamicPBL, FastVerticalDiffusion, NewtonianRelaxation
+from suetes.physics.base import PhysicsSuite
+from suetes.physics.surface import BulkAerodynamicPBL
+from suetes.physics.turbulence import FastVerticalDiffusion
+from suetes.physics.forcing import NewtonianRelaxation
 from suetes.vis.visualizer import Visualizer
 
 # ==========================================

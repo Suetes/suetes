@@ -1,22 +1,12 @@
-"""
-NAM22 preprocessing -- sibling of run_simulation_NAM22_radiation.py.
+#!/usr/bin/env python3
+"""Unified, configuration-driven preprocessing script.
 
-Downloads ALL the inputs the run needs IN PARALLEL -- the per-day ERA5 files
-(one .nc per day, integrity-checked and resumable) and the ~8 GB GEBCO
-topography, fetched concurrently with `io.download_workers` threads (env
-DOWNLOAD_WORKERS overrides) -- then preprocesses them into the chunked,
-lazily-streamed Zarr boundary stores that the NAM22 simulation consumes. This is
-the single download+build step (no separate downloader). Driven by the SAME
-shared config
-(configs/nam22_config.yaml) and the same env overrides (SIM_HOURS / KAPPA /
-START_DAY / ...) the runner honors, so the stores it writes are exactly what the
-runner streams (the runner's own build step then just finds them complete).
-
-GPU-free: ingestion + regridding are light and pinned to CPU.
+Downloads all required inputs (ERA5 + GEBCO) and builds chunked Zarr stores
+for boundary and initial conditions based on the provided configuration.
 
 Usage:
-    python runs/preprocess_NAM22.py --config configs/nam22_config.yaml
-    SIM_HOURS=168 KAPPA=1.0 python runs/preprocess_NAM22.py --config configs/nam22_config.yaml
+    python runs/preprocess.py --config configs/nam22_config.yaml
+    python runs/preprocess.py --config configs/wreckhouse25_config.yaml
 """
 
 import argparse
@@ -37,9 +27,9 @@ from suetes.preprocessing.bc_store import write_timeseries_zarr
 
 def main():
     ap = argparse.ArgumentParser(
-        description="Download + preprocess ERA5 into chunked Zarr BC stores for the NAM22 run.")
-    ap.add_argument("--config", default="configs/nam22_config.yaml",
-                    help="shared config (the same file the runner uses)")
+        description="Download + preprocess ERA5 into chunked Zarr BC stores for a simulation run.")
+    ap.add_argument("--config", required=True,
+                    help="Path to configuration YAML file.")
     ap.add_argument("--coarse-only", action="store_true", help="build only the coarse driver store")
     ap.add_argument("--native-only", action="store_true", help="build only the native reference store")
     args = ap.parse_args()
@@ -52,13 +42,7 @@ def main():
           f"| days {p.days[0]}..{p.days[-1]} | kappa={p.kappa:g}")
     print(f"[PREPROCESS] ERA5 in: {p.data_dir} | stores out: {p.store_dir}")
 
-    # 1) Download the per-DATE ERA5 pairs in parralel (independent CDS requests,
-    #    calendar-correct so multi-week/month windows cross month boundaries), and
-    #    build the terrain-following grid which downloads the ~8 GB GEBCO
-    #    topography and blends it with the ERA5 orography concurrently on its own
-    #    thread. The grid build only needs day-0 ERA5, so the big GEBCO download
-    #    overlaps the remaining ERA5 day downloads. Days already on disk are skipped
-    #    (download_regional_subset integrity-checks partial files), so it's resumable.
+    # 1) Download the per-DATE ERA5 pairs in parallel and build the terrain-following grid
     mgr = ERA5Manager(data_dir=p.data_dir, pressure_levels=p.pressure_levels)
     bbox = ERA5Manager.calculate_required_bbox(p.lat_c, p.lon_c, p.nx, p.ny, p.dx, p.dy,
                                                buffer_deg=p.buffer_deg)
@@ -70,10 +54,10 @@ def main():
         pl = os.path.join(p.data_dir, f"{day_prefix}_pressure_levels.nc")
         if os.path.exists(sl) and os.path.exists(pl):
             return sl, pl
-        # per-thread cdsapi client (clients are not safe to share across retrieves)
+        # per-thread cdsapi client
         cl = cdsapi.Client() if workers > 1 else mgr.client
         return mgr.download_regional_subset(year=ds[:4], month=ds[4:6], days=[ds[6:8]],
-                                            area=bbox, prefix=day_prefix, client=cl)
+                                             area=bbox, prefix=day_prefix, client=cl)
 
     print(f"[PREPROCESS] downloading {len(p.dates)} ERA5 days + building grid/topo "
           f"with {workers} parallel workers")
@@ -98,25 +82,24 @@ def main():
     raw0 = era5.get_stitched_state(time_idx=0)
     bridge = BoundaryProcessor(grid, raw0["latitude"], raw0["longitude"], build_constants(cfg))
 
-    # Static inputs saved into the coarse store so the runner rebuilds the grid +
-    # surface fields WITHOUT any ERA5/GEBCO access or regridding.
+    # Static inputs saved into the coarse store
     import numpy as np
     static = {"h": np.asarray(topography_array(grid)),
               "land_fraction": np.asarray(bridge.process_static(raw0)["land_fraction"])}
 
-    # 3) Write the chunked Zarr stores, exactly what the runner streams.
+    # 3) Write the chunked Zarr stores
     times = [i * 3600.0 for i in range(p.num_states)]
     prefix = os.path.join(p.store_dir, p.cache_prefix)
     coarse_path = f"{prefix}_cw{p.coarsen_window}_coarse.zarr"
     native_path = f"{prefix}_native.zarr"
     if not args.native_only:
         write_timeseries_zarr(coarse_path, era5, bridge, p.num_states, times,
-                              coarsen_window=p.coarsen_window, static=static)
+                               coarsen_window=p.coarsen_window, static=static)
     if not args.coarse_only:
         write_timeseries_zarr(native_path, era5, bridge, p.num_states, times,
-                              coarsen_window=None, static=static)
+                               coarsen_window=None, static=static)
 
-    print("[PREPROCESS] done. Stores ready for the NAM22 run:")
+    print(f"[PREPROCESS] done. Stores ready for config {args.config}:")
     if not args.native_only:
         print(f"  coarse: {coarse_path}")
     if not args.coarse_only:

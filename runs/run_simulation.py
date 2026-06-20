@@ -1,296 +1,227 @@
-import os
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3' # Suppress all but FATAL CUDA/XLA warnings
+#!/usr/bin/env python3
+"""Unified, configuration-driven forward simulation runner.
 
-import jax
-import jax.numpy as jnp
+PURE EXECUTION ENGINE: this script ONLY runs the simulation and writes the output
+NetCDF files based on the provided configuration.
+
+Usage:
+    python runs/run_simulation.py --config configs/nam22_config.yaml
+    python runs/run_simulation.py --config configs/wreckhouse25_config.yaml
+"""
+import os
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+os.environ.setdefault('XLA_PYTHON_CLIENT_PREALLOCATE', 'false')
+os.environ.setdefault('XLA_FLAGS', '--xla_gpu_enable_command_buffer=')
+
+import argparse
+import functools as _ft
 import time
 import numpy as np
+import jax
+# run in F32 here
+jax.config.update("jax_enable_x64", os.environ.get("X64", "1") == "0")
+import jax.numpy as jnp
 
-from suetes.preprocessing.era5downloader import ERA5Manager
-from suetes.preprocessing.processor import ERA5Processor
-from suetes.preprocessing.topography import TopographyProcessor
-from suetes.preprocessing.era2suetes import BoundaryProcessor, TimeManager
-
-from suetes.shared.transforms import SleveSimple
-from suetes.shared.driver import Simulation
-
-from suetes.regional3d.geometry import RegionalGrid3D
+from suetes.preprocessing.bc_store import LazyZarrTimeManager, read_state, read_static
+from suetes.shared.output import SimulationOutputWriter, DailyGroupedWriter
+from suetes.shared.config import load_config, resolve_params, build_grid_from_static
 from suetes.regional3d.operators import CGridOperator3D
-from suetes.regional3d.euler import Euler3D
-from suetes.regional3d.steppers import SISLStepper3D
+from suetes.regional3d.steppers import build_dynamical_core
 from suetes.regional3d.boundaries import DaviesSponge
-from suetes.regional3d.physics import PhysicsSuite, BulkAerodynamicPBL, SimpleMicrophysics, FastVerticalDiffusion, NewtonianRelaxation
+from suetes.physics.base import PhysicsSuite
+from suetes.physics.forcing import NewtonianRelaxation
+from suetes.physics.surface import McFarlaneSurfaceDrag
+from suetes.physics.turbulence import McFarlaneVerticalDiffusion
 
-from suetes.vis.visualizer import Visualizer
+# Prognostics saved each hour
+_SAVE = ('u', 'v', 'w', 'th_v', 'pi')
 
-# ==========================================
-# 0. DOMAIN PRESETS
-# ==========================================
-DOMAINS = {
-    "labrador_sea": {
-        "lat_c": 48.0, "lon_c": -60.0
-    },
-    "alps": {
-        "lat_c": 45.0, "lon_c": 5.0
-    },
-    "nz_south_island": {
-        "lat_c": -43.5, "lon_c": 170.5
-    },
-    "western_canada": {
-        "lat_c": 50.0, "lon_c": -120.0
-    }
-}
 
 def main():
-    # ==========================================
-    # 1. PIPELINE ORCHESTRATION & SETUP
-    # ==========================================
-    
-    # --- Select your region here ---
-    ACTIVE_DOMAIN = "alps" 
-    cfg = DOMAINS[ACTIVE_DOMAIN]
+    ap = argparse.ArgumentParser(description="Unified dynamic forward run (config-driven).")
+    ap.add_argument('--config', required=True, help="Path to configuration YAML file.")
+    cli_args, _ = ap.parse_known_args()
+    cfg = load_config(cli_args.config)
+    p = resolve_params(cfg)
 
-    output_dir = "suetes/plots"
-    os.makedirs(output_dir, exist_ok=True)
+    ACTIVE_DOMAIN = p.domain
+    lat_c, lon_c = p.lat_c, p.lon_c
+    nx, ny, nz = p.nx, p.ny, p.nz
+    dx, dy, dz = p.dx, p.dy, p.dz
+    sponge_depth, coarsen_window = p.sponge_depth, p.coarsen_window
 
-    nx, ny, nz = 300, 300, 40
-    dx, dy, dz = 6000.0, 6000.0, 500.0
-    sponge_depth = 30
-    
-    dt = 30.0 # timestep (in seconds)
-    sim_hours = 6
-    
+    core_type = p.core_type
+    dt = p.dt
+    sim_hours = p.sim_hours
+    use_nudge = p.use_nudge
     sim_time_seconds = sim_hours * 3600.0
-    num_steps = int(sim_time_seconds / dt)
-    num_era5_states = int(sim_hours) + 1 
+    num_era5_states = p.num_states
+    kappa = p.kappa
 
-    constants = {'g': 9.81, 'Rd': 287.0, 'cp': 1004.0, 'cvd': 717.0, 'p0': 100000.0, 'epsilon': 0.622}
-    USE_MOISTURE = False 
+    RUN_NAME = (f"{ACTIVE_DOMAIN}_dry_{core_type}_n{nx}x{ny}_dt{int(dt)}_{sim_hours}h"
+                f"_{'nudge' if use_nudge else 'nonudge'}")
+    if os.environ.get('TAG'):
+        RUN_NAME += f"_{os.environ['TAG']}"
+    out_base = os.environ.get("SUETES_OUT_DIR") or p.output_dir
+    out_run_dir = os.path.join(out_base, RUN_NAME)
+    os.makedirs(out_run_dir, exist_ok=True)
 
-    # Dynamically calculate the bounding box
-    dynamic_bbox = ERA5Manager.calculate_required_bbox(
-        cfg["lat_c"], cfg["lon_c"], 
-        nx, ny, dx, dy, 
-        buffer_deg=2.0
-    )
+    constants = {'g': 9.81, 'Rd': 287.0, 'cp': 1004.0, 'cvd': 717.0,
+                 'p0': 100000.0, 'epsilon': 0.622}
+    YEAR, MONTH = p.year, p.month
+    start_day = p.start_day
+    DAYS = p.days
 
-    print(f"[CONFIG] Domain: {ACTIVE_DOMAIN.upper()}")
-    print(f"[CONFIG] ERA5 Bounding Box [N, W, S, E]: {[round(x, 2) for x in dynamic_bbox]}")
+    print(f"[CONFIG] {RUN_NAME} | dry | nudge={'ON' if use_nudge else 'OFF'} "
+          f"| core={core_type} dt={dt:g}")
 
-    # ==========================================
-    # 2. DATA ACQUISITION
-    # ==========================================
-    print(f"[DATA] Validating ERA5 forcing files...")
-    manager = ERA5Manager(data_dir="suetes/data")
-    
-    # Adjust dates as needed for your specific test case
-    days_to_run = [str(i).zfill(2) for i in range(1, 5)] 
-    
-    cache_prefix = f"{ACTIVE_DOMAIN}_Nx{nx}_Ny{ny}_dx{int(dx)}"
+    times_sec = [i * 3600.0 for i in range(num_era5_states)]
+    coarse_store = os.path.join(p.store_dir, f"{p.cache_prefix}_cw{coarsen_window}_coarse.zarr")
+    if not os.path.exists(coarse_store):
+        raise SystemExit(
+            f"[ERROR] boundary store not found:\n    {coarse_store}\n"
+            f"This script ONLY runs the simulation. Build the inputs first with:\n"
+            f"    python runs/preprocess.py --config {cli_args.config}")
 
-    sl_file, pl_file = manager.download_regional_subset(
-        year="2026",
-        month="05",
-        days=days_to_run,
-        area=dynamic_bbox,
-        prefix=cache_prefix
-    )
+    print("[GEOMETRY] rebuilding grid from stored topography")
+    static = read_static(coarse_store)
+    if 'h' not in static or 'land_fraction' not in static:
+        raise SystemExit(
+            f"[ERROR] store {coarse_store} lacks static fields (h/land_fraction).\n"
+            f"Rebuild it with:\n"
+            f"    python runs/preprocess.py --config {cli_args.config}")
+    grid = build_grid_from_static(p, static['h'])
+    land_fraction = jnp.asarray(static['land_fraction'], dtype=float)
+    _dzc = np.asarray(grid.dz_m_full[nx // 2, ny // 2, :])
+    print(f"[GRID] kappa={kappa} | layer thickness bottom {_dzc[0]:.0f} m -> top {_dzc[-1]:.0f} m | "
+          f"min in domain {float(jnp.min(grid.dz_m_full)):.0f} m")
 
-    # ==========================================
-    # 3. GEOMETRY & TOPOGRAPHY
-    # ==========================================
-    print(f"[GEOMETRY] Building {nx}x{ny}x{nz} terrain-following mesh (dx={dx/1000}km)...")
-    base_grid = RegionalGrid3D(nx, ny, nz, dx, dy, dz, cfg["lat_c"], cfg["lon_c"])
-    
-    topo_proc = TopographyProcessor(
-        era5_sl_path=sl_file,
-        gebco_path="suetes/data/gebco_data.nc"
-    )
-    h_func = topo_proc.process_and_blend(base_grid, sponge_depth=sponge_depth, smooth_sigma=2.0)  
-    sleve_transform = SleveSimple(scale_s=10000.0, n=1.0)
-    grid = RegionalGrid3D(nx, ny, nz, dx, dy, dz, cfg["lat_c"], cfg["lon_c"], h_func=h_func, transform=sleve_transform)
+    time_manager = LazyZarrTimeManager(coarse_store, times_sec, grid)
 
-    # ==========================================
-    # 4. ERA5 BOUNDARY PROCESSING
-    # ==========================================
-    print(f"[BOUNDARY] Processing lateral conditions for {sim_hours}h simulation...")
-    era5_proc = ERA5Processor(pl_path=pl_file, sl_path=sl_file)
-    
-    suetes_bc_states = []
-    times_sec = []
-    
-    raw_t0 = era5_proc.get_stitched_state(time_idx=0)
-    bridge = BoundaryProcessor(grid, raw_t0['latitude'], raw_t0['longitude'], constants)
-    
-    for i in range(num_era5_states):
-        print(f"[BOUNDARY] -> Regridding ERA5 state for T={i}h")
-        raw_state = era5_proc.get_stitched_state(time_idx=i)
-        bc_state = bridge.process(raw_state)
-        
-        suetes_bc_states.append(bc_state)
-        times_sec.append(float(i * 3600.0))
-        
-    time_manager = TimeManager(suetes_bc_states, times_sec, grid)
-    
-    initial_state = suetes_bc_states[0].copy() 
-    
-    if USE_MOISTURE:
-        initial_state['q_c'] = jnp.zeros_like(initial_state['q'])
-    else:
-        initial_state.pop('q', None)
-        initial_state.pop('q_c', None)
-
-    # Initialize the forcing variables so the PyTree structure matches
-    initial_state['theta_surf'] = initial_state['th_v'][:, :, 0]
+    # ---- DRY initial state ----
+    initial_state = dict(read_state(coarse_store, 0))
+    initial_state['theta_surf'] = initial_state['theta_skt']
     initial_state['target_th_v'] = initial_state['th_v']
+    initial_state.pop('theta_skt', None)
+    for _k in ('q', 'q_c', 'q_r', 'cc', 'clwc', 'ciwc', 'tcc', 'land_fraction'):
+        initial_state.pop(_k, None)
+    initial_state = jax.tree.map(lambda x: jnp.asarray(x, dtype=float), initial_state)
 
-    # ==========================================
-    # 5. PHYSICS, STEPPER & SPONGE INITIALIZATION
-    # ==========================================
-    print(f"[DYNAMICS] Initializing dynamical core...")
+    z0 = land_fraction * 0.1 + (1.0 - land_fraction) * 1e-4
+    eps = land_fraction * 0.0 + (1.0 - land_fraction) * 0.3
+
     operators = CGridOperator3D(grid)
-    
-    # Build the Suite
-    physics_suite = PhysicsSuite()
-    
-    # Extract the initial ERA5 surface temperature to use as our static boundary condition
-    theta_surf = initial_state['th_v'][:, :, 0]
-    
-    # Instantiate the schemes but keep references to them
-    pbl_scheme = BulkAerodynamicPBL(grid, operators, theta_surf=initial_state['th_v'][:, :, 0], Cd_ocean=0.001, Ch_ocean=0.0)
-    vert_diff_scheme = FastVerticalDiffusion(grid, operators) # Add the new scheme
-    nudging_scheme = NewtonianRelaxation(tau_relax_hours=6.0)
-    
-    physics_suite.add_tendency_scheme(pbl_scheme)
-    physics_suite.add_tendency_scheme(vert_diff_scheme)
-    physics_suite.add_tendency_scheme(nudging_scheme)
-    
-    # Register state updates
-    if USE_MOISTURE:
-        physics_suite.add_update_scheme(SimpleMicrophysics(constants))
-        # Tell the dynamical core which variables need conservative advection
-        physics_suite.register_tracer('q')
-        physics_suite.register_tracer('q_c')
-
-    # Inject into the Solver
-    physics = Euler3D(grid, operators, constants, dt=dt, 
-                       initial_era5_state=initial_state, damp_height=9000.0, max_damp=3.0, 
-                       nu_div_factor=0.1, nu_h_factor=0.1, physics_suite=physics_suite)
-    
-    stepper = SISLStepper3D(physics, dt)
-    # Sponge layer
     sponge = DaviesSponge(grid, operators, sponge_depth=sponge_depth, dt=dt, tau_bndy_factor=10.0)
+    interior_mask = sponge.get_interior_mask()
 
-    # ==========================================
-    # 6. INTEGRATION LOOP 
-    # ==========================================
-    print("-" * 60)
-    
-    chunk_steps = 120  # Execute 1 hour of simulation per chunk
-    
-    # Setup Hovmöller Data Trackers
-    hov_times = [0.0]
-    # Calculate initial anomaly at the surface (level 0)
-    initial_anom = initial_state['th_v'][:, :, 0] - initial_state['th_v'][:, :, 0] # 0 at T=0
-    hov_data = [np.array(jnp.mean(initial_anom, axis=1))] 
+    # ---- physics: surface drag + vertical diffusion + (optional) nudging ----
+    suite = PhysicsSuite()
+    suite.add_tendency_scheme(McFarlaneSurfaceDrag(grid, operators, constants, z_0=z0, epsilon=eps,
+                                                   theta_surf=initial_state['theta_surf']))
+    suite.add_tendency_scheme(McFarlaneVerticalDiffusion(grid, operators, constants,
+                                                         epsilon=eps[..., None]))
+    if use_nudge:
+        suite.add_tendency_scheme(NewtonianRelaxation(tau_relax_hours=6.0))
 
-    # Define a pure Python callback function to handle the appending
-    def save_hovmoller_data(hour, anom_array):
-        hov_times.append(float(hour))
-        hov_data.append(np.array(anom_array))
+    nu_h = p.nu_h
+    core_kwargs = dict(dt=dt, nu_div_factor=nu_h, nu_h_factor=nu_h)
+    if core_type == 'split-explicit':
+        core_kwargs['ns'] = p.ns
+        core_info = f"ns={core_kwargs['ns']} acoustic substeps"
+    else:
+        core_kwargs['alpha'] = p.alpha
+        core_info = f"alpha={core_kwargs['alpha']:g}"
+    stepper, dt = build_dynamical_core(core_type, grid, operators, constants, initial_state,
+                                       physics_suite=suite, interior_mask=interior_mask,
+                                       **core_kwargs)
+    print(f"[CORE] {core_type} | dt={dt:g}s | {core_info}")
 
-    def step_fn(curr_state, step_idx):
-        t_curr = step_idx * dt
-        
-        # Interpolate boundaries at exactly t_curr
-        bc_state_t = time_manager.get_forcing(t_curr)
+    chunk_steps = int(round(3600.0 / dt))
 
-        # Update the PBL scheme with the current ERA5 surface temperature
-        curr_state['theta_surf'] = bc_state_t['th_v'][:, :, 0]
-        curr_state['target_th_v'] = bc_state_t['th_v']
-        
-        def bc_fn(state_next, _):
-            return sponge.blend(state_next, bc_state_t)
-            
-        next_state = stepper.step(curr_state, t_curr, forcing=None, bc_fn=bc_fn)
-        next_state['theta_surf'] = curr_state['theta_surf']
-        next_state['target_th_v'] = curr_state['target_th_v']
-        
-        max_w = jnp.max(jnp.abs(next_state['w']))
-        
-        # Compute the anomaly every step
-        anom = next_state['th_v'][:, :, 0] - bc_state_t['th_v'][:, :, 0]
-        y_avg_anom = jnp.mean(anom, axis=1)
-        current_hour = (step_idx + 1) * dt / 3600.0
-        
-        # Define the condition as a JAX array
-        is_hourly = ((step_idx + 1) % int(3600.0 / dt)) == 0
-        
-        # Use jax.lax.cond to conditionally trigger the python callback
-        jax.lax.cond(
-            is_hourly,
-            lambda: jax.debug.callback(save_hovmoller_data, current_hour, y_avg_anom),
-            lambda: None
-        )
+    _out_attrs = {'run_name': RUN_NAME, 'dt_seconds': float(dt),
+                  'sim_hours': int(sim_hours), 'kappa': float(kappa),
+                  'nx': int(nx), 'ny': int(ny), 'nz': int(nz),
+                  'dx': float(dx), 'dy': float(dy), 'dz': float(dz),
+                  'lat_c': float(lat_c), 'lon_c': float(lon_c),
+                  'coarsen_window': int(coarsen_window), 'sponge_depth': int(sponge_depth),
+                  'domain': ACTIVE_DOMAIN, 'year': YEAR, 'month': MONTH, 'day0': DAYS[0]}
 
-        return next_state, max_w 
+    def _make_writer(path, keys, date):
+        return SimulationOutputWriter(path, grid, keys, ref_date=date, attrs=_out_attrs)
 
-    # Initialize the centralized driver
-    sim = Simulation(step_fn=step_fn, dt=dt)
+    writer = DailyGroupedWriter(out_run_dir, RUN_NAME, _make_writer,
+                                year=YEAR, month=MONTH, start_day=start_day)
+    _hour = [0]
 
-    start_time = time.time()
-    
-    # Run the simulation
-    final_state = sim.run(
-        initial_state, 
-        t_start=0.0, 
-        t_end=sim_time_seconds, 
-        chunk_steps=chunk_steps
-    )
+    def _save(d):
+        writer.write(_hour[0], d)
+        _hour[0] += 1
 
-    # ==========================================
-    # 7. VISUALIZE RESULTS
-    # ==========================================
-    print("-" * 60)
-    print("[PLOT] Generating diagnostic plots...")
-    visualizer = Visualizer()
-    final_era5_state = suetes_bc_states[-1]
-    mid_x, mid_y = grid.nx // 2, grid.ny // 2
-    
-    # General overview and stability check
-    for z in [0, 5, 15, 30]: # Logical model levels
-        visualizer.plot_dashboard(grid, final_state, z_idx=z, sponge_depth=sponge_depth, 
-                                  time_hours=sim_hours, save_path=os.path.join(output_dir, f"{ACTIVE_DOMAIN}_dash_z{z}_{sim_hours}h.png"))
+    def save_snap(sub):
+        _save({k: np.asarray(v) for k, v in sub.items()})
 
-    for z in [500.0, 3000.0, 5000.0, 10000.0]: # Geometric heights (m)
-        visualizer.plot_dashboard(grid, final_state, z_idx=z, sponge_depth=sponge_depth, 
-                                  time_hours=sim_hours, save_path=os.path.join(output_dir, f"{ACTIVE_DOMAIN}_dash_z{int(z)}m_{sim_hours}h.png"))
+    # ---- start fresh, or RESUME ----
+    start_hour = 0
+    if os.environ.get("RESUME", "0") == "1":
+        import glob as _glob, datetime as _dt, netCDF4 as _nc
+        progs = sorted(_glob.glob(os.path.join(out_run_dir, f"{RUN_NAME}_prog_*.nc")))
+        if not progs:
+            raise SystemExit(f"[RESUME] no prog files to resume from in {out_run_dir}")
+        last = progs[-1]
+        ymd = last.rsplit("_prog_", 1)[1].split(".")[0]
+        dpr = _nc.Dataset(last, "r")
+        kt = dpr.variables["time"].shape[0] - 1
+        seed = {}
+        for k in _SAVE:
+            if k in dpr.variables:
+                a = np.asarray(dpr.variables[k][kt])
+                seed[k] = jnp.asarray(np.transpose(a, (2, 1, 0)) if a.ndim == 3 else np.transpose(a, (1, 0)))
+        dpr.close()
+        seed["rho"] = constants["p0"] / (constants["Rd"] * seed["th_v"]) * seed["pi"] ** (constants["cvd"] / constants["Rd"])
+        seed["eta_dot"] = jnp.zeros((nx, ny, nz + 1))
+        initial_state = {**initial_state, **seed}
+        d0 = _dt.date(int(YEAR), int(MONTH), int(start_day))
+        dd = _dt.date(int(ymd[:4]), int(ymd[4:6]), int(ymd[6:8]))
+        start_hour = (dd - d0).days * 24 + kt
+        _hour[0] = start_hour + 1
+        print(f"[RESUME] seeded from {os.path.basename(last)} idx {kt} = global hour {start_hour} ({ymd}) -> {sim_hours}h")
+    else:
+        save_snap({k: v for k, v in initial_state.items() if k in _SAVE})
 
-    visualizer.plot_energy_spectrum(grid, final_state, 'w', z_idx=5, sponge_depth=sponge_depth, 
-                                    save_path=os.path.join(output_dir, f"{ACTIVE_DOMAIN}_energy_{sim_hours}h.png"))
+    @_ft.partial(jax.jit, static_argnames=["n_steps"])
+    def run_hour(st_in, start_step, n_steps, bc0, bc1, ta, tb):
+        def body(s, off):
+            t = (start_step + off) * dt
+            a = jnp.clip((t - ta) / (tb - ta), 0.0, 1.0)
+            bc = {k: (1.0 - a) * bc0[k] + a * bc1[k] for k in bc0}
+            s["theta_surf"] = bc["theta_skt"]
+            s["target_th_v"] = bc["th_v"]
+            nxt = stepper.step(s, t, forcing=None, bc_fn=lambda x, _: sponge.blend(x, bc))
+            nxt["theta_surf"] = bc["theta_skt"]
+            nxt["target_th_v"] = bc["th_v"]
+            return nxt, jnp.max(jnp.abs(nxt["w"]))
+        return jax.lax.scan(body, st_in, jnp.arange(n_steps))
 
-    # Thermodynamic drift diagnostics
-    # Comparison of the surface layer to see the spatial footprint of the bias
-    visualizer.plot_comparison(grid, final_state, final_era5_state, 'th_v', z_idx=0, sponge_depth=sponge_depth, 
-                               save_path=os.path.join(output_dir, f"{ACTIVE_DOMAIN}_compare_th_v_surf_{sim_hours}h.png"))
+    print(f"[RUN] {sim_hours} h forward from hour {start_hour} "
+          f"({int(sim_time_seconds/dt)} steps @ dt={dt:g}s)...")
+    state = initial_state
+    t0 = time.time()
+    for h in range(start_hour, sim_hours):
+        s0, s1, ta, tb = time_manager.bounding_pair(h * 3600.0)
+        bc0 = {k: jnp.asarray(v) for k, v in s0.items()}
+        bc1 = {k: jnp.asarray(v) for k, v in s1.items()}
+        tc = time.time()
+        state, metrics = run_hour(state, h * chunk_steps, chunk_steps, bc0, bc1, ta, tb)
+        jax.block_until_ready(state["w"])
+        save_snap({k: state[k] for k in _SAVE if k in state})
+        print(f"    Progress: {(h+1)*3600.0:.0f}s / {sim_time_seconds:.0f}s | "
+              f"Max W: {float(jnp.max(jnp.abs(metrics))):.4f} m/s | Chunk Wall: {time.time()-tc:.2f}s",
+              flush=True)
+    print(f"[RUN] done in {time.time()-t0:.1f}s")
 
-    # Level strip to see how deep the drift penetrates vertically
-    visualizer.plot_level_strip(grid, final_state, 'th_v', z_indices=[0, 5, 15, 30], sponge_depth=sponge_depth,
-                                save_path=os.path.join(output_dir, f"{ACTIVE_DOMAIN}_levels_th_v_{sim_hours}h.png"))
+    writer.close()
+    print(f"[DONE] daily prognostic NetCDF output in {out_run_dir}")
 
-    # Hovmöller diagram to watch the drift evolve over time and space
-    visualizer.plot_hovmoller(grid, hov_times, np.array(hov_data), variable='Surface th_v Anomaly [K]',
-                              save_path=os.path.join(output_dir, f"{ACTIVE_DOMAIN}_hovmoller_th_v_{sim_hours}h.png"))
-
-    # Dynamics & Mountain Waves
-    visualizer.plot_slice_locator_dashboard(grid, final_state, map_var='th_v', slice_var='w', map_z=5, 
-                                            sponge_depth=sponge_depth,
-                                            save_path=os.path.join(output_dir, f"{ACTIVE_DOMAIN}_slices_w_{sim_hours}h.png"))
-                                            
-    if USE_MOISTURE:
-        visualizer.plot_slice_locator_dashboard(grid, final_state, map_var='q_c', slice_var='q_c', map_z=5, 
-                                                sponge_depth=sponge_depth,
-                                                save_path=os.path.join(output_dir, f"{ACTIVE_DOMAIN}_slices_qc_{sim_hours}h.png"))
 
 if __name__ == "__main__":
     main()
