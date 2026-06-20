@@ -687,7 +687,7 @@ class SISLStepper3D:
         for key in self.tracer_keys:
             if key in state:
                 rho_tr_next = cp_advect_ffsl(state['rho'] * tracers_in[key], state, bg_precomputed)
-                tracers_next[key] = rho_tr_next / (rho_next + 1e-15)
+                tracers_next[key] = rho_tr_next / (rho_next + self.physics.c.get('eps', 1e-15))
 
         # =====================================================================
         # 2. ADD BUOYANCY
@@ -1027,9 +1027,9 @@ class SplitExplicitStepper3D:
         q_4th = (7.0 / 12.0) * (q_i + q_im1) - (1.0 / 12.0) * (q_ip1 + q_im2)
         q_bias = (1.0 / 12.0) * ((q_ip1 - q_im2) - 3.0 * (q_i - q_im1))
         
-        # Gate out floating-point noise at stagnation points (< 1e-12 m/s)
+        # Gate out floating-point noise at stagnation points
         # and use the mathematical sign to smoothly apply the upwind bias.
-        clean_flux = jnp.where(jnp.abs(flux) < 1e-12, 0.0, flux)
+        clean_flux = jnp.where(jnp.abs(flux) < self.physics.c.get('eps_l', 1e-12), 0.0, flux)
         q_face = q_4th + jnp.sign(clean_flux) * q_bias
         
         return flux * q_face

@@ -17,7 +17,7 @@ class ObliqueStereographic:
     Preserves isotropy ($m_x = m_y = m$) across the regional domain, yielding 
     a uniform map factor for the horizontal momentum equations.
     """
-    def __init__(self, lat_center, lon_center, R_earth=6371229.0):
+    def __init__(self, lat_center, lon_center, R_earth=6371229.0, eps=1e-15):
         r"""
         Initializes the projection around a central tangent point.
 
@@ -25,10 +25,12 @@ class ObliqueStereographic:
             lat_center (float): Central latitude $\phi_c$ [deg].
             lon_center (float): Central longitude $\lambda_c$ [deg].
             R_earth (float, optional): Radius of the Earth $R$ [m]. Defaults to 6371229.0.
+            eps (float, optional): Division safety factor. Defaults to 1e-15.
         """
         self.phi_c = jnp.radians(lat_center)
         self.lam_c = jnp.radians(lon_center)
         self.R = R_earth
+        self.eps = eps
 
     def get_map_factor(self, x, y):
         r"""
@@ -73,7 +75,7 @@ class ObliqueStereographic:
             tuple[jnp.ndarray, jnp.ndarray]: Arrays of latitude and longitude in degrees.
         """
         rho = jnp.sqrt(x**2 + y**2)
-        rho = jnp.where(rho == 0, 1e-15, rho) 
+        rho = jnp.where(rho == 0, self.eps, rho) 
         
         c = 2.0 * jnp.arctan(rho / (2.0 * self.R))
         sin_c, cos_c = jnp.sin(c), jnp.cos(c)
@@ -105,7 +107,7 @@ class ObliqueStereographic:
         """
         def get_phi(x_val, y_val):
             # The exact same math as get_lat_lon, but scalar and returns radians
-            rho = jnp.sqrt(x_val**2 + y_val**2) + 1e-15
+            rho = jnp.sqrt(x_val**2 + y_val**2) + self.eps
             c = 2.0 * jnp.arctan(rho / (2.0 * self.R))
             sin_c = jnp.sin(c)
             cos_c = jnp.cos(c)
@@ -136,7 +138,7 @@ class RegionalGrid3D:
     - V points (`v`): $(i, j\pm 1/2, k)$
     - W points (`w`): $(i, j, k\pm 1/2)$
     """
-    def __init__(self, nx, ny, nz, dx, dy, dz, lat_center, lon_center, h_func=None, transform=None):
+    def __init__(self, nx, ny, nz, dx, dy, dz, lat_center, lon_center, h_func=None, transform=None, eps=1e-15):
         r"""
         Initializes the grid geometry, map factors, Coriolis parameters, and metric tensors.
 
@@ -152,6 +154,7 @@ class RegionalGrid3D:
             h_func (callable, optional): Surface topography function $h(\xi, \eta)$.
             transform (callable, optional): Vertical coordinate transform operator. 
                 Defaults to `GalChenSigma`.
+            eps (float, optional): Precision safety factor. Defaults to 1e-15.
 
         Raises:
             ValueError: If the terrain transformation results in grid tangling (negative $\Delta z$).
@@ -183,7 +186,7 @@ class RegionalGrid3D:
         Xi_v_2d, Yi_v_2d = jnp.meshgrid(self.x_m, self.y_c, indexing='ij')
         Xi_w_2d, Yi_w_2d = Xi_m_2d, Yi_m_2d
 
-        self.proj = ObliqueStereographic(lat_center, lon_center)
+        self.proj = ObliqueStereographic(lat_center, lon_center, eps=eps)
         self.m_factors = {
             'm': self.proj.get_map_factor(Xi_m_2d, Yi_m_2d),
             'u': self.proj.get_map_factor(Xi_u_2d, Yi_u_2d),

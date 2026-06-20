@@ -190,7 +190,7 @@ class KesslerWarmRain:
         rqr = jnp.maximum(rho_g * qr, 0.0)
         ern = (dt * ((1.6 + 124.9 * rqr ** 0.2046) * rqr ** 0.525)
                / (2.55e8 / (p * q_s) + 5.4e5)
-               * jnp.maximum(q_s - qv, 0.0) / jnp.clip(rho_g * q_s, 1e-20, None))
+               * jnp.maximum(q_s - qv, 0.0) / jnp.clip(rho_g * q_s, self.c.get('eps', 1e-20), None))
         ern = jnp.minimum(ern, jnp.maximum(-product - qc, 0.0))
         ern = jnp.minimum(ern, qr)
 
@@ -248,7 +248,7 @@ class SimplifiedBettsMiller:
         # Target profile and smooth convective trigger: active where the layer
         # humidity approaches saturation (differentiable CAPE proxy)
         q_ref = q_s * self.rh_ref
-        moisture_trigger = jnp.clip((qv - 0.6 * q_s) / (0.3 * q_s + 1e-8), 0.0, 1.0)
+        moisture_trigger = jnp.clip((qv - 0.6 * q_s) / (0.3 * q_s + self.c.get('eps_s', 1e-8)), 0.0, 1.0)
 
         # Relax toward q_ref over tau_adj; only drying (condensing) adjustments
         dq = (qv - q_ref) / self.tau_adj * self.dt

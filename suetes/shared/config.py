@@ -9,7 +9,7 @@ the helpers below so the CLI and the runner stay consistent.
 """
 
 from dataclasses import dataclass, field, asdict
-
+import jax
 import yaml
 
 
@@ -35,7 +35,7 @@ class TimeConfig:
 
     @property
     def num_states(self) -> int:
-        return int(self.sim_hours) + 1
+        return self.sim_hours + 1
 
 
 @dataclass
@@ -53,6 +53,8 @@ class CoreConfig:
     nu_h: float = 0.03
     ns: int = 3                     # acoustic substeps (split-explicit)
     alpha: float = 0.7             # off-centering (sisl); auto 0.7 on stretched grids
+    precision: str = "float32"      # "float32" | "float64"
+
 
 
 @dataclass
@@ -139,7 +141,7 @@ def load_config(path) -> SuetesConfig:
             raise ValueError(f"Unknown keys in '{key}': {sorted(unknown)}")
         return cls(**data)
 
-    return SuetesConfig(
+    cfg = SuetesConfig(
         domain=section(DomainConfig, "domain"),
         time=section(TimeConfig, "time"),
         vertical=section(VerticalConfig, "vertical"),
@@ -150,6 +152,10 @@ def load_config(path) -> SuetesConfig:
         render=section(RenderConfig, "render"),
     )
 
+    jax.config.update("jax_enable_x64", cfg.core.precision == "float64")
+
+    return cfg
+
 
 # --- derived-object helpers (shared by the preprocessing CLI and the runner) ---
 
@@ -157,6 +163,17 @@ def build_constants(cfg: SuetesConfig) -> dict:
     """The physical-constants dict consumed by BoundaryProcessor / physics."""
     c = asdict(cfg.constants)
     c["rh_crit"] = cfg.physics.rh_crit
+    
+    # Precision-dependent safety factors to prevent division by zero or negative square root arguments
+    if cfg.core.precision == "float64":
+        c["eps"] = 1e-15
+        c["eps_l"] = 1e-12
+        c["eps_s"] = 1e-8
+    else:
+        c["eps"] = 1e-7
+        c["eps_l"] = 1e-5
+        c["eps_s"] = 1e-5
+        
     return c
 
 
@@ -200,8 +217,8 @@ def resolve_params(cfg: SuetesConfig):
         # env var (when present) overrides the config boolean; "0" -> False.
         return (os.environ[env] != "1") if env in os.environ else default
 
-    sim_hours = int(os.environ.get("SIM_HOURS", t.sim_hours))
-    num_states = int(sim_hours) + 1
+    sim_hours = int(os.environ["SIM_HOURS"]) if "SIM_HOURS" in os.environ else t.sim_hours
+    num_states = sim_hours + 1
     kappa = float(os.environ.get("KAPPA", v.kappa))
     start_day = int(os.environ.get("START_DAY", str(t.days[0])))
     ndays = max(1, math.ceil(num_states / 24))
@@ -220,22 +237,23 @@ def resolve_params(cfg: SuetesConfig):
         buffer_deg=io.buffer_deg, data_dir=io.data_dir,
         store_dir=(io.store_dir or io.data_dir),
         output_dir=(io.output_dir or "suetes/output"),
-        download_workers=int(os.environ.get("DOWNLOAD_WORKERS", io.download_workers)),
+        download_workers=int(os.environ["DOWNLOAD_WORKERS"]) if "DOWNLOAD_WORKERS" in os.environ else io.download_workers,
         year=t.year, month=t.month, start_day=start_day, days=days, dates=dates,
         sim_hours=sim_hours, num_states=num_states,
         kappa=kappa, coord_tag=ctag,
         core_type=core_type, dt=float(os.environ.get("DT", co.dt)),
         nu_h=float(os.environ.get("NU_H", co.nu_h)),
-        ns=int(os.environ.get("NS", co.ns)),
+        ns=int(os.environ["NS"]) if "NS" in os.environ else co.ns,
         alpha=float(os.environ.get("ALPHA", co.alpha)),
         scale_s=float(v.scale_s), n_sleve=float(v.n),
         rh_crit=float(os.environ.get("RH_CRIT", ph.rh_crit)),
-        rad_coarse=int(os.environ.get("RAD_COARSE", ph.rad_coarse)),
+        rad_coarse=int(os.environ["RAD_COARSE"]) if "RAD_COARSE" in os.environ else ph.rad_coarse,
         rad_every_h=float(os.environ.get("RAD_EVERY_H", ph.rad_every_h)),
         afgl=((os.environ["AFGL"] == "1") if "AFGL" in os.environ else ph.afgl),
         use_rad=_flag("NO_RAD", ph.radiation), use_nudge=_flag("NO_NUDGE", ph.nudge),
                 use_micro=_flag("NO_MICRO", ph.microphysics), use_conv=_flag("NO_CONV", ph.convection),
         render=cfg.render,
+        eps=(1e-15 if co.precision == "float64" else 1e-7),
     )
     # ERA5 download filename keyed by the GEOGRAPHIC domain ONLY (centre + physical
     # extent Lx=nx*dx, Ly=ny*dy + buffer + pressure preset) -- NOT the model
@@ -263,12 +281,12 @@ def build_grid(p, sl_file):
     from suetes.preprocessing.topography import TopographyProcessor
     from suetes.shared.transforms import SleveSimple, StretchedSleveSimple
 
-    base = RegionalGrid3D(p.nx, p.ny, p.nz, p.dx, p.dy, p.dz, p.lat_c, p.lon_c)
+    base = RegionalGrid3D(p.nx, p.ny, p.nz, p.dx, p.dy, p.dz, p.lat_c, p.lon_c, eps=p.eps)
     topo = TopographyProcessor(era5_sl_path=sl_file,
                                gebco_path=os.path.join(p.data_dir, "gebco_data.nc"))
     h_func = topo.process_and_blend(base, sponge_depth=p.sponge_depth, smooth_sigma=p.smooth_sigma)
     return RegionalGrid3D(p.nx, p.ny, p.nz, p.dx, p.dy, p.dz, p.lat_c, p.lon_c,
-                          h_func=h_func, transform=_transform_from_params(p))
+                          h_func=h_func, transform=_transform_from_params(p), eps=p.eps)
 
 
 def _transform_from_params(p):
@@ -295,7 +313,7 @@ def build_grid_from_static(p, h_array):
     import jax.scipy.ndimage as jnd
     from suetes.regional3d.geometry import RegionalGrid3D
 
-    base = RegionalGrid3D(p.nx, p.ny, p.nz, p.dx, p.dy, p.dz, p.lat_c, p.lon_c)
+    base = RegionalGrid3D(p.nx, p.ny, p.nz, p.dx, p.dy, p.dz, p.lat_c, p.lon_c, eps=p.eps)
     H = jnp.asarray(h_array)
     x0, y0, dx, dy = float(base.x_m[0]), float(base.y_m[0]), base.dx, base.dy
 
@@ -303,4 +321,4 @@ def build_grid_from_static(p, h_array):
         return jnd.map_coordinates(H, [(x - x0) / dx, (y - y0) / dy], order=1, mode="nearest")
 
     return RegionalGrid3D(p.nx, p.ny, p.nz, p.dx, p.dy, p.dz, p.lat_c, p.lon_c,
-                          h_func=h_func, transform=_transform_from_params(p))
+                          h_func=h_func, transform=_transform_from_params(p), eps=p.eps)
