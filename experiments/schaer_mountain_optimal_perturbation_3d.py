@@ -32,7 +32,7 @@ def schaer_mountain(x, y):
 # --- 2. SETUP GRID & PHYSICS ---
 nx, ny, nz = 300, 3, 50  
 dx, dy, dz = 500.0, 500.0, 400.0  
-t_end = 3600.0  
+t_end = 7200.0  
 dt = 4.0
 num_steps = int(t_end / dt)
 
@@ -118,10 +118,10 @@ jax.tree_util.tree_map(lambda x: x.block_until_ready(), sensitivities)
 
 sensitivities_cpu = jax.device_get(sensitivities)
 print(f"[ADJOINT] Completed in {(time.time() - start_time):.2f} seconds.")
-print(f"[ADJOINT] Baseline Target Energy (J_0): {float(J_0):.4e}")
+print(f"[ADJOINT] Baseline target energy (J_0): {float(J_0):.4e}")
 
 # --- 7. VISUALIZE THE COMET TAIL ---
-print("\n[PLOT] Generating Sensitivities Plots...")
+print("\n[PLOT] Generating sensitivities plots...")
 
 # Run a quick pure forward pass just to get the final state for plotting the box
 # We use the fast, uncheckpointed loop for this
@@ -163,45 +163,45 @@ def plot_field(data, title, filename, cmap='RdBu_r', add_box=False):
         rect_z = Z_w_plot[x_t0, z_t0]
         width = x_plot_1d[x_t1] - x_plot_1d[x_t0]
         height = Z_w_plot[x_t0, z_t1] - Z_w_plot[x_t0, z_t0]
-        rect = patches.Rectangle((rect_x, rect_z), width, height, linewidth=2, edgecolor='lime', facecolor='none', linestyle='--')
+        rect = patches.Rectangle((rect_x, rect_z), width, height, linewidth=2, edgecolor='k', facecolor='none', linestyle='--')
         plt.gca().add_patch(rect)
-        plt.text(rect_x + width/2, rect_z + height + 0.2, 'Target $J$', color='lime', ha='center', fontweight='bold')
+        plt.text(rect_x + width/2, rect_z + height + 0.2, 'Target $J$', color='k', ha='center')
 
     plt.xlim([-50, 50])
     plt.ylim([0, 12])
     plt.savefig(f'{output_dir}/{filename}', dpi=150, bbox_inches='tight')
     plt.close()
 
-# Forward State at T=1h (Where the waves are)
+# Forward State at T=2h (Where the waves are)
 plot_field(final_fwd_state['w'][:, 1, :], 
-           rf'Forward State W at T = {t_end/3600}h', 
+           rf'Forward state $w$ at $T = {t_end/3600}h$', 
            f'schaer_fwd_w_{CORE_TYPE.lower()}.png', add_box=True)
 
 # Sensitivity to Temperature at T=0 (Where the signal came from)
 plot_field(sensitivities_cpu['th_v'][:, 1, :], 
-           rf'Adjoint Sensitivity ($\partial J / \partial \theta_v$) at T = 0 ({CORE_TYPE.upper()})', 
+           rf'Adjoint sensitivity ($\partial J / \partial \theta_v$) at T = 0 ({CORE_TYPE.upper()})', 
            f'schaer_adj_th_v_{CORE_TYPE.lower()}.png')
 
 # Sensitivity to Horizontal Wind at T=0
 u_sens_m = 0.5 * (sensitivities_cpu['u'][:-1, 1, :] + sensitivities_cpu['u'][1:, 1, :])
 plot_field(u_sens_m, 
-           rf'Adjoint Sensitivity ($\partial J / \partial u$) at T = 0 ({CORE_TYPE.upper()})', 
+           rf'Adjoint sensitivity ($\partial J / \partial u$) at T = 0 ({CORE_TYPE.upper()})', 
            f'schaer_adj_u_{CORE_TYPE.lower()}.png')
 
 print("[PLOT] Success! Check the inversion folder.")
 
 
 # --- 8. THE PERTURBATION EXPERIMENT ---
-print("\n[EXPERIMENT] Testing Optimal vs. Random Perturbations...")
+print("\n[EXPERIMENT] Testing optimal vs. random perturbations...")
 
 sens_th_v = sensitivities_cpu['th_v']
 
-# Create the Optimal Perturbation (Gradient Ascent)
+# Create the optimal perturbation (Gradient Ascent)
 max_sens = jnp.max(jnp.abs(sens_th_v))
 optimal_pert = (sens_th_v / max_sens) * 1.0
 
 # 1. Gather configurations to test
-configs_to_test = [("Optimal Perturbation", optimal_pert)]
+configs_to_test = [("Optimal perturbation", optimal_pert)]
 
 # Generate 3 Random Perturbations with the EXACT same L2 norm
 key = jax.random.PRNGKey(42)
@@ -211,7 +211,7 @@ for i in range(1, 4):
     key, subkey = jax.random.split(key)
     random_pert_raw = jax.random.normal(subkey, optimal_pert.shape)
     random_pert = random_pert_raw * (target_norm / jnp.linalg.norm(random_pert_raw))
-    configs_to_test.append((f"Random Perturbation {i}", random_pert))
+    configs_to_test.append((f"Random perturbation {i}", random_pert))
 
 # 2. Function to evaluate a given perturbation
 def evaluate_perturbation(pert_th_v):
@@ -248,6 +248,7 @@ X_plot_curr, _ = jnp.meshgrid(x_plot_1d, jnp.arange(nz + 1), indexing='ij')
 for idx, (title, pert_th_v) in enumerate(configs_to_test):
     print(f"Evaluating {title}...")
     J_val, final_pert_state = evaluate_perturbation(pert_th_v)
+    print(f"  -> {title}: J = {J_val:.6e} (Amplification: {((J_val / float(J_0)) - 1.0) * 100:.1f}%)")
     
     # Calculate the difference field: perturbed - baseline
     w_diff = final_pert_state['w'][:, 1, :] - baseline_w
@@ -266,10 +267,10 @@ for idx, (title, pert_th_v) in enumerate(configs_to_test):
     width = x_plot_1d[x_t1] - x_plot_1d[x_t0]
     height = Z_w_plot[x_t0, z_t1] - Z_w_plot[x_t0, z_t0]
     rect = patches.Rectangle((rect_x, rect_z), width, height, 
-                             linewidth=2, edgecolor='lime', facecolor='none', linestyle='--')
+                             linewidth=2, edgecolor='k', facecolor='none', linestyle='--')
     ax.add_patch(rect)
     
-    ax.set_title(f"{title}\nTarget Energy (J): {J_val:.2f}", fontweight='bold')
+    ax.set_title(f"{title}\nTarget energy (J): {J_val:.2f}")
     ax.set_xlim([-50, 50])
     ax.set_ylim([0, 12])
     
@@ -278,7 +279,87 @@ for idx, (title, pert_th_v) in enumerate(configs_to_test):
 
 fig.subplots_adjust(right=0.92)
 cbar_ax = fig.add_axes([0.94, 0.15, 0.02, 0.7])
-fig.colorbar(contour, cax=cbar_ax, label='Change in W (m/s)')
+fig.colorbar(contour, cax=cbar_ax, label=r'Change in $w$ (m/s)')
 
 plt.savefig(f'{output_dir}/schaer_adjoint_validation_{CORE_TYPE.lower()}.png', dpi=150, bbox_inches='tight')
 print(f"\nValidation complete. Saved to {output_dir}/schaer_adjoint_validation_{CORE_TYPE.lower()}.png")
+
+# --- 9. THE FORWARD PERTURBATION COMPARISON PLOT ---
+print("\n[PLOT] Generating forward states comparison plot...")
+fig2, axs2 = plt.subplots(2, 2, figsize=(20, 12))
+axs2 = axs2.flatten()
+
+# Pre-calculate the maximum vertical velocity across the optimal run to define a unified color scale
+vmax_fwd_shared = float(jnp.max(jnp.abs(final_opt_state['w'][:, 1, :]))) * 1.1
+
+for idx, (title, pert_th_v) in enumerate(configs_to_test):
+    J_val, final_pert_state = evaluate_perturbation(pert_th_v)
+    
+    ax = axs2[idx]
+    contour2 = ax.contourf(X_plot_curr, Z_w_plot, final_pert_state['w'][:, 1, :], 
+                           levels=jnp.linspace(-vmax_fwd_shared, vmax_fwd_shared, 41), 
+                           cmap='RdBu_r', extend='both')
+    
+    ax.fill_between(x_plot_1d, 0, mountain_terrain, color='black')
+    
+    # Draw Target Box
+    rect = patches.Rectangle((rect_x, rect_z), width, height, 
+                             linewidth=2, edgecolor='k', facecolor='none', linestyle='--')
+    ax.add_patch(rect)
+    
+    ax.set_title(f"{title}\nTarget energy (J): {J_val:.2f}")
+    ax.set_xlim([-50, 50])
+    ax.set_ylim([0, 12])
+    
+    if idx >= 2: ax.set_xlabel('Distance (km)')
+    if idx % 2 == 0: ax.set_ylabel('Altitude (km)')
+
+fig2.subplots_adjust(right=0.92)
+cbar_ax2 = fig2.add_axes([0.94, 0.15, 0.02, 0.7])
+fig2.colorbar(contour2, cax=cbar_ax2, label=r'Vertical velocity $w$ (m/s)')
+
+plt.savefig(f'{output_dir}/schaer_forward_validation_{CORE_TYPE.lower()}.png', dpi=150, bbox_inches='tight')
+print(f"Forward comparison complete. Saved to {output_dir}/schaer_forward_validation_{CORE_TYPE.lower()}.png")
+
+# --- 10. THE INITIAL PERTURBATION COMPARISON PLOT ---
+print("\n[PLOT] Generating initial perturbation comparison plot...")
+fig3, axs3 = plt.subplots(2, 2, figsize=(20, 12))
+axs3 = axs3.flatten()
+
+# Pre-calculate a unified color scale for the perturbations
+vmax_pert_shared = max(float(jnp.max(jnp.abs(p))) for _, p in configs_to_test) * 1.1
+
+# For mass points, pad the bottom to align properly with the terrain
+Z_m_plot = jnp.concatenate([grid.Z_w[:, 1, :1] / 1000.0, grid.Z_m[:, 1, :] / 1000.0], axis=1)
+X_m_plot_curr, _ = jnp.meshgrid(x_plot_1d, jnp.arange(nz + 1), indexing='ij')
+
+for idx, (title, pert_th_v) in enumerate(configs_to_test):
+    data_2d = pert_th_v[:, 1, :]
+    data_padded = jnp.concatenate([data_2d[:, :1], data_2d], axis=1)
+    
+    ax = axs3[idx]
+    contour3 = ax.contourf(X_m_plot_curr, Z_m_plot, data_padded, 
+                           levels=jnp.linspace(-vmax_pert_shared, vmax_pert_shared, 41), 
+                           cmap='RdBu_r', extend='both')
+    
+    ax.fill_between(x_plot_1d, 0, mountain_terrain, color='black')
+    
+    # Draw Target Box at T=0 (for reference, though target metric is at T=t_end)
+    rect = patches.Rectangle((rect_x, rect_z), width, height, 
+                             linewidth=2, edgecolor='k', facecolor='none', linestyle=':')
+    ax.add_patch(rect)
+    ax.text(rect_x + width/2, rect_z + height + 0.2, 'Target area', color='k', ha='center', fontsize=9)
+    
+    ax.set_title(f"{title} (\\delta \\theta_v$ at $T=0$)")
+    ax.set_xlim([-50, 50])
+    ax.set_ylim([0, 12])
+    
+    if idx >= 2: ax.set_xlabel('Distance (km)')
+    if idx % 2 == 0: ax.set_ylabel('Altitude (km)')
+
+fig3.subplots_adjust(right=0.92)
+cbar_ax3 = fig3.add_axes([0.94, 0.15, 0.02, 0.7])
+fig3.colorbar(contour3, cax=cbar_ax3, label=r'Temperature perturbation $\delta \theta_v$ (K)')
+
+plt.savefig(f'{output_dir}/schaer_perturbation_validation_{CORE_TYPE.lower()}.png', dpi=150, bbox_inches='tight')
+print(f"Perturbation comparison complete. Saved to {output_dir}/schaer_perturbation_validation_{CORE_TYPE.lower()}.png")
