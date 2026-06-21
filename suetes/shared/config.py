@@ -67,6 +67,11 @@ class PhysicsConfig:
     rad_coarse: int = 8
     rad_every_h: float = 1.0
     afgl: bool = True
+    drag: bool = True              # McFarlane surface drag
+    diffusion: bool = True         # McFarlane vertical diffusion
+    sgs: bool = False              # Smagorinsky-Lilly SGS turbulence
+    gwd: bool = False              # McFarlane gravity wave drag
+
 
 
 @dataclass
@@ -251,7 +256,10 @@ def resolve_params(cfg: SuetesConfig):
         rad_every_h=float(os.environ.get("RAD_EVERY_H", ph.rad_every_h)),
         afgl=((os.environ["AFGL"] == "1") if "AFGL" in os.environ else ph.afgl),
         use_rad=_flag("NO_RAD", ph.radiation), use_nudge=_flag("NO_NUDGE", ph.nudge),
-                use_micro=_flag("NO_MICRO", ph.microphysics), use_conv=_flag("NO_CONV", ph.convection),
+        use_micro=_flag("NO_MICRO", ph.microphysics), use_conv=_flag("NO_CONV", ph.convection),
+        use_drag=_flag("NO_DRAG", ph.drag), use_diffusion=_flag("NO_DIFFUSION", ph.diffusion),
+        use_sgs=_flag("NO_SGS", ph.sgs) if ph.sgs else ((os.environ.get("USE_SGS") == "1") if "USE_SGS" in os.environ else ph.sgs),
+        use_gwd=_flag("NO_GWD", ph.gwd) if ph.gwd else ((os.environ.get("USE_GWD") == "1") if "USE_GWD" in os.environ else ph.gwd),
         render=cfg.render,
         eps=(1e-15 if co.precision == "float64" else 1e-7),
     )

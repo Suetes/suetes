@@ -114,12 +114,20 @@ def main():
     sponge = DaviesSponge(grid, operators, sponge_depth=sponge_depth, dt=dt, tau_bndy_factor=10.0)
     interior_mask = sponge.get_interior_mask()
 
-    # ---- physics: surface drag + vertical diffusion + (optional) nudging ----
+    # ---- physics suite setup (configured dynamically) ----
     suite = PhysicsSuite()
-    suite.add_tendency_scheme(McFarlaneSurfaceDrag(grid, operators, constants, z_0=z0, epsilon=eps,
-                                                   theta_surf=initial_state['theta_surf']))
-    suite.add_tendency_scheme(McFarlaneVerticalDiffusion(grid, operators, constants,
-                                                         epsilon=eps[..., None]))
+    if p.use_drag:
+        suite.add_tendency_scheme(McFarlaneSurfaceDrag(grid, operators, constants, z_0=z0, epsilon=eps,
+                                                       theta_surf=initial_state['theta_surf']))
+    if p.use_diffusion:
+        suite.add_tendency_scheme(McFarlaneVerticalDiffusion(grid, operators, constants,
+                                                             epsilon=eps[..., None]))
+    if p.use_sgs:
+        from suetes.physics.turbulence import SmagorinskyLillySGS
+        suite.add_tendency_scheme(SmagorinskyLillySGS(grid, operators, constants, dt=dt, Cs=0.15, Pr_t=1.0, critical_Ri=0.25))
+    if p.use_gwd:
+        from suetes.physics.gravity_waves import McFarlaneGWD
+        suite.add_tendency_scheme(McFarlaneGWD(grid, operators, constants, h_variance=jnp.where(land_fraction > 0.5, 2500.0, 0.0), F_c=0.7, mu=1.5e-5))
     if use_nudge:
         suite.add_tendency_scheme(NewtonianRelaxation(tau_relax_hours=6.0))
 
@@ -136,13 +144,13 @@ def main():
                                        **core_kwargs)
     print(f"[CORE] {core_type} | dt={dt:g}s | {core_info}")
 
-    chunk_steps = int(round(3600.0 / dt))
+    chunk_steps = round(3600.0 / dt)
 
-    _out_attrs = {'run_name': RUN_NAME, 'dt_seconds': float(dt),
-                  'sim_hours': int(sim_hours), 'kappa': float(kappa),
+    _out_attrs = {'run_name': RUN_NAME, 'dt_seconds': dt,
+                  'sim_hours': int(sim_hours), 'kappa': kappa,
                   'nx': int(nx), 'ny': int(ny), 'nz': int(nz),
-                  'dx': float(dx), 'dy': float(dy), 'dz': float(dz),
-                  'lat_c': float(lat_c), 'lon_c': float(lon_c),
+                  'dx': dx, 'dy': dy, 'dz': dz,
+                  'lat_c': lat_c, 'lon_c': lon_c,
                   'coarsen_window': int(coarsen_window), 'sponge_depth': int(sponge_depth),
                   'domain': ACTIVE_DOMAIN, 'year': YEAR, 'month': MONTH, 'day0': DAYS[0]}
 

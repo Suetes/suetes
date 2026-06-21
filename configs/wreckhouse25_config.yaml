@@ -24,16 +24,21 @@ vertical:
   n: 1.0
 
 core:
-  type: "sisl"
+  type: "split-explicit"
   dt: 5.0
-  nu_h: 0.2
+  nu_h: 0.05
   alpha: 0.7
+  ns: 4
 
 physics:
   radiation: false
-  nudge: true
+  nudge: false
   microphysics: false
   convection: false
+  drag: false
+  diffusion: false
+  sgs: true
+  gwd: true
 
 constants:
   g: 9.81
@@ -49,7 +54,7 @@ io:
   store_format: "zarr"
   coarsen_window: 1   # No coarsening to preserve high-res wind gradients
   sponge_depth: 15
-  smooth_sigma: 0.2   # Less smoothing for steep Long Range Mountains
+  smooth_sigma: 0.1   # Less smoothing for steep Long Range Mountains
   pressure_levels: "buffered"
   buffer_deg: 2.0
 
