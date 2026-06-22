@@ -260,7 +260,13 @@ def resolve_params(cfg: SuetesConfig):
         use_drag=_flag("NO_DRAG", ph.drag), use_diffusion=_flag("NO_DIFFUSION", ph.diffusion),
         use_sgs=_flag("NO_SGS", ph.sgs) if ph.sgs else ((os.environ.get("USE_SGS") == "1") if "USE_SGS" in os.environ else ph.sgs),
         use_gwd=_flag("NO_GWD", ph.gwd) if ph.gwd else ((os.environ.get("USE_GWD") == "1") if "USE_GWD" in os.environ else ph.gwd),
-        render=cfg.render,
+        render=(lambda: [
+            copy_rc := __import__('copy').deepcopy(cfg.render),
+            setattr(copy_rc, 'levels_z', [min(d.nz - 1, z) for z in copy_rc.levels_z] if copy_rc.levels_z else []),
+            setattr(copy_rc, 'compare_levels_z', [min(d.nz - 1, z) for z in copy_rc.compare_levels_z] if copy_rc.compare_levels_z else []),
+            setattr(copy_rc, 'strip_levels_z', [min(d.nz - 1, z) for z in copy_rc.strip_levels_z] if copy_rc.strip_levels_z else []),
+            setattr(copy_rc, 'energy_levels', [min(d.nz - 1, z) for z in copy_rc.energy_levels] if copy_rc.energy_levels else []),
+        ][-1] or copy_rc)(),
         eps=(1e-15 if co.precision == "float64" else 1e-7),
     )
     # ERA5 download filename keyed by the GEOGRAPHIC domain ONLY (centre + physical

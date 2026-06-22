@@ -1,0 +1,83 @@
+# fiona_config.yaml -- single source of truth for the Hurricane Fiona downscaling.
+# Consumed by suetes.shared.config.load_config (preprocessing CLI + runner).
+
+domain:
+  name: "fiona"
+  lat_c: 48.0
+  lon_c: -56.0
+  nx: 200
+  ny: 200
+  nz: 32
+  dx: 10000.0        # 10 km high-resolution downscaling
+  dy: 10000.0
+  dz: 500.0
+
+time:
+  year: "2022"
+  month: "09"
+  days: ["23", "24", "25"]
+  sim_hours: 48
+
+vertical:
+  kappa: 1.0
+  scale_s: 10000.0
+  n: 1.0
+
+core:
+  type: "split-explicit"
+  dt: 15.0
+  nu_h: 0.05
+  ns: 4
+  alpha: 0.7
+
+physics:
+  radiation: false
+  nudge: true
+  microphysics: true   # Kessler warm rain (essential for hurricane structure)
+  convection: true     # Betts-Miller adjustment
+  drag: true
+  diffusion: true
+  sgs: false
+  gwd: false
+
+constants:
+  g: 9.81
+  Rd: 287.0
+  cp: 1004.0
+  cvd: 717.0
+  p0: 100000.0
+  epsilon: 0.622
+
+io:
+  data_dir: "suetes/data"
+  fig_dir: "suetes/plots/fiona"
+  store_format: "zarr"
+  coarsen_window: 1   # Keep it 1 for 10km grid
+  sponge_depth: 15
+  smooth_sigma: 1.0
+  pressure_levels: "buffered"
+  buffer_deg: 3.0
+
+render:
+  levels_z: [2]
+  levels_m: []
+  energy_levels: []
+  quiver_stride: 6
+  zoom_extent: [-60.0, -52.0, 45.0, 51.0]
+  target_hours: [12, 24, 36, 48]
+  points:
+    - name: "Port aux Basques"
+      lat: 47.57
+      lon: -59.13
+      variable: "wind"
+      units: "km/h"
+    - name: "St Johns"
+      lat: 47.56
+      lon: -52.71
+      variable: "wind"
+      units: "km/h"
+  slices:
+    - name: "slices_w"
+      map_var: "th_v"
+      slice_var: "w"
+      map_z: 2

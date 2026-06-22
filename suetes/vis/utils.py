@@ -69,3 +69,15 @@ def _draw_domain_and_sponge(ax, lons, lats, sponge_depth):
 def _get_level_height(grid, z_idx):
     """Returns the domain-averaged physical height of a logical model level."""
     return int(np.mean(grid.Z_m[:, :, z_idx]))
+
+def _get_projection_and_extent(grid):
+    """Returns the Cartopy projection object and native extent for a given grid."""
+    proj = ccrs.Stereographic(
+        central_latitude=float(grid.lat_c),
+        central_longitude=float(grid.lon_c),
+        globe=ccrs.Globe(semimajor_axis=6371229.0, semiminor_axis=6371229.0)
+    )
+    extent = [float(grid.x_c.min()), float(grid.x_c.max()),
+              float(grid.y_c.min()), float(grid.y_c.max())]
+    return proj, extent
+

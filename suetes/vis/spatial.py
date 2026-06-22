@@ -3,7 +3,7 @@ import cartopy.crs as ccrs
 import cartopy.feature as cfeature
 import numpy as np
 
-from suetes.vis.utils import _get_plot_data, _draw_domain_and_sponge, _get_level_height
+from suetes.vis.utils import _get_plot_data, _draw_domain_and_sponge, _get_level_height, _get_projection_and_extent
 
 def plot_2d_field(grid, state, variable, z_idx=5, sponge_depth=30, constants=None, 
                   cmap='viridis', vmin=None, vmax=None, scale='linear', title=None, 
@@ -23,9 +23,10 @@ def plot_2d_field(grid, state, variable, z_idx=5, sponge_depth=30, constants=Non
         # to make the array continuous for the extent calculation and pcolormesh.
         lons = np.where(lons < 0, lons + 360.0, lons)
 
+    native_proj, native_extent = _get_projection_and_extent(grid)
     show_plot = False
     if ax is None:
-        fig, ax = plt.subplots(1, 1, figsize=(10, 6), subplot_kw={'projection': ccrs.PlateCarree(central_longitude=grid.lon_c)})
+        fig, ax = plt.subplots(1, 1, figsize=(10, 6), subplot_kw={'projection': native_proj})
         show_plot = True
 
     ax.add_feature(cfeature.COASTLINE, linewidth=1.2, edgecolor='black')
@@ -58,6 +59,8 @@ def plot_2d_field(grid, state, variable, z_idx=5, sponge_depth=30, constants=Non
 
     if extent is not None:
         ax.set_extent(extent, crs=ccrs.PlateCarree())
+    else:
+        ax.set_extent(native_extent, crs=native_proj)
     
     ax.set_title(title or f"{variable.upper()} at Level {z_idx}", fontsize=14)
     ax.gridlines(draw_labels=show_plot, linewidth=0.5, color='gray', alpha=0.5, linestyle='--')
@@ -92,9 +95,10 @@ def plot_quiver_field(grid, state, bg_var='pi', u_var='u', v_var='v', z_idx=5,
     if lons.max() - lons.min() > 180.0:
         lons = np.where(lons < 0, lons + 360.0, lons)
 
+    native_proj, native_extent = _get_projection_and_extent(grid)
     show_plot = False
     if ax is None:
-        fig, ax = plt.subplots(1, 1, figsize=(10, 6), subplot_kw={'projection': ccrs.PlateCarree(central_longitude=grid.lon_c)})
+        fig, ax = plt.subplots(1, 1, figsize=(10, 6), subplot_kw={'projection': native_proj})
         show_plot = True
 
     ax.add_feature(cfeature.COASTLINE, linewidth=1.2, edgecolor='black')
@@ -122,6 +126,8 @@ def plot_quiver_field(grid, state, bg_var='pi', u_var='u', v_var='v', z_idx=5,
 
     if extent is not None:
         ax.set_extent(extent, crs=ccrs.PlateCarree())
+    else:
+        ax.set_extent(native_extent, crs=native_proj)
     
     ax.set_title(title or f"{bg_var.upper()} and Wind Vectors at Level {z_idx}", fontsize=14)
     ax.gridlines(draw_labels=show_plot, linewidth=0.5, color='gray', alpha=0.5, linestyle='--')
@@ -154,8 +160,8 @@ def plot_dashboard(grid, state_model, z_idx=5, sponge_depth=30, fields=None, tim
     n_vars = len(fields)
     cols = 2
     rows = int(np.ceil(n_vars / cols))
-    
-    fig, axes = plt.subplots(rows, cols, figsize=(7 * cols, 5 * rows), subplot_kw={'projection': ccrs.PlateCarree(central_longitude=grid.lon_c)})
+    native_proj, native_extent = _get_projection_and_extent(grid)
+    fig, axes = plt.subplots(rows, cols, figsize=(7 * cols, 5 * rows), subplot_kw={'projection': native_proj})
     axes = np.atleast_1d(axes).flatten()
     
     for i, field_def in enumerate(fields):
@@ -200,7 +206,8 @@ def plot_comparison(grid, state_model, state_era5, variable, z_idx=5, sponge_dep
     val_era5 = _get_plot_data(grid, state_era5, variable, z_idx)
     anomaly = val_model - val_era5
 
-    fig, axes = plt.subplots(1, 3, figsize=(18, 6), subplot_kw={'projection': ccrs.PlateCarree(central_longitude=grid.lon_c)})
+    native_proj, native_extent = _get_projection_and_extent(grid)
+    fig, axes = plt.subplots(1, 3, figsize=(18, 6), subplot_kw={'projection': native_proj})
     titles = ["Suetes model", "ERA5 target", "Anomaly (Model - ERA5)"]
     datas = [val_model, val_era5, anomaly]
     
@@ -223,7 +230,8 @@ def plot_comparison(grid, state_model, state_era5, variable, z_idx=5, sponge_dep
 
 def plot_level_strip(grid, state, variable, z_indices=[0, 5, 15, 30], sponge_depth=30, constants=None, cmap=None, scale='linear', save_path=None):
     """Plots a 2x2 grid of the same variable at four different vertical levels, with localized colorbars."""
-    fig, axes = plt.subplots(2, 2, figsize=(16, 12), subplot_kw={'projection': ccrs.PlateCarree(central_longitude=grid.lon_c)})
+    native_proj, native_extent = _get_projection_and_extent(grid)
+    fig, axes = plt.subplots(2, 2, figsize=(16, 12), subplot_kw={'projection': native_proj})
     axes = axes.flatten()
     
     if cmap is None:
@@ -233,7 +241,6 @@ def plot_level_strip(grid, state, variable, z_indices=[0, 5, 15, 30], sponge_dep
     Xi, Yi = np.meshgrid(grid.x_m, grid.y_m, indexing='ij')
     lats, lons = grid.proj.get_lat_lon(Xi, Yi)
     if lons.max() - lons.min() > 180.0: lons = np.where(lons < 0, lons + 360.0, lons)
-    extent = [float(lons.min()) - 0.5, float(lons.max()) + 0.5, float(lats.min()) - 0.5, float(lats.max()) + 0.5]
 
     for i, (ax, z) in enumerate(zip(axes, z_indices)):
         data = _get_plot_data(grid, state, variable, z, constants)
@@ -265,7 +272,7 @@ def plot_level_strip(grid, state, variable, z_indices=[0, 5, 15, 30], sponge_dep
         _draw_domain_and_sponge(ax, lons, lats, sponge_depth)
         
         ax.set_title(f"Level {z} (~{z_height} m)", fontsize=14)
-        ax.set_extent(extent, crs=ccrs.PlateCarree())
+        ax.set_extent(native_extent, crs=native_proj)
         
         # Add an individual colorbar to each subplot
         fig.colorbar(im, ax=ax, orientation='vertical', extend=extend, pad=0.02, fraction=0.046)
@@ -284,7 +291,8 @@ def plot_adjoint_overlay(grid, initial_state, sensitivity_2d, u_var='u', v_var='
     Xi, Yi = np.meshgrid(grid.x_m, grid.y_m, indexing='ij')
     lats, lons = grid.proj.get_lat_lon(Xi, Yi)
     
-    fig, ax = plt.subplots(1, 1, figsize=(12, 8), subplot_kw={'projection': ccrs.PlateCarree(central_longitude=grid.lon_c)})
+    native_proj, native_extent = _get_projection_and_extent(grid)
+    fig, ax = plt.subplots(1, 1, figsize=(12, 8), subplot_kw={'projection': native_proj})
     ax.add_feature(cfeature.COASTLINE, linewidth=1.2)
     
     # 1. Plot Adjoint Sensitivity as the background
@@ -301,6 +309,7 @@ def plot_adjoint_overlay(grid, initial_state, sensitivity_2d, u_var='u', v_var='
                   transform=ccrs.PlateCarree(), pivot='middle', color='black', alpha=0.6)
     
     _draw_domain_and_sponge(ax, lons, lats, sponge_depth)
+    ax.set_extent(native_extent, crs=native_proj)
     ax.set_title(r"Adjoint Sensitivity overlaid with Initial Wind Field at $t=0$", fontsize=14)
     fig.colorbar(im, ax=ax, orientation='horizontal', pad=0.05, label=r'Absolute Impact on Wave Energy per $+1K$ Perturbation')
     

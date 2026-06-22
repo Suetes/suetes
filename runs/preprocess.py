@@ -59,22 +59,16 @@ def main():
         return mgr.download_regional_subset(year=ds[:4], month=ds[4:6], days=[ds[6:8]],
                                              area=bbox, prefix=day_prefix, client=cl)
 
-    print(f"[PREPROCESS] downloading {len(p.dates)} ERA5 days + building grid/topo "
-          f"with {workers} parallel workers")
+    print(f"[PREPROCESS] downloading {len(p.dates)} ERA5 days with {workers} parallel workers")
     sl_files, pl_files = [None] * len(p.dates), [None] * len(p.dates)
-    with ThreadPoolExecutor(max_workers=workers + 1) as ex:
+    with ThreadPoolExecutor(max_workers=workers) as ex:
         era5_futs = {ex.submit(_dl_era5, ds): i for i, ds in enumerate(p.dates)}
-        day0_fut = next(f for f, i in era5_futs.items() if i == 0)
-
-        def _build_grid_when_ready():
-            sl0, _ = day0_fut.result()        # topo blend needs day-0 ERA5 orography
-            return build_grid(p, sl0)         # constructs TopographyProcessor: GEBCO + blend
-
-        grid_fut = ex.submit(_build_grid_when_ready)
         for fut in as_completed(era5_futs):
             i = era5_futs[fut]
             sl_files[i], pl_files[i] = fut.result()                 # order-preserving
-        grid = grid_fut.result()
+
+    print("[PREPROCESS] building grid/topo...")
+    grid = build_grid(p, sl_files[0])
     print(f"[PREPROCESS] {len(p.dates)} ERA5 days {p.dates[0]}..{p.dates[-1]} + grid/topo ready")
 
     # 2) Boundary processor (lazy multi-file ERA5 read).

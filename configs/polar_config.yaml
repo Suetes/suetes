@@ -1,0 +1,89 @@
+# polar_config.yaml -- single source of truth for the polar case.
+# Consumed by suetes.shared.config.load_config (preprocessing CLI + runner).
+
+domain:
+  name: "polar"
+  lat_c: 90.0
+  lon_c: 0.0
+  nx: 150
+  ny: 150
+  nz: 30
+  dx: 20000.0        # 20 km resolution
+  dy: 20000.0
+  dz: 500.0
+
+time:
+  year: "2025"
+  month: "01"
+  days: ["15", "16", "17"]
+  sim_hours: 48
+
+vertical:
+  kappa: 1.0
+  scale_s: 10000.0
+  n: 1.0
+
+core:
+  type: "split-explicit"
+  dt: 40.0
+  nu_h: 0.03
+  ns: 3
+  alpha: 0.7
+
+physics:
+  radiation: false
+  nudge: true
+  microphysics: false
+  convection: false
+  drag: true
+  diffusion: true
+  sgs: false
+  gwd: false
+
+constants:
+  g: 9.81
+  Rd: 287.0
+  cp: 1004.0
+  cvd: 717.0
+  p0: 100000.0
+  epsilon: 0.622
+
+io:
+  data_dir: "suetes/data"
+  fig_dir: "suetes/plots/polar"
+  store_format: "zarr"
+  coarsen_window: 1
+  sponge_depth: 10
+  smooth_sigma: 2.0
+  pressure_levels: "buffered"
+  buffer_deg: 3.0
+
+render:
+  levels_z: [0, 5, 15, 25]
+  levels_m: [500.0, 3000.0, 5000.0, 10000.0]
+  points:
+    - name: "Alert"
+      lat: 82.50
+      lon: -62.33
+      units: "deg C"
+      variable: "temperature"
+    - name: "Longyearbyen"
+      lat: 78.22
+      lon: 15.64
+      units: "deg C"
+      variable: "temperature"
+    - name: "Station Nord"
+      lat: 81.71
+      lon: -17.80
+      units: "deg C"
+      variable: "temperature"
+    - name: "Eureka"
+      lat: 79.98
+      lon: -85.82
+      units: "deg C"
+      variable: "temperature"
+  slices:
+    - name: "slices_w"
+      map_var: "th_v"
+      slice_var: "w"
+      map_z: 5

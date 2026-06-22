@@ -3,7 +3,7 @@ import cartopy.crs as ccrs
 import cartopy.feature as cfeature
 import numpy as np
 
-from suetes.vis.utils import _get_plot_data, _draw_domain_and_sponge, _get_level_height
+from suetes.vis.utils import _get_plot_data, _draw_domain_and_sponge, _get_level_height, _get_projection_and_extent
 
 def plot_cross_section(grid, state, variable, y_idx, sponge_depth=30, overlay_isentropes=False, 
                        cmap=None, vmin=None, vmax=None, title=None, ax=None, save_path=None, 
@@ -143,6 +143,8 @@ def plot_slice_locator_dashboard(grid, state, map_var='th_v', slice_var='w', map
     lats, lons = grid.proj.get_lat_lon(Xi, Yi)
     if lons.max() - lons.min() > 180.0: lons = np.where(lons < 0, lons + 360.0, lons)
     
+    native_proj, native_extent = _get_projection_and_extent(grid)
+
     def draw_locator_map(ax, lines_indices, colors, is_x_slice):
         ax.add_feature(cfeature.COASTLINE, linewidth=1.0)
         im_map = ax.pcolormesh(lons, lats, map_data, transform=ccrs.PlateCarree(), cmap='RdBu_r')
@@ -155,16 +157,17 @@ def plot_slice_locator_dashboard(grid, state, map_var='th_v', slice_var='w', map
                 ax.plot(lons[idx, :], lats[idx, :], color=color, linewidth=2.5, transform=ccrs.PlateCarree(), label=f'X-idx: {idx}')
         
         ax.legend(loc='upper right')
+        ax.set_extent(native_extent, crs=native_proj)
         ax.set_title(f"Locator Map: {map_var} at Level {map_z} (~{z_height}m)", fontsize=14)
         return im_map
 
     # --- Top Left: Map with X slices (constant y cuts) ---
-    ax_map_x = fig.add_subplot(gs[0, 0], projection=ccrs.PlateCarree(central_longitude=grid.lon_c))
+    ax_map_x = fig.add_subplot(gs[0, 0], projection=native_proj)
     im_x = draw_locator_map(ax_map_x, y_indices, x_colors, is_x_slice=True)
     plt.colorbar(im_x, ax=ax_map_x, orientation='vertical', pad=0.02, fraction=0.03)
 
     # --- Top Right: Map with Y slices (constant x cuts) ---
-    ax_map_y = fig.add_subplot(gs[0, 1], projection=ccrs.PlateCarree(central_longitude=grid.lon_c))
+    ax_map_y = fig.add_subplot(gs[0, 1], projection=native_proj)
     im_y = draw_locator_map(ax_map_y, x_indices, y_colors, is_x_slice=False)
     plt.colorbar(im_y, ax=ax_map_y, orientation='vertical', pad=0.02, fraction=0.03)
 

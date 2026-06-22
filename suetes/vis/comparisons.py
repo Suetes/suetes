@@ -2,7 +2,7 @@ import matplotlib.pyplot as plt
 import cartopy.crs as ccrs
 import numpy as np
 
-from suetes.vis.utils import _get_plot_data
+from suetes.vis.utils import _get_plot_data, _get_projection_and_extent
 from suetes.vis.spatial import plot_2d_field
 from suetes.vis.vertical import plot_cross_section, plot_hovmoller 
 from suetes.vis.diagnostics import plot_energy_spectrum
@@ -13,8 +13,9 @@ def plot_ablation_spatial_matrix(grid, states_dict, target_state, variable='th_v
     run_names = list(states_dict.keys())
     cols = len(run_names) + 1 
     
+    native_proj, native_extent = _get_projection_and_extent(grid)
     fig, axes = plt.subplots(2, cols, figsize=(6 * cols, 6.5), 
-                             subplot_kw={'projection': ccrs.PlateCarree(central_longitude=grid.lon_c)})
+                             subplot_kw={'projection': native_proj})
     
     # Gather data and compute global colorbar limits
     all_data = {name: _get_plot_data(grid, state, variable, z_idx, constants) for name, state in states_dict.items()}
@@ -212,7 +213,8 @@ def plot_worst_case_dashboard(grid, time_axis_mins, ts_era5, ts_baseline, ts_wor
     ax_ts.legend(fontsize=11)
     
     # --- Panel B: Optimal Perturbation Map ---
-    ax_map = fig.add_subplot(gs[0, 1], projection=ccrs.PlateCarree(central_longitude=grid.lon_c))
+    native_proj, native_extent = _get_projection_and_extent(grid)
+    ax_map = fig.add_subplot(gs[0, 1], projection=native_proj)
     vmax_pert = float(np.max(np.abs(pert_th_v_2d)))
     if vmax_pert == 0: vmax_pert = 0.1
     
