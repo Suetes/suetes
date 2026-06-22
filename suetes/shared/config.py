@@ -115,6 +115,11 @@ class RenderConfig:
     target_hours: list = field(default_factory=list)
     zoom_extent: list = field(default_factory=list)
     quiver_stride: int = 10
+    dashboard_hours: list = field(default_factory=list)
+    compare_hours: list = field(default_factory=list)
+    energy_hours: list = field(default_factory=list)
+    strip_hours: list = field(default_factory=list)
+    hovmoller_hours: list = field(default_factory=list)
 
 
 

@@ -65,6 +65,11 @@ render:
   quiver_stride: 6
   zoom_extent: [-60.0, -52.0, 45.0, 51.0]
   target_hours: [12, 24, 36, 48]
+  dashboard_hours: [24, 30, 36, 42, 48]
+  compare_hours: [24, 30, 36, 42, 48]
+  energy_hours: [48]
+  strip_hours: [24, 30, 36, 42, 48]
+  hovmoller_hours: [48]
   points:
     - name: "Port aux Basques"
       lat: 47.57

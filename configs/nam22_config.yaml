@@ -63,6 +63,11 @@ render:
   levels_z: [0, 5, 15, 30]
   levels_m: [500.0, 3000.0, 5000.0, 10000.0]
   energy_levels: [5]
+  dashboard_hours: []
+  compare_hours: []
+  energy_hours: []
+  strip_hours: []
+  hovmoller_hours: []
   points:
     - name: "Denver"
       lat: 39.74

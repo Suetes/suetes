@@ -30,6 +30,7 @@ def main():
     ap = argparse.ArgumentParser(description="Unified rendering script (config-driven).")
     ap.add_argument('--config', required=True, help='Path to configuration YAML file.')
     ap.add_argument('--tag', default='', help='Optional experiment tag suffix.')
+    ap.add_argument('--no-zoom', action='store_true', help='Force full domain rendering (ignore zoom_extent).')
     args, _ = ap.parse_known_args()
 
     # Load configuration
@@ -81,82 +82,99 @@ def main():
     final_state = snapshots[-1]
 
     # Convert zoom extent list if present
-    extent = rc.zoom_extent if rc.zoom_extent else None
+    extent = rc.zoom_extent if (rc.zoom_extent and not args.no_zoom) else None
 
-    # 1. Dashboards (final state)
+    # 1. Dashboards (custom dashboard_hours or final state)
+    dash_hours = rc.dashboard_hours if rc.dashboard_hours else [sim_hours_actual]
     if rc.levels_z:
-        print(f"[RENDER] Generating final-state dashboards at logical levels: {rc.levels_z}...")
-        for z in rc.levels_z:
-            visualizer.plot_dashboard(
-                grid, final_state, z_idx=z, sponge_depth=sponge_depth, time_hours=sim_hours_actual,
-                extent=None, quiver_stride=rc.quiver_stride,
-                save_path=os.path.join(plot_dir, f"{RUN_NAME}_dash_z{z}_{sim_hours_actual}h.png"),
-            )
+        print(f"[RENDER] Generating dashboards at logical levels: {rc.levels_z} for hours {dash_hours}...")
+        for h in dash_hours:
+            if h < len(snapshots):
+                for z in rc.levels_z:
+                    visualizer.plot_dashboard(
+                        grid, snapshots[h], z_idx=z, sponge_depth=sponge_depth, time_hours=h,
+                        extent=extent, quiver_stride=rc.quiver_stride,
+                        save_path=os.path.join(plot_dir, f"{RUN_NAME}_dash_z{z}_{h}h.png"),
+                    )
 
     if rc.levels_m:
-        print(f"[RENDER] Generating final-state dashboards at heights: {rc.levels_m} m...")
-        for z in rc.levels_m:
-            visualizer.plot_dashboard(
-                grid, final_state, z_idx=z, sponge_depth=sponge_depth, time_hours=sim_hours_actual,
-                extent=None, quiver_stride=rc.quiver_stride,
-                save_path=os.path.join(plot_dir, f"{RUN_NAME}_dash_z{int(z)}m_{sim_hours_actual}h.png"),
-            )
+        print(f"[RENDER] Generating dashboards at heights: {rc.levels_m} m for hours {dash_hours}...")
+        for h in dash_hours:
+            if h < len(snapshots):
+                for z in rc.levels_m:
+                    visualizer.plot_dashboard(
+                        grid, snapshots[h], z_idx=z, sponge_depth=sponge_depth, time_hours=h,
+                        extent=extent, quiver_stride=rc.quiver_stride,
+                        save_path=os.path.join(plot_dir, f"{RUN_NAME}_dash_z{int(z)}m_{h}h.png"),
+                    )
 
-    # 2. Zoomed/evolution dashboards for specific target hours
-    if rc.target_hours:
+    # 2. Zoomed/evolution dashboards for specific target hours (fallback/backward-compatible)
+    if not rc.dashboard_hours and rc.target_hours:
         print(f"[RENDER] Generating dashboards for target hours: {rc.target_hours}...")
         for h in rc.target_hours:
             if h < len(snapshots):
                 visualizer.plot_dashboard(
                     grid, snapshots[h], z_idx=rc.levels_z[0] if rc.levels_z else 2,
-                    sponge_depth=sponge_depth, time_hours=h, extent=None,
+                    sponge_depth=sponge_depth, time_hours=h, extent=extent,
                     quiver_stride=rc.quiver_stride,
                     save_path=os.path.join(plot_dir, f"{RUN_NAME}_dash_{h}h.png"),
                 )
 
     # 3. Energy spectrum
+    energy_hours = rc.energy_hours if rc.energy_hours else [sim_hours_actual]
     if rc.energy_levels:
-        print(f"[RENDER] Generating energy spectrum for '{rc.energy_var}' at levels {rc.energy_levels}...")
-        for ez in rc.energy_levels:
-            visualizer.plot_energy_spectrum(
-                grid, final_state, rc.energy_var, z_idx=ez, sponge_depth=sponge_depth,
-                save_path=os.path.join(plot_dir, f"{RUN_NAME}_energy_z{ez}_{sim_hours_actual}h.png"),
-            )
+        print(f"[RENDER] Generating energy spectrum for '{rc.energy_var}' at levels {rc.energy_levels} for hours {energy_hours}...")
+        for h in energy_hours:
+            if h < len(snapshots):
+                for ez in rc.energy_levels:
+                    visualizer.plot_energy_spectrum(
+                        grid, snapshots[h], rc.energy_var, z_idx=ez, sponge_depth=sponge_depth,
+                        save_path=os.path.join(plot_dir, f"{RUN_NAME}_energy_z{ez}_{h}h.png"),
+                    )
 
     # 4. Comparison maps with native reference
+    compare_hours = rc.compare_hours if rc.compare_hours else [sim_hours_actual]
     if os.path.exists(native_store) and rc.compare_levels_z:
-        print(f"[RENDER] Generating comparison maps with native reference at levels {rc.compare_levels_z}...")
-        final_era5_state = read_state(native_store, -1)
-        for cz in rc.compare_levels_z:
-            visualizer.plot_comparison(
-                grid, final_state, final_era5_state, rc.compare_var, z_idx=cz, sponge_depth=sponge_depth,
-                save_path=os.path.join(plot_dir, f"{RUN_NAME}_compare_{rc.compare_var}_z{cz}_{sim_hours_actual}h.png"),
-            )
+        print(f"[RENDER] Generating comparison maps with native reference at levels {rc.compare_levels_z} for hours {compare_hours}...")
+        for h in compare_hours:
+            if h < len(snapshots):
+                era5_state_t = read_state(native_store, h)
+                for cz in rc.compare_levels_z:
+                    visualizer.plot_comparison(
+                        grid, snapshots[h], era5_state_t, rc.compare_var, z_idx=cz, sponge_depth=sponge_depth,
+                        save_path=os.path.join(plot_dir, f"{RUN_NAME}_compare_{rc.compare_var}_z{cz}_{h}h.png"),
+                    )
 
     # 5. Level strips
+    strip_hours = rc.strip_hours if rc.strip_hours else [sim_hours_actual]
     if rc.strip_levels_z:
-        print(f"[RENDER] Generating level strips for '{rc.strip_var}'...")
-        visualizer.plot_level_strip(
-            grid, final_state, rc.strip_var, z_indices=rc.strip_levels_z, sponge_depth=sponge_depth,
-            save_path=os.path.join(plot_dir, f"{RUN_NAME}_levels_{rc.strip_var}_{sim_hours_actual}h.png"),
-        )
+        print(f"[RENDER] Generating level strips for '{rc.strip_var}' for hours {strip_hours}...")
+        for h in strip_hours:
+            if h < len(snapshots):
+                visualizer.plot_level_strip(
+                    grid, snapshots[h], rc.strip_var, z_indices=rc.strip_levels_z, sponge_depth=sponge_depth,
+                    save_path=os.path.join(plot_dir, f"{RUN_NAME}_levels_{rc.strip_var}_{h}h.png"),
+                )
 
     # 6. Hovmöller surface anomaly
+    hovmoller_hours = rc.hovmoller_hours if rc.hovmoller_hours else [sim_hours_actual]
     if rc.hovmoller_var:
-        print(f"[RENDER] Calculating Hovmöller anomaly data for '{rc.hovmoller_var}'...")
-        hov_times = list(range(sim_hours_actual + 1))
-        hov_data = []
-        for h in hov_times:
-            sim_state = snapshots[h]
-            bc_state_t = read_state(coarse_store, h)
-            anom = sim_state[rc.hovmoller_var][:, :, 0] - bc_state_t[rc.hovmoller_var][:, :, 0]
-            y_avg_anom = np.mean(anom, axis=1)
-            hov_data.append(y_avg_anom)
+        print(f"[RENDER] Calculating Hovmöller anomaly data for '{rc.hovmoller_var}' for hours {hovmoller_hours}...")
+        for h_limit in hovmoller_hours:
+            if h_limit <= sim_hours_actual:
+                hov_times = list(range(h_limit + 1))
+                hov_data = []
+                for h in hov_times:
+                    sim_state = snapshots[h]
+                    bc_state_t = read_state(coarse_store, h)
+                    anom = sim_state[rc.hovmoller_var][:, :, 0] - bc_state_t[rc.hovmoller_var][:, :, 0]
+                    y_avg_anom = np.mean(anom, axis=1)
+                    hov_data.append(y_avg_anom)
 
-        visualizer.plot_hovmoller(
-            grid, hov_times, np.array(hov_data), variable=f'Surface {rc.hovmoller_var} Anomaly [K]',
-            save_path=os.path.join(plot_dir, f"{RUN_NAME}_hovmoller_{rc.hovmoller_var}_{sim_hours_actual}h.png"),
-        )
+                visualizer.plot_hovmoller(
+                    grid, hov_times, np.array(hov_data), variable=f'Surface {rc.hovmoller_var} Anomaly [K]',
+                    save_path=os.path.join(plot_dir, f"{RUN_NAME}_hovmoller_{rc.hovmoller_var}_{h_limit}h.png"),
+                )
 
     # 7. Slices / Cross sections
     if rc.slices:

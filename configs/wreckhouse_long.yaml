@@ -65,6 +65,11 @@ render:
   quiver_stride: 6
   zoom_extent: [-60.06, -58.56, 46.96, 48.46]
   target_hours: [6, 8, 10, 12]
+  dashboard_hours: [12, 24, 36, 48]
+  compare_hours: [24, 48]
+  energy_hours: [48]
+  strip_hours: [48]
+  hovmoller_hours: [48]
   slices:
     - name: "zoomed_slices_w"
       map_var: "th_v"
