@@ -32,7 +32,7 @@ core:
 
 physics:
   radiation: false
-  nudge: false
+  nudge: true
   microphysics: false
   convection: false
   drag: false

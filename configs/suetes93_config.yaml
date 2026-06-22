@@ -1,0 +1,78 @@
+# suetes_1km_config.yaml -- Les Suetes 1993 benchmark at 1 km (direct downscale)
+
+domain:
+  name: "les_suetes_1km"
+  lat_c: 46.55          # Centered near Grand Étang / Cape Breton Highlands
+  lon_c: -60.85
+  nx: 400               # 400 km domain to allow spatial spin-up from boundaries
+  ny: 400
+  nz: 40
+  dx: 1000.0            # 1 km resolution
+  dy: 1000.0
+  dz: 350.0
+
+time:
+  year: "1993"
+  month: "12"
+  days: ["21", "22"] # The historical benchmark event
+  sim_hours: 36
+
+vertical:
+  kappa: 1.0
+  scale_s: 10000.0
+  n: 1.0
+
+core:
+  type: "split-explicit"
+  dt: 2.5               # Halved from the 2km Wreckhouse run to maintain CFL stability
+  nu_h: 0.08
+  ns: 4
+  alpha: 0.55
+
+physics:
+  radiation: false
+  nudge: true
+  microphysics: false   # Benchmark was run dry
+  convection: false     # Handled explicitly at 1 km
+  drag: true
+  diffusion: true
+  sgs: true             # Keep sub-grid scale diffusion active
+  gwd: false            # Gravity wave drag is obsolete at 1 km
+
+constants:
+  g: 9.81 
+  
+  Rd: 287.0
+  cp: 1004.0
+  cvd: 717.0
+  p0: 100000.0
+  epsilon: 0.622
+
+io:
+  data_dir: "suetes/data"
+  fig_dir: "suetes/plots/suetes_1km"
+  store_format: "zarr"
+  coarsen_window: 1
+  sponge_depth: 30      # Deepened sponge layer to absorb 31km -> 1km wave reflection
+  smooth_sigma: 0.1     # Preserve the steep western escarpment
+  pressure_levels: "buffered"
+  buffer_deg: 2.0
+
+render:
+  levels_z: [2]
+  levels_m: []
+  energy_levels: []
+  quiver_stride: 10
+  zoom_extent: [-61.5, -60.0, 46.0, 47.0]
+  target_hours: [12, 18, 24, 30, 36]
+  dashboard_hours: [18, 24, 30]
+  compare_hours: [12, 24, 36]
+  energy_hours: [36]
+  strip_hours: [12, 24, 36]
+  hovmoller_hours: [36]
+  points:
+    - name: "Grand Etang"
+      lat: 46.55
+      lon: -61.05
+      variable: "wind"
+      units: "km/h"
