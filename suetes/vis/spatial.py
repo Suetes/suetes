@@ -55,12 +55,13 @@ def plot_2d_field(grid, state, variable, z_idx=5, sponge_depth=30, constants=Non
             vmin = data_min
 
     im = ax.pcolormesh(lons, lats, data, transform=ccrs.PlateCarree(), cmap=cmap, vmin=vmin, vmax=vmax)
-    _draw_domain_and_sponge(ax, lons, lats, sponge_depth)
+    _draw_domain_and_sponge(ax, grid, sponge_depth)
 
     if extent is not None:
         ax.set_extent(extent, crs=ccrs.PlateCarree())
     else:
-        ax.set_extent(native_extent, crs=native_proj)
+        ax.set_xlim(float(grid.x_c.min()), float(grid.x_c.max()))
+        ax.set_ylim(float(grid.y_c.min()), float(grid.y_c.max()))
     
     ax.set_title(title or f"{variable.upper()} at Level {z_idx}", fontsize=14)
     ax.gridlines(draw_labels=show_plot, linewidth=0.5, color='gray', alpha=0.5, linestyle='--')
@@ -108,26 +109,20 @@ def plot_quiver_field(grid, state, bg_var='pi', u_var='u', v_var='v', z_idx=5,
     # Background Contour Plot
     im = ax.contourf(lons, lats, bg_data, levels=100, transform=ccrs.PlateCarree(), cmap=cmap, alpha=0.85)
     
-    # Wind Vector Geographic Rotation
-    # The U/V in the model state are grid-relative. We MUST rotate them back to 
-    # Earth-relative (North/East) before plotting them on a map projection!
-    gamma = np.array(grid.proj.get_convergence_angle(Xi, Yi))
-    u_geo = u_grid * np.cos(gamma) - v_grid * np.sin(gamma)
-    v_geo = u_grid * np.sin(gamma) + v_grid * np.cos(gamma)
-
     # Quiver Overlay
     # Slice the arrays to prevent dense black blobs
     s = stride
-    q = ax.quiver(lons[::s, ::s], lats[::s, ::s], u_geo[::s, ::s], v_geo[::s, ::s], 
-                  transform=ccrs.PlateCarree(), pivot='middle', color='black', 
+    q = ax.quiver(Xi[::s, ::s], Yi[::s, ::s], u_grid[::s, ::s], v_grid[::s, ::s], 
+                  transform=native_proj, pivot='middle', color='black', 
                   width=0.003, headwidth=4, headlength=5)
     
-    _draw_domain_and_sponge(ax, lons, lats, sponge_depth)
+    _draw_domain_and_sponge(ax, grid, sponge_depth)
 
     if extent is not None:
         ax.set_extent(extent, crs=ccrs.PlateCarree())
     else:
-        ax.set_extent(native_extent, crs=native_proj)
+        ax.set_xlim(float(grid.x_c.min()), float(grid.x_c.max()))
+        ax.set_ylim(float(grid.y_c.min()), float(grid.y_c.max()))
     
     ax.set_title(title or f"{bg_var.upper()} and Wind Vectors at Level {z_idx}", fontsize=14)
     ax.gridlines(draw_labels=show_plot, linewidth=0.5, color='gray', alpha=0.5, linestyle='--')
@@ -269,10 +264,11 @@ def plot_level_strip(grid, state, variable, z_indices=[0, 5, 15, 30], sponge_dep
         ax.add_feature(cfeature.BORDERS, linewidth=0.6, linestyle=':', edgecolor='gray')
         
         im = ax.pcolormesh(lons, lats, data, transform=ccrs.PlateCarree(), cmap=cmap, vmin=vmin, vmax=vmax)
-        _draw_domain_and_sponge(ax, lons, lats, sponge_depth)
+        _draw_domain_and_sponge(ax, grid, sponge_depth)
         
         ax.set_title(f"Level {z} (~{z_height} m)", fontsize=14)
-        ax.set_extent(native_extent, crs=native_proj)
+        ax.set_xlim(float(grid.x_c.min()), float(grid.x_c.max()))
+        ax.set_ylim(float(grid.y_c.min()), float(grid.y_c.max()))
         
         # Add an individual colorbar to each subplot
         fig.colorbar(im, ax=ax, orientation='vertical', extend=extend, pad=0.02, fraction=0.046)
@@ -300,16 +296,13 @@ def plot_adjoint_overlay(grid, initial_state, sensitivity_2d, u_var='u', v_var='
     im = ax.contourf(lons, lats, sensitivity_2d, levels=50, transform=ccrs.PlateCarree(), cmap='RdBu_r', vmin=-vmax, vmax=vmax, alpha=0.85)
     
     # 2. Plot Forward Winds on top
-    gamma = np.array(grid.proj.get_convergence_angle(Xi, Yi))
-    u_geo = u_grid * np.cos(gamma) - v_grid * np.sin(gamma)
-    v_geo = u_grid * np.sin(gamma) + v_grid * np.cos(gamma)
-
     s = stride
-    q = ax.quiver(lons[::s, ::s], lats[::s, ::s], u_geo[::s, ::s], v_geo[::s, ::s], 
-                  transform=ccrs.PlateCarree(), pivot='middle', color='black', alpha=0.6)
+    q = ax.quiver(Xi[::s, ::s], Yi[::s, ::s], u_grid[::s, ::s], v_grid[::s, ::s], 
+                  transform=native_proj, pivot='middle', color='black', alpha=0.6)
     
-    _draw_domain_and_sponge(ax, lons, lats, sponge_depth)
-    ax.set_extent(native_extent, crs=native_proj)
+    _draw_domain_and_sponge(ax, grid, sponge_depth)
+    ax.set_xlim(float(grid.x_c.min()), float(grid.x_c.max()))
+    ax.set_ylim(float(grid.y_c.min()), float(grid.y_c.max()))
     ax.set_title(r"Adjoint Sensitivity overlaid with Initial Wind Field at $t=0$", fontsize=14)
     fig.colorbar(im, ax=ax, orientation='horizontal', pad=0.05, label=r'Absolute Impact on Wave Energy per $+1K$ Perturbation')
     

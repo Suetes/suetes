@@ -89,7 +89,7 @@ def main():
         for z in rc.levels_z:
             visualizer.plot_dashboard(
                 grid, final_state, z_idx=z, sponge_depth=sponge_depth, time_hours=sim_hours_actual,
-                extent=extent, quiver_stride=rc.quiver_stride,
+                extent=None, quiver_stride=rc.quiver_stride,
                 save_path=os.path.join(plot_dir, f"{RUN_NAME}_dash_z{z}_{sim_hours_actual}h.png"),
             )
 
@@ -98,7 +98,7 @@ def main():
         for z in rc.levels_m:
             visualizer.plot_dashboard(
                 grid, final_state, z_idx=z, sponge_depth=sponge_depth, time_hours=sim_hours_actual,
-                extent=extent, quiver_stride=rc.quiver_stride,
+                extent=None, quiver_stride=rc.quiver_stride,
                 save_path=os.path.join(plot_dir, f"{RUN_NAME}_dash_z{int(z)}m_{sim_hours_actual}h.png"),
             )
 
@@ -109,7 +109,7 @@ def main():
             if h < len(snapshots):
                 visualizer.plot_dashboard(
                     grid, snapshots[h], z_idx=rc.levels_z[0] if rc.levels_z else 2,
-                    sponge_depth=sponge_depth, time_hours=h, extent=extent,
+                    sponge_depth=sponge_depth, time_hours=h, extent=None,
                     quiver_stride=rc.quiver_stride,
                     save_path=os.path.join(plot_dir, f"{RUN_NAME}_dash_{h}h.png"),
                 )

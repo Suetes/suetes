@@ -134,7 +134,7 @@ def plot_slice_locator_dashboard(grid, state, map_var='th_v', slice_var='w', map
     y_colors = ['#1982C4', '#6A4C93', '#F15BB5'] # Distinct colors for Y slices (Vertical cuts)
     
     fig = plt.figure(figsize=(20, 14))
-    gs = gridspec.GridSpec(2, 2, height_ratios=[1, 1.5], hspace=0.25, wspace=0.15)
+    gs = gridspec.GridSpec(2, 2, height_ratios=[1.3, 1], hspace=0.25, wspace=0.15)
     
     map_data = _get_plot_data(grid, state, map_var, map_z, constants)
     z_height = _get_level_height(grid, map_z)
@@ -148,7 +148,7 @@ def plot_slice_locator_dashboard(grid, state, map_var='th_v', slice_var='w', map
     def draw_locator_map(ax, lines_indices, colors, is_x_slice):
         ax.add_feature(cfeature.COASTLINE, linewidth=1.0)
         im_map = ax.pcolormesh(lons, lats, map_data, transform=ccrs.PlateCarree(), cmap='RdBu_r')
-        _draw_domain_and_sponge(ax, lons, lats, sponge_depth)
+        _draw_domain_and_sponge(ax, grid, sponge_depth)
         
         for idx, color in zip(lines_indices, colors):
             if is_x_slice: # Drawing a line across constant Y
@@ -157,7 +157,8 @@ def plot_slice_locator_dashboard(grid, state, map_var='th_v', slice_var='w', map
                 ax.plot(lons[idx, :], lats[idx, :], color=color, linewidth=2.5, transform=ccrs.PlateCarree(), label=f'X-idx: {idx}')
         
         ax.legend(loc='upper right')
-        ax.set_extent(native_extent, crs=native_proj)
+        ax.set_xlim(float(grid.x_c.min()), float(grid.x_c.max()))
+        ax.set_ylim(float(grid.y_c.min()), float(grid.y_c.max()))
         ax.set_title(f"Locator Map: {map_var} at Level {map_z} (~{z_height}m)", fontsize=14)
         return im_map
 

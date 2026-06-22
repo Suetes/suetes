@@ -39,32 +39,36 @@ def _get_plot_data(grid, state, variable, z_level, constants=None):
         # Extract logical grid index
         return data_3d[:, :, int(z_level)]
 
-def _draw_domain_and_sponge(ax, lons, lats, sponge_depth):
-    """Helper to draw domain boundaries and Davies sponge extents."""
-    # Domain Boundaries
-    ax.plot(lons[0, :], lats[0, :], 'k-', transform=ccrs.PlateCarree(), linewidth=1.5)
-    ax.plot(lons[-1, :], lats[-1, :], 'k-', transform=ccrs.PlateCarree(), linewidth=1.5)
-    ax.plot(lons[:, 0], lats[:, 0], 'k-', transform=ccrs.PlateCarree(), linewidth=1.5)
-    ax.plot(lons[:, -1], lats[:, -1], 'k-', transform=ccrs.PlateCarree(), linewidth=1.5)
-
-    # Sponge Boundaries
+def _draw_domain_and_sponge(ax, grid, sponge_depth):
+    """Helper to draw domain boundaries and Davies sponge extents using native coordinates."""
+    # Since the axis projection is ccrs.Stereographic matching grid.proj, we can plot directly in grid coordinates (meters)
+    x0, x1 = float(grid.x_c.min()), float(grid.x_c.max())
+    y0, y1 = float(grid.y_c.min()), float(grid.y_c.max())
+    
+    proj, _ = _get_projection_and_extent(grid)
+    
+    # Outer domain boundaries
+    ax.plot([x0, x1, x1, x0, x0], [y0, y0, y1, y1, y0], 'k-', linewidth=1.5, transform=proj)
+    
     if sponge_depth > 0:
-        sd = sponge_depth
-        kwargs = {'color': 'k', 'linestyle': '--', 'transform': ccrs.PlateCarree(), 'linewidth': 1.0, 'alpha': 0.7}
-        ax.plot(lons[sd, sd:-sd], lats[sd, sd:-sd], **kwargs)
-        ax.plot(lons[-sd-1, sd:-sd], lats[-sd-1, sd:-sd], **kwargs)
-        ax.plot(lons[sd:-sd, sd], lats[sd:-sd, sd], **kwargs)
-        ax.plot(lons[sd:-sd, -sd-1], lats[sd:-sd, -sd-1], **kwargs)
-
-        # Grid-perfect dimming mask
-        ny, nx = lons.shape
-        mask = np.ones((ny, nx))
-        mask[sd:-sd, sd:-sd] = np.nan # Keep interior transparent
+        # Sponge boundaries are located at sponge_depth * dx/dy from the edges
+        xs0 = x0 + sponge_depth * grid.dx
+        xs1 = x1 - sponge_depth * grid.dx
+        ys0 = y0 + sponge_depth * grid.dy
+        ys1 = y1 - sponge_depth * grid.dy
         
-        cmap_white = mcolors.ListedColormap(['white'])
-        # zorder=4 ensures it draws over the data but under the coastlines/borders
-        ax.pcolormesh(lons, lats, mask, transform=ccrs.PlateCarree(), 
-                      cmap=cmap_white, alpha=0.5, zorder=4)
+        ax.plot([xs0, xs1, xs1, xs0, xs0], [ys0, ys0, ys1, ys1, ys0], 'k--', linewidth=1.0, alpha=0.7, transform=proj)
+        
+        # Grid-perfect dimming mask using Rectangle patches
+        import matplotlib.patches as patches
+        rects = [
+            patches.Rectangle((x0, y0), xs0 - x0, y1 - y0, facecolor='white', alpha=0.5, zorder=4, transform=proj),
+            patches.Rectangle((xs1, y0), x1 - xs1, y1 - y0, facecolor='white', alpha=0.5, zorder=4, transform=proj),
+            patches.Rectangle((xs0, y0), xs1 - xs0, ys0 - y0, facecolor='white', alpha=0.5, zorder=4, transform=proj),
+            patches.Rectangle((xs0, ys1), xs1 - xs0, y1 - ys1, facecolor='white', alpha=0.5, zorder=4, transform=proj)
+        ]
+        for r in rects:
+            ax.add_patch(r)
 
 def _get_level_height(grid, z_idx):
     """Returns the domain-averaged physical height of a logical model level."""
