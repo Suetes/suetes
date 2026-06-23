@@ -36,6 +36,7 @@ def build_dynamical_core(core_type, grid, operators, constants, initial_state,
             "nu_div_factor": 0.1,
             "nu_h_factor": 0.1,
             "N_bv": 0.01,
+            "alpha": 0.55,
         }
         # Apply any explicit user overrides passed via kwargs
         params.update(kwargs)
@@ -48,7 +49,7 @@ def build_dynamical_core(core_type, grid, operators, constants, initial_state,
             N_bv=params["N_bv"],
             physics_suite=physics_suite, interior_mask=interior_mask,
         )
-        stepper = SISLStepper3D(physics, params["dt"])
+        stepper = SISLStepper3D(physics, params["dt"], alpha=params["alpha"])
         return stepper, params["dt"]
         
     elif core_str == "split-explicit":
@@ -61,6 +62,7 @@ def build_dynamical_core(core_type, grid, operators, constants, initial_state,
             "nu_div_factor": 0.03,   # Lowered by default due to smaller explicit dt
             "nu_h_factor": 0.03,
             "N_bv": 0.01,
+            "alpha": 0.55,
         }
         params.update(kwargs)
         
@@ -72,7 +74,7 @@ def build_dynamical_core(core_type, grid, operators, constants, initial_state,
             N_bv=params["N_bv"],
             physics_suite=physics_suite, interior_mask=interior_mask,
         )
-        stepper = SplitExplicitStepper3D(physics, dt=params["dt"], ns=params["ns"])
+        stepper = SplitExplicitStepper3D(physics, dt=params["dt"], ns=params["ns"], alpha=params["alpha"])
         return stepper, params["dt"]
         
     else:
@@ -336,16 +338,18 @@ class SemiImplicitSolver3D:
     Couples the 3D linear operator $\mathcal{L}(\mathbf{x})$ with the 
     `VerticalPreconditioner` to solve for the implicit stabilizing adjustments.
     """
-    def __init__(self, physics, dt):
+    def __init__(self, physics, dt, alpha=0.55):
         r"""
         Initializes the implicit solver.
 
         Args:
             physics (Euler3D): The dynamical core linear operator definition.
             dt (float): Integration time step $\Delta t$ [s].
+            alpha (float, optional): Semi-implicit off-centering parameter. Defaults to 0.55.
         """
         self.physics = physics
         self.dt = dt
+        self.alpha = alpha
         self.pi_scale = 100000.0
 
     def solve(self, rhs_prime, bg_precomputed):
@@ -362,7 +366,7 @@ class SemiImplicitSolver3D:
         rhs_scaled = {k: rhs_prime[k] * self.pi_scale if k == 'pi' else rhs_prime[k] for k in rhs_prime}
 
         # Setup preconditioner
-        preconditioner = VerticalPreconditioner(self.physics, self.dt)
+        preconditioner = VerticalPreconditioner(self.physics, self.dt, alpha=self.alpha)
         # Call the banded physics pre-computation!
         preconditioner.precompute_banded(bg_precomputed)  
 
@@ -524,20 +528,22 @@ class SISLStepper3D:
     4. State assembly and a-posteriori divergence damping.
     5. Boundary condition blending and thermodynamic reconciliation.
     """
-    def __init__(self, physics, dt, use_checkpointing = False):
+    def __init__(self, physics, dt, alpha=0.55, use_checkpointing = False):
         r"""
         Initializes the integration stepper.
 
         Args:
             physics (Euler3D): The dynamical core configuration.
             dt (float): Integration time step $\Delta t$ [s].
+            alpha (float, optional): Semi-implicit off-centering parameter. Defaults to 0.55.
             use_checkpointing (bool): Enables JAX gradient checkpointing (rematerialization) 
                 to trade re-computation for memory savings during adjoint/autodiff tasks.
         """
         self.physics, self.dt = physics, dt
+        self.alpha = alpha
         self.advector = SemiLagrangianAdvector3D(physics.grid, physics, dt)
         self.ffsl_advector = FluxFormAdvector(physics.grid, dt)
-        self.implicit_solver = SemiImplicitSolver3D(physics, dt)
+        self.implicit_solver = SemiImplicitSolver3D(physics, dt, alpha=alpha)
         self.use_checkpointing = use_checkpointing
         
         # Ask the physics suite for the active tracers
@@ -589,7 +595,7 @@ class SISLStepper3D:
             dict: The updated prognostic state at $t + \Delta t$.
         """
 
-        alpha = 0.55
+        alpha = self.alpha
 
         if 'eta_dot' not in state: state['eta_dot'] = jnp.zeros_like(state['w'])
             
@@ -629,9 +635,9 @@ class SISLStepper3D:
         # Pass ml_params as the 4th argument to the physics evaluator
         tends_n = cp_get_tendencies(state_prime_n, bg_precomputed, True, ml_params)
         
-        u_in = state['u'] + (1.0 - alpha) * self.dt * tends_n['u']
-        v_in = state['v'] + (1.0 - alpha) * self.dt * tends_n['v']
-        w_in = state['w'] + (1.0 - alpha) * self.dt * tends_n['w']
+        u_in = state['u'] + self.dt * ((1.0 - alpha) * tends_n['u'] + alpha * tends_n.get('phys_diff_u', 0.0))
+        v_in = state['v'] + self.dt * ((1.0 - alpha) * tends_n['v'] + alpha * tends_n.get('phys_diff_v', 0.0))
+        w_in = state['w'] + self.dt * ((1.0 - alpha) * tends_n['w'] + alpha * tends_n.get('phys_diff_w', 0.0))
         pi_prime_in = state_prime_n['pi'] + (1.0 - alpha) * self.dt * tends_n['pi']
 
         # Apply Eulerian physics tendencies to the thermodynamics before advection
@@ -796,16 +802,18 @@ class SplitExplicitStepper3D:
     By bypassing the Semi-Implicit Semi-Lagrangian (SISL) framework, this method is 
     strictly Eulerian and well-suited for high-resolution, small-scale dynamics.
     """
-    def __init__(self, physics, dt, ns):
+    def __init__(self, physics, dt, ns, alpha=0.55):
         """
         Args:
             physics (Euler3D): The dynamical core configuration.
             dt (float): Large time step for low-frequency modes [s].
             ns (int): Ratio of the RK3 time step to the acoustic time step.
+            alpha (float, optional): Acoustic off-centering parameter. Defaults to 0.55.
         """
         self.physics = physics
         self.dt = dt
         self.ns = ns  
+        self.alpha = alpha
         
         # Dynamically assign acoustic steps per RK3 stage to respect CFL limits
         self.ns_stage1 = max(1, round(self.ns / 3))
@@ -1303,7 +1311,7 @@ class SplitExplicitStepper3D:
                 - pi_pp_next (jnp.ndarray): Updated pressure perturbation $\pi''$.
                 - w_pp_next (jnp.ndarray): Updated vertical velocity perturbation $w''$.
         """
-        alpha = 0.55
+        alpha = self.alpha
         cp = self.physics.c['cp']
         
         u_pp_m = self.physics.op.avg(u_pp, axis=0, from_loc='u', to_loc='m')

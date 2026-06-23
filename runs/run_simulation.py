@@ -132,13 +132,12 @@ def main():
         suite.add_tendency_scheme(NewtonianRelaxation(tau_relax_hours=6.0))
 
     nu_h = p.nu_h
-    core_kwargs = dict(dt=dt, nu_div_factor=nu_h, nu_h_factor=nu_h)
+    core_kwargs = dict(dt=dt, nu_div_factor=nu_h, nu_h_factor=nu_h, alpha=p.alpha)
     if core_type == 'split-explicit':
         core_kwargs['ns'] = p.ns
-        core_info = f"ns={core_kwargs['ns']} acoustic substeps"
+        core_info = f"ns={core_kwargs['ns']} acoustic substeps | alpha={p.alpha:g}"
     else:
-        core_kwargs['alpha'] = p.alpha
-        core_info = f"alpha={core_kwargs['alpha']:g}"
+        core_info = f"alpha={p.alpha:g}"
     stepper, dt = build_dynamical_core(core_type, grid, operators, constants, initial_state,
                                        physics_suite=suite, interior_mask=interior_mask,
                                        **core_kwargs)

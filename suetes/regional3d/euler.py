@@ -272,12 +272,19 @@ class Euler3D:
         # Diffusion and physics are only done in the explicit part
         if is_explicit:
 
+            phys_diff_u = 0.0
+            phys_diff_v = 0.0
+            phys_diff_w = 0.0
+
             # Diffusion
             if self.nu_h > 0.0 or self.nu_div > 0.0:
                 diff_tends = self.diffusion.get_tendencies(state_prime, bg_precomputed=bg)
                 tend_u += diff_tends['u']
                 tend_v += diff_tends['v']
                 tend_w += diff_tends['w']
+                phys_diff_u += diff_tends['u']
+                phys_diff_v += diff_tends['v']
+                phys_diff_w += diff_tends['w']
 
             # Call physics suite
             if self.physics_suite is not None:
@@ -287,10 +294,19 @@ class Euler3D:
 
                 # Add them to the dynamical core's right-hand side
                 for k in phys_tends:
-                    if k == 'u': tend_u += phys_tends['u']
-                    if k == 'v': tend_v += phys_tends['v']
-                    if k == 'w': tend_w += phys_tends['w']
+                    if k == 'u': 
+                        tend_u += phys_tends['u']
+                        phys_diff_u += phys_tends['u']
+                    if k == 'v': 
+                        tend_v += phys_tends['v']
+                        phys_diff_v += phys_tends['v']
+                    if k == 'w': 
+                        tend_w += phys_tends['w']
+                        phys_diff_w += phys_tends['w']
                     if k == 'th_v': tend_th_v += phys_tends['th_v']
+
+            return {'u': tend_u, 'v': tend_v, 'w': tend_w, 'pi': tend_pi, 'th_v': tend_th_v, 
+                    'phys_diff_u': phys_diff_u, 'phys_diff_v': phys_diff_v, 'phys_diff_w': phys_diff_w}
 
         return {'u': tend_u, 'v': tend_v, 'w': tend_w, 'pi': tend_pi, 'th_v': tend_th_v}
 
