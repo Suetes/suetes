@@ -22,7 +22,7 @@ def run_bubble_at_resolution(dx):
     # Establish default scales based on core layout choice
     if CORE_TYPE.lower() == "sisl":
         dt = (dx / 125.0) * 5.0  # SISL timesteps map linearly to grid sizes
-        core_kwargs = {"dt": dt, "nu_div_factor": 0.0, "nu_h_factor": 0.0, "damp_height": 7500.0, "max_damp": 0.05}
+        core_kwargs = {"dt": dt, "nu_div_factor": 0.0, "nu_h_factor": 0.0, "damp_height": 7500.0, "max_damp": 0.05, "alpha": 0.5}
     elif CORE_TYPE.lower() == "split-explicit":
         dt = (dx / 125.0) * 2.5  # Split explicit large step obeys advection limits
         core_kwargs = {"dt": dt, "ns": 24, "nu_div_factor": 0.0, "nu_h_factor": 0.0, "damp_height": 7500.0, "max_damp": 0.05}

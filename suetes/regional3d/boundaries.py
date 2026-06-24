@@ -120,28 +120,69 @@ class DaviesSponge:
                 
         return blended
 
-class BenchmarkXSponge:
+class BenchmarkSponge:
     """
-    Simplified 1D relaxation sponge for pseudo-2D benchmark cases.
+    Symmetric boundary relaxation sponge for benchmark simulations.
+    Supports relaxation along X, Y, or both directions.
     """
-    def __init__(self, nx, sponge_depth=10):
+    def __init__(self, nx, ny=None, sponge_depth=10, axes=('x',), blend_vars=None):
         self.nx = nx
+        self.ny = ny
         self.sponge_depth = sponge_depth
+        self.axes = axes
         
-        x_idx = jnp.arange(nx, dtype=jnp.float32)
-        dist_x = jnp.minimum(x_idx, nx - x_idx)
-        weight_x = jnp.where(dist_x < sponge_depth, 
-                             jnp.cos(0.5 * jnp.pi * dist_x / sponge_depth)**2, 0.0)
-        self.mask_m = weight_x[:, None, None]
-        self.mask_u = jnp.pad(self.mask_m, ((0, 1), (0, 0), (0, 0)), mode='edge')
+        if blend_vars is None:
+            if ny is None:
+                # Keep original behaviour of not relaxing vertical velocity for 1D/2D slice cases
+                self.blend_vars = ['u', 'v', 'th_v', 'pi', 'rho', 'q_tr']
+            else:
+                self.blend_vars = ['u', 'v', 'w', 'th_v', 'pi', 'rho', 'q_tr']
+        else:
+            self.blend_vars = blend_vars
+
+        # Initialize mask along X
+        if 'x' in axes:
+            x_idx = jnp.arange(nx, dtype=jnp.float32)
+            dist_x = jnp.minimum(x_idx, nx - 1 - x_idx)
+            weight_x = jnp.where(dist_x < sponge_depth, 
+                                 jnp.cos(0.5 * jnp.pi * dist_x / sponge_depth)**2, 0.0)
+        else:
+            weight_x = jnp.zeros(nx, dtype=jnp.float32)
+
+        # Initialize mask along Y
+        if 'y' in axes and ny is not None:
+            y_idx = jnp.arange(ny, dtype=jnp.float32)
+            dist_y = jnp.minimum(y_idx, ny - 1 - y_idx)
+            weight_y = jnp.where(dist_y < sponge_depth, 
+                                 jnp.cos(0.5 * jnp.pi * dist_y / sponge_depth)**2, 0.0)
+        else:
+            weight_y = jnp.zeros(ny if ny is not None else 1, dtype=jnp.float32)
+
+        # Combine weight_x and weight_y to form 2D/3D mask
+        if ny is not None:
+            mask_2d = 1.0 - (1.0 - weight_x[:, None]) * (1.0 - weight_y[None, :])
+            self.mask_m = mask_2d[:, :, None] # shape (nx, ny, 1) to broadcast to z
+            self.mask_u = jnp.pad(self.mask_m, ((0, 1), (0, 0), (0, 0)), mode='edge')
+            self.mask_v = jnp.pad(self.mask_m, ((0, 0), (0, 1), (0, 0)), mode='edge')
+            self.mask_w = self.mask_m
+        else:
+            self.mask_m = weight_x[:, None, None] # shape (nx, 1, 1)
+            self.mask_u = jnp.pad(self.mask_m, ((0, 1), (0, 0), (0, 0)), mode='edge')
+            self.mask_v = self.mask_m
+            self.mask_w = self.mask_m
 
     def blend(self, state_in, ext_state):
         blended = {}
-        blend_vars = ['u', 'v', 'th_v', 'pi', 'rho', 'q_tr'] 
-        
         for k in state_in.keys():
-            if k in blend_vars and k in ext_state:
-                m = self.mask_u if k == 'u' else self.mask_m
+            if k in self.blend_vars and k in ext_state:
+                if k == 'u':
+                    m = self.mask_u
+                elif k == 'v':
+                    m = self.mask_v
+                elif k == 'w':
+                    m = self.mask_w
+                else:
+                    m = self.mask_m
                 blended[k] = (1.0 - m) * state_in[k] + m * ext_state[k]
             else:
                 blended[k] = state_in[k]

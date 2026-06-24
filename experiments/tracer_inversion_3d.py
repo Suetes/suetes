@@ -12,7 +12,7 @@ from suetes.regional3d.euler import Euler3D
 from suetes.regional3d.operators import CGridOperator3D
 from suetes.regional3d.steppers import build_dynamical_core
 from suetes.physics.base import PhysicsSuite
-from suetes.regional3d.boundaries import BenchmarkXSponge
+from suetes.regional3d.boundaries import BenchmarkSponge
 
 from suetes.shared.driver import Simulation
 from suetes.shared.optimization import OptaxSolver
@@ -58,7 +58,7 @@ bg_ref = {
     'th_v': physics.theta_bg
 }
 
-x_sponge = BenchmarkXSponge(nx=nx, sponge_depth=10)
+x_sponge = BenchmarkSponge(nx=nx, sponge_depth=10, axes=('x',))
 
 def bc_fn(state_in, forcing=None):
     ext_state = {

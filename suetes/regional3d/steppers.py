@@ -823,6 +823,8 @@ class SplitExplicitStepper3D:
         self.dtau_stage1 = (self.dt / 3.0) / float(self.ns_stage1)
         self.dtau_stage2 = (self.dt / 2.0) / float(self.ns_stage2)
         self.dtau_stage3 = self.dt / float(self.ns_stage3)
+        
+        self.ffsl_advector = FluxFormAdvector(physics.grid, dt)
 
     def step(self, state, t, forcing, bc_fn, ml_params=None):
         r"""
@@ -941,6 +943,17 @@ class SplitExplicitStepper3D:
         # =====================================================================
         # FINAL STATE ASSEMBLY & BOUNDARIES
         # =====================================================================
+
+        # Advect passive tracers using the mass-conserving FFSL advector
+        if original_suite is not None:
+            for key in original_suite.tracer_keys:
+                if key in state_t:
+                    # Advect the volumetric tracer concentration (rho * q)
+                    rho_tr_next = self.ffsl_advector.advect_3d_split(
+                        state_t['rho'] * state_t[key], state_t, bg_precomputed
+                    )
+                    # Convert back to mixing ratio using the final density
+                    state_next[key] = rho_tr_next / (state_next['rho'] + self.physics.c.get('eps', 1e-15))
 
         # Physical state updates (e.g., Saturation adjustment)
         if self.physics.physics_suite is not None:

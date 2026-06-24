@@ -11,7 +11,7 @@ from suetes.regional3d.geometry import RegionalGrid3D
 from suetes.regional3d.euler import Euler3D
 from suetes.regional3d.operators import CGridOperator3D
 from suetes.regional3d.steppers import build_dynamical_core
-from suetes.regional3d.boundaries import BenchmarkXSponge
+from suetes.regional3d.boundaries import BenchmarkSponge
 from suetes.shared.driver import Simulation
 
 output_dir = "suetes/plots/inversion"
@@ -63,7 +63,7 @@ initial_state = {
     'th_v': bg_ref['th_v']
 }
 
-x_sponge = BenchmarkXSponge(nx=nx, sponge_depth=10)
+x_sponge = BenchmarkSponge(nx=nx, sponge_depth=10, axes=('x',))
 
 def bc_fn(state_in, forcing=None):
     ext_state = {
