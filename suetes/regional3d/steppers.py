@@ -37,6 +37,7 @@ def build_dynamical_core(core_type, grid, operators, constants, initial_state,
             "nu_h_factor": 0.1,
             "N_bv": 0.01,
             "alpha": 0.55,
+            "use_limiter": False,
         }
         # Apply any explicit user overrides passed via kwargs
         params.update(kwargs)
@@ -49,7 +50,7 @@ def build_dynamical_core(core_type, grid, operators, constants, initial_state,
             N_bv=params["N_bv"],
             physics_suite=physics_suite, interior_mask=interior_mask,
         )
-        stepper = SISLStepper3D(physics, params["dt"], alpha=params["alpha"])
+        stepper = SISLStepper3D(physics, params["dt"], alpha=params["alpha"], use_limiter=params["use_limiter"])
         return stepper, params["dt"]
         
     elif core_str == "split-explicit":
@@ -528,7 +529,7 @@ class SISLStepper3D:
     4. State assembly and a-posteriori divergence damping.
     5. Boundary condition blending and thermodynamic reconciliation.
     """
-    def __init__(self, physics, dt, alpha=0.55, use_checkpointing = False):
+    def __init__(self, physics, dt, alpha=0.55, use_limiter=False, use_checkpointing = False):
         r"""
         Initializes the integration stepper.
 
@@ -536,11 +537,13 @@ class SISLStepper3D:
             physics (Euler3D): The dynamical core configuration.
             dt (float): Integration time step $\Delta t$ [s].
             alpha (float, optional): Semi-implicit off-centering parameter. Defaults to 0.55.
+            use_limiter (bool, optional): Toggles the advection limiter. Defaults to False.
             use_checkpointing (bool): Enables JAX gradient checkpointing (rematerialization) 
                 to trade re-computation for memory savings during adjoint/autodiff tasks.
         """
         self.physics, self.dt = physics, dt
         self.alpha = alpha
+        self.use_limiter = use_limiter
         self.advector = SemiLagrangianAdvector3D(physics.grid, physics, dt)
         self.ffsl_advector = FluxFormAdvector(physics.grid, dt)
         self.implicit_solver = SemiImplicitSolver3D(physics, dt, alpha=alpha)
@@ -674,13 +677,13 @@ class SISLStepper3D:
             cp_advect_ffsl = self.ffsl_advector.advect_3d_split
 
         # Advect the fields
-        R_eta_dot = -(1.0 - alpha) * cp_advect_cubic(residual_n, coords_w, False)
+        R_eta_dot = -(1.0 - alpha) * cp_advect_cubic(residual_n, coords_w, self.use_limiter)
 
-        rhs_u = cp_advect_cubic(u_in, coords_u, False)
-        rhs_v = cp_advect_cubic(v_in, coords_v, False)
-        rhs_w = cp_advect_cubic(w_in, coords_w, False)
-        rhs_pi_prime = cp_advect_cubic(pi_prime_in, coords_m, False)
-        th_v_prime_next = cp_advect_cubic(th_v_prime_in, coords_m, False)
+        rhs_u = cp_advect_cubic(u_in, coords_u, self.use_limiter)
+        rhs_v = cp_advect_cubic(v_in, coords_v, self.use_limiter)
+        rhs_w = cp_advect_cubic(w_in, coords_w, self.use_limiter)
+        rhs_pi_prime = cp_advect_cubic(pi_prime_in, coords_m, self.use_limiter)
+        th_v_prime_next = cp_advect_cubic(th_v_prime_in, coords_m, self.use_limiter)
         
         # Advect mass with checkpointed FFSL scheme
         rho_next = cp_advect_ffsl(state['rho'], state, bg_precomputed)

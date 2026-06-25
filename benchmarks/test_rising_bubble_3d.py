@@ -19,15 +19,23 @@ os.makedirs(output_dir, exist_ok=True)
 CORE_TYPE = "sisl"  # Toggle to "sisl" or "split-explicit"
 t_end = 1000.0 
 
-# --- SETUP GRID & CORE-SPECIFIC TIME STEPS ---
-nx, ny, nz = 80, 3, 80
-dx, dy, dz = 125.0, 125.0, 125.0  # 125m resolution
+dx, dy, dz = 20.0, 20.0, 20.0  # Resolution (e.g. 125.0 or 50.0)
+
+# Dynamically calculate grid cells to preserve a 10 km x 10 km physical domain
+domain_width = 10000.0
+domain_height = 10000.0
+nx = int(domain_width / dx)
+ny = 3
+nz = int(domain_height / dz)
+
+# Base stable timestep and reference resolution (CFL condition)
+ref_dx = 125.0
+ref_dt = 2.5
+dt = ref_dt * (min(dx, dy, dz) / ref_dx)
 
 if CORE_TYPE.lower() == "sisl":
-    dt = 2.5  
-    core_kwargs = {"dt": dt, "nu_div_factor": 0.0, "nu_h_factor": 0.0, "damp_height": 7500.0, "max_damp": 0.05, "N_bv": 0.0}
+    core_kwargs = {"dt": dt, "nu_div_factor": 0.1, "nu_h_factor": 0.1, "damp_height": 7500.0, "max_damp": 0.05, "N_bv": 0.0}
 elif CORE_TYPE.lower() == "split-explicit":
-    dt = 2.5   
     core_kwargs = {"dt": dt, "ns": 12, "nu_div_factor": 0.0, "nu_h_factor": 0.0, "damp_height": 7500.0, "max_damp": 0.05, "N_bv": 0.0}
 
 grid = RegionalGrid3D(nx, ny, nz, dx, dy, dz, lat_center=0.0, lon_center=0.0)
@@ -76,15 +84,17 @@ final_state = sim.run(state, t_start=0.0, t_end=t_end, chunk_steps=20)
 
 # --- VISUALIZE RESULTS ---
 perturbation = final_state['th_v'][:, 1, :] - bg_ref['th_v'][:, 1, :]
+max_val = float(jnp.max(jnp.abs(perturbation)))
+levels = jnp.linspace(-max_val, max_val, 101)
 
 plt.figure(figsize=(10, 8))
-plt.contourf(grid.x_m / 1000.0, grid.z_m / 1000.0, perturbation.T, levels=40, cmap='RdBu_r')
-plt.colorbar(label='Potential Temp Perturbation (K)')
-plt.title(f'{CORE_TYPE.capitalize()} Warm Bubble at T = {t_end}s')
+plt.contourf(grid.x_m / 1000.0, grid.z_m / 1000.0, perturbation.T, levels=levels, cmap='RdBu_r')
+plt.colorbar(label='Potential temperature perturbation (K)')
+# plt.title(f'{CORE_TYPE.capitalize()} warm bubble at T = {t_end}s')
 plt.xlabel('Distance (km)')
 plt.ylabel('Altitude (km)')
 
-img_path = f'{output_dir}/rising_bubble_{CORE_TYPE.lower()}_3d_{t_end}.png'
+img_path = f'{output_dir}/rising_bubble_{CORE_TYPE.lower()}_3d_{int(dx)}m_{t_end}s.png'
 plt.savefig(img_path, dpi=150, bbox_inches='tight')
 print(f"[PLOTTING] Saved plot to '{img_path}'")
 

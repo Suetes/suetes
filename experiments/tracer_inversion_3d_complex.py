@@ -303,6 +303,11 @@ for col_idx, step_idx in enumerate(snapshot_indices):
     
     # Plot true source location
     ax_top.scatter([true_params[0]], [true_params[1]], color='green', marker='x', s=100, linewidths=2.0, label='True source' if col_idx == 0 else "", zorder=6)
+
+    # Plot sensor locations
+    sensor_x_np = [loc[0] for loc in sensor_locs]
+    sensor_y_np = [loc[1] for loc in sensor_locs]
+    ax_top.scatter(sensor_x_np, sensor_y_np, color='red', marker='^', s=80, label='Sensor towers', edgecolor='black', zorder=3)
     
     ax_top.set_title(f"t = {t_min:.1f} mins", fontsize=12, fontweight='semibold')
     ax_top.set_xlim([-12.5, 12.5])
@@ -311,7 +316,7 @@ for col_idx, step_idx in enumerate(snapshot_indices):
     
     if col_idx == 0:
         ax_top.set_ylabel("y (km)", fontsize=11, fontweight='semibold')
-        ax_top.legend(loc='upper right', framealpha=0.9, fontsize=9)
+        ax_top.legend(loc='lower right', framealpha=0.9, fontsize=9)
     else:
         ax_top.set_yticklabels([])
         
@@ -336,21 +341,21 @@ for col_idx, step_idx in enumerate(snapshot_indices):
     
     if col_idx == 0:
         ax_bottom.set_ylabel("Altitude z (km)", fontsize=11, fontweight='semibold')
-        ax_bottom.legend(loc='upper right', framealpha=0.9, fontsize=9)
+        ax_bottom.legend(loc='lower right', framealpha=0.9, fontsize=9)
     else:
         ax_bottom.set_yticklabels([])
 
 # Add title to row panels
-axs[0, 0].text(-11.5, 10.0, "Horizontal XY Slice", color='black', fontsize=11, fontweight='bold', bbox=dict(facecolor='white', alpha=0.8, edgecolor='none'))
-axs[1, 0].text(-11.5, 4.3, "Vertical XZ Slice", color='black', fontsize=11, fontweight='bold', bbox=dict(facecolor='white', alpha=0.8, edgecolor='none'))
+axs[0, 0].text(-11.5, 10.0, "Horizontal x-y slice", color='black', fontsize=11, bbox=dict(facecolor='white', alpha=0.8, edgecolor='none'))
+axs[1, 0].text(-11.5, 4.3, "Vertical x-z slice", color='black', fontsize=11, bbox=dict(facecolor='white', alpha=0.8, edgecolor='none'))
 
-plt.suptitle(f"Forward Tracer Plume Evolution (Core: {CORE_TYPE})", fontsize=14, fontweight='bold', y=0.98)
+plt.suptitle(f"Forward tracer plume evolution", fontsize=16, y=0.98)
 plt.tight_layout(rect=[0, 0, 0.88, 0.95])
 
 # Add a single shared colorbar on the right
 cbar_ax = fig1.add_axes([0.90, 0.15, 0.02, 0.70])
 cbar = fig1.colorbar(c_mappable, cax=cbar_ax)
-cbar.set_label('Tracer Concentration', fontsize=11, fontweight='semibold')
+cbar.set_label('Tracer concentration', fontsize=11)
 
 plt.savefig(f"{output_dir}/tracer_3d_complex_plume_{CORE_TYPE.lower()}.png", dpi=150)
 plt.close()
@@ -376,7 +381,7 @@ ax3.plot(hx, hy, marker='o', color='purple', linestyle='-', linewidth=2, markers
 ax3.scatter([hx[0]], [hy[0]], color='orange', s=100, label='Initial guess', zorder=5)
 ax3.scatter([hx[-1]], [hy[-1]], color='purple', marker='*', s=150, zorder=6, label='Recovered source')
 ax3.scatter([true_params[0]], [true_params[1]], color='green', marker='x', s=120, zorder=7, label='True source')
-ax3.set_title("Source location trajectory - Horizontal plane (x-y)")
+ax3.set_title("Source location trajectory (horizontal x-y plane)")
 ax3.set_xlabel("x (km)")
 ax3.set_ylabel("y (km)")
 ax3.set_xlim([-12.5, 12.5])
@@ -391,8 +396,8 @@ ax4.scatter([hx[-1]], [hz[-1]], color='purple', marker='*', s=150, zorder=6, lab
 ax4.scatter([true_params[0]], [true_params[2]], color='green', marker='x', s=120, zorder=7, label='True source')
 # Plot terrain envelope
 terrain_max = np.max(np.asarray(terrain_profile(grid.x_m[:, None], grid.y_m[None, :])), axis=1) / 1000.0
-ax4.fill_between(x_1d, 0, terrain_max, color='gray', alpha=0.3, label='Max Terrain profile')
-ax4.set_title("Source location trajectory - Vertical plane (x-z)")
+ax4.fill_between(x_1d, 0, terrain_max, color='gray', alpha=0.3, label='Max terrain profile')
+ax4.set_title("Source location trajectory (vertical x-z plane)")
 ax4.set_xlabel("x (km)")
 ax4.set_ylabel("Altitude z (km)")
 ax4.set_xlim([-12.5, 12.5])

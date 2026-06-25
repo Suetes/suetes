@@ -282,6 +282,7 @@ class Euler3D:
                 tend_u += diff_tends['u']
                 tend_v += diff_tends['v']
                 tend_w += diff_tends['w']
+                tend_th_v += diff_tends['th_v']
                 phys_diff_u += diff_tends['u']
                 phys_diff_v += diff_tends['v']
                 phys_diff_w += diff_tends['w']
