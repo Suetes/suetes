@@ -1290,8 +1290,8 @@ class SplitExplicitStepper3D:
             grad_pi_y_cart = grad_pi_pp_y - z_eta_v * grad_pi_pp_z_v
 
             # Add the divergence damping to the explicit acoustic integration
-            u_prime_prime += dtau * (slow_forcings['u'] - cp * bg['th_v_u'] * grad_pi_x_cart * m_u + self.physics.nu_div * grad_div_x)
-            v_prime_prime += dtau * (slow_forcings['v'] - cp * bg['th_v_v'] * grad_pi_y_cart * m_v + self.physics.nu_div * grad_div_y)
+            u_prime_prime += dtau * (slow_forcings['u'] - cp * bg['th_v_u'] * grad_pi_x_cart + self.physics.nu_div * grad_div_x)
+            v_prime_prime += dtau * (slow_forcings['v'] - cp * bg['th_v_v'] * grad_pi_y_cart + self.physics.nu_div * grad_div_y)
 
             u_prime_prime = u_prime_prime.at[0, :, :].set(state_init['u'][0, :, :] - state_current['u'][0, :, :])
             u_prime_prime = u_prime_prime.at[-1, :, :].set(state_init['u'][-1, :, :] - state_current['u'][-1, :, :])

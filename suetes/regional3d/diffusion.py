@@ -91,35 +91,35 @@ class HyperFilter:
 
     def _cartesian_horizontal_laplacian(self, f_m, bg):
         # True horizontal gradient in X (at u-faces)
-        df_dxi_u = self.op.diff(f_m, axis=0, from_loc='m', to_loc='u') / self.grid.dx
+        df_dxi_u = self.op.diff(f_m, axis=0, from_loc='m', to_loc='u')
         df_dz_m = self.op.avg(
-            self.op.diff(f_m, axis=2, from_loc='m', to_loc='w') / bg['dz_w_full'], 
+            self.op.diff(f_m, axis=2, from_loc='m', to_loc='w') * (self.grid.dz / bg['dz_w_full']), 
             axis=2, from_loc='w', to_loc='m'
         )
         df_dz_u = self.op.avg(df_dz_m, axis=0, from_loc='m', to_loc='u')
-        z_xi_u = self.op.diff(self.grid.Z_m, axis=0, from_loc='m', to_loc='u') / self.grid.dx
+        z_xi_u = self.op.diff(self.grid.Z_m, axis=0, from_loc='m', to_loc='u')
         
         Gx_u = df_dxi_u - z_xi_u * df_dz_u
 
         # True horizontal gradient in Y (at v-faces)
-        df_deta_v = self.op.diff(f_m, axis=1, from_loc='m', to_loc='v') / self.grid.dy
+        df_deta_v = self.op.diff(f_m, axis=1, from_loc='m', to_loc='v')
         df_dz_v = self.op.avg(df_dz_m, axis=1, from_loc='m', to_loc='v')
-        z_eta_v = self.op.diff(self.grid.Z_m, axis=1, from_loc='m', to_loc='v') / self.grid.dy
+        z_eta_v = self.op.diff(self.grid.Z_m, axis=1, from_loc='m', to_loc='v')
         
         Gy_v = df_deta_v - z_eta_v * df_dz_v
 
         # Divergence of the Cartesian gradients (back to mass points)
-        dGx_dxi_m = self.op.diff(Gx_u, axis=0, from_loc='u', to_loc='m') / self.grid.dx
+        dGx_dxi_m = self.op.diff(Gx_u, axis=0, from_loc='u', to_loc='m')
         Gx_m = self.op.avg(Gx_u, axis=0, from_loc='u', to_loc='m')
-        dGx_dz_w = self.op.diff(Gx_m, axis=2, from_loc='m', to_loc='w') / bg['dz_w_full']
+        dGx_dz_w = self.op.diff(Gx_m, axis=2, from_loc='m', to_loc='w') * (self.grid.dz / bg['dz_w_full'])
         dGx_dz_m = self.op.avg(dGx_dz_w, axis=2, from_loc='w', to_loc='m')
         z_xi_m = self.op.avg(z_xi_u, axis=0, from_loc='u', to_loc='m')
         
         div_Gx = dGx_dxi_m - z_xi_m * dGx_dz_m
 
-        dGy_deta_m = self.op.diff(Gy_v, axis=1, from_loc='v', to_loc='m') / self.grid.dy
+        dGy_deta_m = self.op.diff(Gy_v, axis=1, from_loc='v', to_loc='m')
         Gy_m = self.op.avg(Gy_v, axis=1, from_loc='v', to_loc='m')
-        dGy_dz_w = self.op.diff(Gy_m, axis=2, from_loc='m', to_loc='w') / bg['dz_w_full']
+        dGy_dz_w = self.op.diff(Gy_m, axis=2, from_loc='m', to_loc='w') * (self.grid.dz / bg['dz_w_full'])
         dGy_dz_m = self.op.avg(dGy_dz_w, axis=2, from_loc='w', to_loc='m')
         z_eta_m = self.op.avg(z_eta_v, axis=1, from_loc='v', to_loc='m')
 
@@ -129,8 +129,8 @@ class HyperFilter:
 
     def _vertical_laplacian(self, f_m, bg):
         # Pure vertical diffusion
-        df_dz_w = self.op.diff(f_m, axis=2, from_loc='m', to_loc='w') / bg['dz_w_full']
-        return self.op.diff(df_dz_w, axis=2, from_loc='w', to_loc='m') / bg['dz_m_full']
+        df_dz_w = self.op.diff(f_m, axis=2, from_loc='m', to_loc='w') * (self.grid.dz / bg['dz_w_full'])
+        return self.op.diff(df_dz_w, axis=2, from_loc='w', to_loc='m') * (self.grid.dz / bg['dz_m_full'])
 
     def get_tendencies(self, state_prime, bg_precomputed):
         diff_tends = {}
