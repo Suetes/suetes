@@ -224,7 +224,6 @@ if __name__ == "__main__":
         results.append((dx, eu, ev, ew, epi, eth))
         print(f"Res: {r:2d} | dx: {dx/1000.:.1f}km | err_u: {eu:.2e} | err_v: {ev:.2e} | err_w: {ew:.2e} | err_pi: {epi:.2e} | err_th: {eth:.2e}")
         if r == 16:
-            # We can run evaluate_resolution again or print from inside, let's just evaluate_resolution but print at center
             pass
         
     print("\n--- Spatial Convergence Rates ---")

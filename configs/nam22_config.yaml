@@ -27,7 +27,7 @@ vertical:
 core:
   type: "split-explicit"
   dt: 40.0
-  nu_h: 0.03
+  nu_h: 0.05
   ns: 3
   alpha: 0.7
 
