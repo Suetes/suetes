@@ -50,6 +50,20 @@ def build_dynamical_core(core_type, grid, operators, constants, initial_state,
             N_bv=params["N_bv"],
             physics_suite=physics_suite, interior_mask=interior_mask,
         )
+        # Initialize previous state keys in-place to ensure JAX carry consistency
+        if 'u_prev' not in initial_state:
+            initial_state['u_prev'] = initial_state['u']
+            initial_state['v_prev'] = initial_state['v']
+            initial_state['w_prev'] = initial_state['w']
+            initial_state['eta_dot_prev'] = initial_state.get('eta_dot', jnp.zeros_like(initial_state['w']))
+            initial_state['tend_th_v_prev'] = jnp.zeros_like(initial_state['th_v'])
+            initial_state['is_first_step'] = 1.0
+            
+            tracer_keys = physics_suite.tracer_keys if physics_suite is not None else []
+            for key in tracer_keys:
+                if key in initial_state:
+                    initial_state[f'tend_{key}_prev'] = jnp.zeros_like(initial_state[key])
+                    
         stepper = SISLStepper3D(physics, params["dt"], alpha=params["alpha"], use_limiter=params["use_limiter"])
         return stepper, params["dt"]
         
@@ -393,7 +407,7 @@ class SemiImplicitSolver3D:
                 # Decode the solver's velocity (W_contra) back to physical eta_dot [1/s]
                 'eta_dot': state_scaled['eta_dot'] / bg_precomputed['dz_w_full']
             }
-            L_out = self.physics.linear_operator(state_prime, bg_precomputed, self.dt)
+            L_out = self.physics.linear_operator(state_prime, bg_precomputed, self.dt, alpha=self.alpha)
             
             return {
                 'u': L_out['u'], 
@@ -602,10 +616,28 @@ class SISLStepper3D:
 
         if 'eta_dot' not in state: state['eta_dot'] = jnp.zeros_like(state['w'])
             
-        coords_u = jax.lax.stop_gradient(self.advector.compute_departure_indices(state, loc='u'))
-        coords_v = jax.lax.stop_gradient(self.advector.compute_departure_indices(state, loc='v'))
-        coords_w = jax.lax.stop_gradient(self.advector.compute_departure_indices(state, loc='w'))
-        coords_m = jax.lax.stop_gradient(self.advector.compute_departure_indices(state, loc='m'))
+        is_first = state.get('is_first_step', 1.0)
+        
+        if 'u_prev' in state:
+            # Extrapolate velocities to t^{n+1/2} for 2nd-order trajectory calculation
+            u_traj = jnp.where(is_first == 1.0, state['u'], 1.5 * state['u'] - 0.5 * state['u_prev'])
+            v_traj = jnp.where(is_first == 1.0, state['v'], 1.5 * state['v'] - 0.5 * state['v_prev'])
+            w_traj = jnp.where(is_first == 1.0, state['w'], 1.5 * state['w'] - 0.5 * state['w_prev'])
+            eta_dot_traj = jnp.where(is_first == 1.0, state['eta_dot'], 1.5 * state['eta_dot'] - 0.5 * state['eta_dot_prev'])
+            
+            state_traj = {
+                'u': u_traj,
+                'v': v_traj,
+                'w': w_traj,
+                'eta_dot': eta_dot_traj
+            }
+        else:
+            state_traj = state
+        
+        coords_u = jax.lax.stop_gradient(self.advector.compute_departure_indices(state_traj, loc='u'))
+        coords_v = jax.lax.stop_gradient(self.advector.compute_departure_indices(state_traj, loc='v'))
+        coords_w = jax.lax.stop_gradient(self.advector.compute_departure_indices(state_traj, loc='w'))
+        coords_m = jax.lax.stop_gradient(self.advector.compute_departure_indices(state_traj, loc='m'))
 
         bg_state_ref = {
             'rho': self.physics.c['p0'] / (self.physics.c['Rd'] * self.physics.theta_bg) * \
@@ -643,16 +675,27 @@ class SISLStepper3D:
         w_in = state['w'] + self.dt * ((1.0 - alpha) * tends_n['w'] + alpha * tends_n.get('phys_diff_w', 0.0))
         pi_prime_in = state_prime_n['pi'] + (1.0 - alpha) * self.dt * tends_n['pi']
 
+        if 'u_prev' in state:
+            # Extrapolate explicit tendencies to t^{n+1/2} for 2nd-order thermodynamics/tracer advection
+            tend_th_v_extrap = 1.5 * tends_n['th_v'] - 0.5 * state['tend_th_v_prev']
+            tend_th_v_eff = jnp.where(is_first == 1.0, tends_n['th_v'], tend_th_v_extrap)
+        else:
+            tend_th_v_eff = tends_n['th_v']
+
         # Apply Eulerian physics tendencies to the thermodynamics before advection
-        th_v_prime_in = th_v_prime_n + self.dt * tends_n['th_v']
+        th_v_prime_in = th_v_prime_n + self.dt * tend_th_v_eff
 
         # Apply Eulerian tendencies to any active tracers before advection
         tracers_in = {}
         for key in self.tracer_keys:
             if key in state:
                 tracers_in[key] = state[key]
-                if key in tends_n:
-                    tracers_in[key] += self.dt * tends_n[key]
+                if 'u_prev' in state:
+                    tend_tr_extrap = 1.5 * tends_n.get(key, 0.0) - 0.5 * state.get(f'tend_{key}_prev', 0.0)
+                    tend_tr_eff = jnp.where(is_first == 1.0, tends_n.get(key, 0.0), tend_tr_extrap)
+                else:
+                    tend_tr_eff = tends_n.get(key, 0.0)
+                tracers_in[key] += self.dt * tend_tr_eff
 
         # 3d kinematic advection
         u_m = self.physics.op.avg(state['u'], axis=0, from_loc='u', to_loc='m')
@@ -786,6 +829,17 @@ class SISLStepper3D:
         # Equation of State, preventing a thermodynamic shock in the next step!
         cvd, Rd, p0 = self.physics.c['cvd'], self.physics.c['Rd'], self.physics.c['p0']
         state_next['rho'] = p0 / (Rd * state_next['th_v']) * (state_next['pi'] ** (cvd / Rd))
+
+        # Save current state and tendencies for next step's history if history is active
+        if 'u_prev' in state:
+            state_next['u_prev'] = state['u']
+            state_next['v_prev'] = state['v']
+            state_next['w_prev'] = state['w']
+            state_next['eta_dot_prev'] = state['eta_dot']
+            state_next['tend_th_v_prev'] = tends_n['th_v']
+            for key in self.tracer_keys:
+                state_next[f'tend_{key}_prev'] = tends_n.get(key, 0.0)
+            state_next['is_first_step'] = 0.0
 
         return state_next
 

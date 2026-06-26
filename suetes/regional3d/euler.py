@@ -311,7 +311,7 @@ class Euler3D:
 
         return {'u': tend_u, 'v': tend_v, 'w': tend_w, 'pi': tend_pi, 'th_v': tend_th_v}
 
-    def linear_operator(self, state_prime, bg, dt):
+    def linear_operator(self, state_prime, bg, dt, alpha=0.55):
         r"""
         Evaluates the discrete linear operator matrix-vector product $\mathcal{L}(\mathbf{x})$.
 
@@ -328,14 +328,13 @@ class Euler3D:
             state_prime (dict): Current implicit state vector guess $\mathbf{x}$.
             bg (dict): Precomputed background state metrics.
             dt (float): Integration time step $\Delta t$ [s].
+            alpha (float, optional): Semi-implicit off-centering parameter. Defaults to 0.55.
 
         Returns:
             dict: The evaluated residual vector fields matching the state dictionary layout.
         """
         tends = self.get_tendencies(state_prime, bg, is_explicit=False)
         
-        alpha = 0.55 
-
         L_u = state_prime['u'] - alpha * dt * tends['u']
         L_v = state_prime['v'] - alpha * dt * tends['v']
         L_w = (1.0 + dt * self.tau_damp) * state_prime['w'] - alpha * dt * tends['w']
