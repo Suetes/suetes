@@ -50,8 +50,8 @@ constants:
   epsilon: 0.622
 
 io:
-  data_dir: "suetes/data"
-  fig_dir: "suetes/plots/radiation"
+  data_dir: "output/data"
+  fig_dir: "output/plots/radiation"
   store_format: "zarr"   # chunked, lazily-streamed (scales to long windows)
   coarsen_window: 3
   sponge_depth: 15

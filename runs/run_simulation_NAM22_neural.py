@@ -35,14 +35,14 @@ from suetes.physics.forcing import NewtonianRelaxation
 from suetes.physics.ml import MLPhysicsClosure
 from suetes.vis.visualizer import Visualizer
 
-DATA_DIR = "suetes/data"
+DATA_DIR = "output/data"
 
 def main():
     ACTIVE_DOMAIN = "nam22"
     RUN_NAME = f"{ACTIVE_DOMAIN}_NAM22_july2025"
 
     lat_c, lon_c = 47.5, -97.0
-    output_dir = "suetes/plots"
+    output_dir = "output/plots"
     os.makedirs(output_dir, exist_ok=True)
 
     nx, ny, nz = 310, 260, 32

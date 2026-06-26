@@ -49,8 +49,8 @@ constants:
   epsilon: 0.622
 
 io:
-  data_dir: "suetes/data"
-  fig_dir: "suetes/plots/wreckhouse_long"
+  data_dir: "output/data"
+  fig_dir: "output/plots/wreckhouse_long"
   store_format: "zarr"
   coarsen_window: 1   # No coarsening to preserve high-res wind gradients
   sponge_depth: 15

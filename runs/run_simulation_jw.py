@@ -441,7 +441,7 @@ def run_suetes(driver_nc):
     # ==========================================
     lat_c, lon_c = 45.0, 195.0
     RUN_NAME = "jw_pm_test_diffusive"
-    output_dir = "suetes/plots"
+    output_dir = "output/plots"
     os.makedirs(output_dir, exist_ok=True)
 
     nx, ny, nz = 160, 120, 30
@@ -777,7 +777,7 @@ def main():
         description="Run the dinosaur J-W global driver, then the Suetes "
                     "regional perfect-model test that consumes its netCDF.",
     )
-    parser.add_argument('--output', default='suetes/data/test.nc',
+    parser.add_argument('--output', default='output/data/test.nc',
                         help='Driver netCDF path. Reused as a cache if it '
                              'already exists; otherwise written by the dinosaur '
                              'stage. Read by the Suetes stage either way.')

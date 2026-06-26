@@ -18,7 +18,7 @@ from suetes.regional3d.boundaries import BenchmarkSponge
 from suetes.shared.driver import Simulation
 from suetes.shared.optimization import OptaxSolver
 
-output_dir = "suetes/plots/inversion"
+output_dir = "output/plots/inversion"
 os.makedirs(output_dir, exist_ok=True)
 
 # =====================================================================

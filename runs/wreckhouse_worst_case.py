@@ -35,7 +35,7 @@ from suetes.physics.gravity_waves import McFarlaneGWD
 
 from suetes.vis.visualizer import Visualizer
 
-DATA_DIR = "suetes/data"
+DATA_DIR = "output/data"
 
 
 def create_wind_tracker(target_i, target_j):
@@ -54,7 +54,7 @@ def main():
     # =====================================================================
     ACTIVE_DOMAIN = "wreckhouse"
     RUN_NAME = f"{ACTIVE_DOMAIN}_worst_case_feb2025"
-    output_dir = "suetes/plots/wreckhouse_worst_case"
+    output_dir = "output/plots/wreckhouse_worst_case"
     os.makedirs(output_dir, exist_ok=True)
 
     lat_c, lon_c = 47.71, -59.31

@@ -37,8 +37,8 @@ from suetes.physics.turbulence import McFarlaneVerticalDiffusion
 # 0. CONFIGURATION
 # =====================================================================
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
-DATA_DIR = "suetes/data"
-OUTPUT_DIR = "suetes/plots/assimilation"
+DATA_DIR = "output/data"
+OUTPUT_DIR = "output/plots/assimilation"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 ACTIVE_DOMAIN = "nam22"

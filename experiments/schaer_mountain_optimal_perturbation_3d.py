@@ -14,7 +14,7 @@ from suetes.regional3d.steppers import build_dynamical_core
 from suetes.regional3d.boundaries import BenchmarkSponge
 from suetes.shared.driver import Simulation
 
-output_dir = "suetes/plots/inversion"
+output_dir = "output/plots/inversion"
 os.makedirs(output_dir, exist_ok=True)
 
 # =====================================================================

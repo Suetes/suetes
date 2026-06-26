@@ -14,7 +14,7 @@ from suetes.regional3d.operators import CGridOperator3D
 from suetes.regional3d.steppers import build_dynamical_core
 from suetes.shared.optimization import OptaxSolver
 
-output_dir = "suetes/plots/assimilation"
+output_dir = "output/plots/assimilation"
 os.makedirs(output_dir, exist_ok=True)
 
 # =====================================================================

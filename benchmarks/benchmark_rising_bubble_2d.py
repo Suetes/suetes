@@ -10,7 +10,7 @@ from suetes.slice2d.euler import VerticalSlice
 from suetes.slice2d.steppers import SISLStepper
 from suetes.shared.driver import Simulation
 
-output_dir = "suetes/plots/benchmarks"
+output_dir = "output/plots/benchmarks"
 os.makedirs(output_dir, exist_ok=True)
 
 # ====================================================================
@@ -80,18 +80,19 @@ def unified_step_fn(curr_state, step_idx):
 t_end = 1000.0
 sim = Simulation(step_fn=unified_step_fn, dt=dt)
 
-print(f"[TEST 2D] Running SISL Bubble Test (dt={dt}s)...")
-final_state = sim.run(state, t_start=0.0, t_end=t_end, chunk_steps=100)
+if __name__ == "__main__":
+    print(f"[TEST 2D] Running SISL Bubble Test (dt={dt}s)...")
+    final_state = sim.run(state, t_start=0.0, t_end=t_end, chunk_steps=100)
 
-# ====================================================================
-# 4. PLOTTING
-# ====================================================================
-plt.figure(figsize=(12, 5))
-th_pert = final_state['th_v'] - 300.0
-plt.contourf(grid.X_m / 1000.0, grid.Z_m / 1000.0, th_pert, levels=20, cmap='RdBu_r')
-plt.title(fr"SISL Rising Bubble: $\Delta \theta$ at T={t_end}s (dt={dt}s)")
-plt.xlabel("x (km)")
-plt.ylabel("z (km)")
-plt.colorbar(label="Temperature Perturbation (K)")
-plt.savefig(f'{output_dir}/rising_bubble_2d_{t_end}s.png', dpi=150, bbox_inches='tight')
-print("[PLOTTING]Saved rising_bubble_2d.png")
+    # ====================================================================
+    # 4. PLOTTING
+    # ====================================================================
+    plt.figure(figsize=(12, 5))
+    th_pert = final_state['th_v'] - 300.0
+    plt.contourf(grid.X_m / 1000.0, grid.Z_m / 1000.0, th_pert, levels=20, cmap='RdBu_r')
+    plt.title(fr"SISL Rising Bubble: $\Delta \theta$ at T={t_end}s (dt={dt}s)")
+    plt.xlabel("x (km)")
+    plt.ylabel("z (km)")
+    plt.colorbar(label="Temperature Perturbation (K)")
+    plt.savefig(f'{output_dir}/rising_bubble_2d_{t_end}s.png', dpi=150, bbox_inches='tight')
+    print("[PLOTTING]Saved rising_bubble_2d.png")

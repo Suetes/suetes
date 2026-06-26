@@ -29,7 +29,7 @@ args = ap.parse_args()
 CORE_TYPE = args.core
 total_opt_steps = args.steps
 
-output_dir = "suetes/plots/tracer_inversion"
+output_dir = "output/plots/tracer_inversion"
 os.makedirs(output_dir, exist_ok=True)
 
 print(f"=====================================================================")

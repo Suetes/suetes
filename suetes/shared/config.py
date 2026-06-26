@@ -86,10 +86,10 @@ class ConstantsConfig:
 
 @dataclass
 class IOConfig:
-    data_dir: str = "suetes/data"    # ERA5 .nc + GEBCO (download output == preprocess input)
+    data_dir: str = "output/data"    # ERA5 .nc + GEBCO (download output == preprocess input)
     store_dir: str = ""              # Zarr stores (preprocess output == runner input); "" -> data_dir
-    output_dir: str = ""             # simulation NetCDF output; "" -> "suetes/output"
-    fig_dir: str = "suetes/plots/radiation"
+    output_dir: str = ""             # simulation NetCDF output; "" -> "output/simulations"
+    fig_dir: str = "output/plots/radiation"
     store_format: str = "zarr"     # "zarr" (chunked, lazy) | "pkl" (legacy monolithic)
     coarsen_window: int = 3
     sponge_depth: int = 15
@@ -246,7 +246,7 @@ def resolve_params(cfg: SuetesConfig):
         coarsen_window=io.coarsen_window, pressure_levels=io.pressure_levels,
         buffer_deg=io.buffer_deg, data_dir=io.data_dir,
         store_dir=(io.store_dir or io.data_dir),
-        output_dir=(io.output_dir or "suetes/output"),
+        output_dir=(io.output_dir or "output/simulations"),
         download_workers=int(os.environ["DOWNLOAD_WORKERS"]) if "DOWNLOAD_WORKERS" in os.environ else io.download_workers,
         year=t.year, month=t.month, start_day=start_day, days=days, dates=dates,
         sim_hours=sim_hours, num_states=num_states,

@@ -10,7 +10,7 @@ from suetes.slice2d.euler import VerticalSlice
 from suetes.slice2d.steppers import SISLStepper
 from suetes.shared.driver import Simulation
 
-output_dir = "suetes/plots/benchmarks"
+output_dir = "output/plots/benchmarks"
 os.makedirs(output_dir, exist_ok=True)
 
 # ====================================================================
@@ -95,39 +95,40 @@ def step_fn(curr_state, step_idx):
 # ====================================================================
 # 5. RUN SIMULATION
 # ====================================================================
-t_start = 0.0
-t_end = 7200.0  
-print("[TEST 2D] Running Schär Mountain Test (dt={dt}, T={t_end}s)...")
+if __name__ == "__main__":
+    t_start = 0.0
+    t_end = 7200.0  
+    print(f"[TEST 2D] Running Schär Mountain Test (dt={dt}, T={t_end}s)...")
 
-sim = Simulation(step_fn=step_fn, dt=dt)
-final_state = sim.run(state, t_start, t_end, chunk_steps=50)
+    sim = Simulation(step_fn=step_fn, dt=dt)
+    final_state = sim.run(state, t_start, t_end, chunk_steps=50)
 
-# ====================================================================
-# 6. PLOTTING
-# ====================================================================
-plt.figure(figsize=(12, 6))
+    # ====================================================================
+    # 6. PLOTTING
+    # ====================================================================
+    plt.figure(figsize=(12, 6))
 
-x_plot_1d = grid.X_m[:, 0] / 1000.0 
+    x_plot_1d = grid.X_m[:, 0] / 1000.0 
 
-# Match the 50km window of the 3D script. 
-# Mountain is at 100km, so we plot from 75km to 125km.
-x_start_idx = int(75000.0 / grid.dx)
-x_end_idx = int(125000.0 / grid.dx)
+    # Match the 50km window of the 3D script. 
+    # Mountain is at 100km, so we plot from 75km to 125km.
+    x_start_idx = int(75000.0 / grid.dx)
+    x_end_idx = int(125000.0 / grid.dx)
 
-contour = plt.contourf(
-    grid.X_w[x_start_idx:x_end_idx, :] / 1000.0,    
-    grid.Z_w[x_start_idx:x_end_idx, :] / 1000.0,    
-    final_state['w'][x_start_idx:x_end_idx, :],     
-    levels=jnp.linspace(-2.0, 2.0, 41),
-    cmap='RdBu_r', 
-    extend='both'
-)
+    contour = plt.contourf(
+        grid.X_w[x_start_idx:x_end_idx, :] / 1000.0,    
+        grid.Z_w[x_start_idx:x_end_idx, :] / 1000.0,    
+        final_state['w'][x_start_idx:x_end_idx, :],     
+        levels=jnp.linspace(-2.0, 2.0, 41),
+        cmap='RdBu_r', 
+        extend='both'
+    )
 
-plt.fill_between(x_plot_1d[x_start_idx:x_end_idx], 0, hx_m[x_start_idx:x_end_idx] / 1000.0, color='black')
-plt.colorbar(contour, label='Vertical Velocity W (m/s)')
-plt.title(f"Schär Mountain Wave: Vertical Velocity at T={t_end}s")
-plt.xlabel("Distance (km)")
-plt.ylabel("Altitude (km)")
+    plt.fill_between(x_plot_1d[x_start_idx:x_end_idx], 0, hx_m[x_start_idx:x_end_idx] / 1000.0, color='black')
+    plt.colorbar(contour, label='Vertical Velocity W (m/s)')
+    plt.title(f"Schär Mountain Wave: Vertical Velocity at T={t_end}s")
+    plt.xlabel("Distance (km)")
+    plt.ylabel("Altitude (km)")
 
-plt.savefig(f'{output_dir}/schaer_mountain_2d_{t_end}.png', dpi=150, bbox_inches='tight')
-print("[PLOTTING] Saved plot to '{output_dir}/schaer_mountain_2d_{t_end}.png'")
+    plt.savefig(f'{output_dir}/schaer_mountain_2d_{t_end}.png', dpi=150, bbox_inches='tight')
+    print(f"[PLOTTING] Saved plot to '{output_dir}/schaer_mountain_2d_{t_end}.png'")

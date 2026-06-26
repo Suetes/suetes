@@ -47,7 +47,7 @@ class TopographyProcessor:
         url = "https://dap.ceda.ac.uk/bodc/gebco/global/gebco_2026/ice_surface_elevation/netcdf/GEBCO_2026.zip?download=1"
         zip_path = gebco_path.replace(".nc", ".zip")
         
-        # Ensure the target directory exists (e.g., suetes/data/)
+        # Ensure the target directory exists (e.g., output/data/)
         os.makedirs(os.path.dirname(gebco_path), exist_ok=True)
         
         try:

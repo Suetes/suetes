@@ -15,7 +15,7 @@ from suetes.shared.driver import Simulation
 from suetes.physics.base import PhysicsSuite
 from suetes.physics.gravity_waves import UpperRayleighDamping, McFarlaneGWD
 
-output_dir = "suetes/plots/physics"
+output_dir = "output/plots/physics"
 os.makedirs(output_dir, exist_ok=True)
 
 # --- 1. SCHÄR MOUNTAIN PROFILE ---
@@ -127,35 +127,39 @@ def step_fn(curr_state, step_idx):
 
 sim = Simulation(step_fn=step_fn, dt=dt)
 
-# --- 5. RUN SIMULATION ---
-print("\nLaunching Schär Mountain Benchmark...")
-final_state = sim.run(state, t_start=0.0, t_end=t_end, chunk_steps=50)
+def main():
+    # --- 5. RUN SIMULATION ---
+    print("\nLaunching Schär Mountain Benchmark...")
+    final_state = sim.run(state, t_start=0.0, t_end=t_end, chunk_steps=50)
 
-# --- 6. VISUALIZE RESULTS ---
-print("\nPlotting final state...")
-# Vertical velocity at the mid-level in the vertical (index 1)
-w_slice = final_state['w'][:, 1, :] 
+    # --- 6. VISUALIZE RESULTS ---
+    print("\nPlotting final state...")
+    # Vertical velocity at the mid-level in the vertical (index 1)
+    w_slice = final_state['w'][:, 1, :] 
 
-x_start_idx = (nx // 4)
-x_end_idx = 3 * (nx // 4)
-x_plot_1d = grid.x_m[x_start_idx:x_end_idx] / 1000.0 
+    x_start_idx = (nx // 4)
+    x_end_idx = 3 * (nx // 4)
+    x_plot_1d = grid.x_m[x_start_idx:x_end_idx] / 1000.0 
 
-# Use a dummy array of size nz+1 to get the right shape for X_plot
-X_plot, _ = jnp.meshgrid(x_plot_1d, jnp.arange(nz + 1), indexing='ij')
+    # Use a dummy array of size nz+1 to get the right shape for X_plot
+    X_plot, _ = jnp.meshgrid(x_plot_1d, jnp.arange(nz + 1), indexing='ij')
 
-# Use the terrain-following W-grid heights!
-Z_plot = grid.Z_w[x_start_idx:x_end_idx, 1, :] / 1000.0 
+    # Use the terrain-following W-grid heights!
+    Z_plot = grid.Z_w[x_start_idx:x_end_idx, 1, :] / 1000.0 
 
-plt.figure(figsize=(12, 6))
-contour = plt.contourf(X_plot, Z_plot, w_slice[x_start_idx:x_end_idx, :], 
-                       levels=jnp.linspace(-2.0, 2.0, 41), cmap='RdBu_r', extend='both')
-plt.colorbar(contour, label='Vertical Velocity W (m/s)')
-plt.title(f'Schär Mountain Waves at T = {t_end}s')
-plt.xlabel('Distance (km)')
-plt.ylabel('Altitude (km)')
+    plt.figure(figsize=(12, 6))
+    contour = plt.contourf(X_plot, Z_plot, w_slice[x_start_idx:x_end_idx, :], 
+                           levels=jnp.linspace(-2.0, 2.0, 41), cmap='RdBu_r', extend='both')
+    plt.colorbar(contour, label='Vertical Velocity W (m/s)')
+    plt.title(f'Schär Mountain Waves at T = {t_end}s')
+    plt.xlabel('Distance (km)')
+    plt.ylabel('Altitude (km)')
 
-mountain_terrain = schaer_mountain(grid.x_m[x_start_idx:x_end_idx], 0.0) / 1000.0
-plt.fill_between(x_plot_1d, 0, mountain_terrain, color='black')
+    mountain_terrain = schaer_mountain(grid.x_m[x_start_idx:x_end_idx], 0.0) / 1000.0
+    plt.fill_between(x_plot_1d, 0, mountain_terrain, color='black')
 
-plt.savefig(f'{output_dir}/schaer_mountain_3d_{t_end}.png', dpi=150, bbox_inches='tight')
-print(f"Saved plot to '{output_dir}/schaer_mountain_3d_{t_end}.png'")
+    plt.savefig(f'{output_dir}/schaer_mountain_3d_{t_end}.png', dpi=150, bbox_inches='tight')
+    print(f"Saved plot to '{output_dir}/schaer_mountain_3d_{t_end}.png'")
+
+if __name__ == "__main__":
+    main()

@@ -49,8 +49,8 @@ constants:
   epsilon: 0.622
 
 io:
-  data_dir: "suetes/data"
-  fig_dir: "suetes/plots/fiona"
+  data_dir: "output/data"
+  fig_dir: "output/plots/fiona"
   store_format: "zarr"
   coarsen_window: 1   # Keep it 1 for 10km grid
   sponge_depth: 15

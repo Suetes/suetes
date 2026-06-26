@@ -11,7 +11,7 @@ from suetes.regional3d.steppers import SISLStepper3D
 from suetes.shared.driver import Simulation
 from suetes.shared.transforms import SleveSimple, BaseTransform
 
-output_dir = "suetes/plots/benchmarks"
+output_dir = "output/plots/benchmarks"
 os.makedirs(output_dir, exist_ok=True)
 
 class StretchedSleveSimple(BaseTransform):

@@ -111,8 +111,9 @@ def main():
     ax.grid(True, **grid_style)
     ax.legend(fontsize=10, loc='upper left')
 
-    # Save final high-res figure for GMD submission
-    out_path = "suetes_scaling_metrics.png"
+    # Save final high-res figure for GMD submission to centralized output
+    out_path = "output/plots/suetes_scaling_metrics.png"
+    os.makedirs(os.path.dirname(out_path), exist_ok=True)
     plt.savefig(out_path, dpi=300, bbox_inches='tight')
     plt.close()
     print(f"[SUCCESS] Publication figure saved cleanly to: {out_path}")

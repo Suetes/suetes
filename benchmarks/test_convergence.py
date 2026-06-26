@@ -61,19 +61,20 @@ def run_bubble_at_resolution(dx):
     return sim.run(state, t_start=0.0, t_end=200.0, chunk_steps=int(200.0/dt))
 
 
-print(f"Running Spatial Convergence Study using ({CORE_TYPE.upper()}) Engine...")
-res_250 = run_bubble_at_resolution(dx=250.0) 
-res_125 = run_bubble_at_resolution(dx=125.0) 
-res_062 = run_bubble_at_resolution(dx=62.5) 
+if __name__ == "__main__":
+    print(f"Running Spatial Convergence Study using ({CORE_TYPE.upper()}) Engine...")
+    res_250 = run_bubble_at_resolution(dx=250.0) 
+    res_125 = run_bubble_at_resolution(dx=125.0) 
+    res_062 = run_bubble_at_resolution(dx=62.5) 
 
-def block_average_2d(field_2d, factor):
-    nx, nz = field_2d.shape
-    return jnp.mean(field_2d.reshape(nx // factor, factor, nz // factor, factor), axis=(1, 3))
+    def block_average_2d(field_2d, factor):
+        nx, nz = field_2d.shape
+        return jnp.mean(field_2d.reshape(nx // factor, factor, nz // factor, factor), axis=(1, 3))
 
-err_coarse = jnp.sqrt(jnp.mean((block_average_2d(res_125['th_v'][:, 1, :], 2) - res_250['th_v'][:, 1, :])**2))
-err_fine = jnp.sqrt(jnp.mean((block_average_2d(res_062['th_v'][:, 1, :], 4) - block_average_2d(res_125['th_v'][:, 1, :], 2))**2))
+    err_coarse = jnp.sqrt(jnp.mean((block_average_2d(res_125['th_v'][:, 1, :], 2) - res_250['th_v'][:, 1, :])**2))
+    err_fine = jnp.sqrt(jnp.mean((block_average_2d(res_062['th_v'][:, 1, :], 4) - block_average_2d(res_125['th_v'][:, 1, :], 2))**2))
 
-print(f"\n--- Convergence Results ({CORE_TYPE.capitalize()}) ---")
-print(f"L2 Error (250m vs 125m): {err_coarse:.5f}")
-print(f"L2 Error (125m vs  62m): {err_fine:.5f}")
-print(f"Empirical Order of Convergence: {np.log2(err_coarse / err_fine):.2f}")
+    print(f"\n--- Convergence Results ({CORE_TYPE.capitalize()}) ---")
+    print(f"L2 Error (250m vs 125m): {err_coarse:.5f}")
+    print(f"L2 Error (125m vs  62m): {err_fine:.5f}")
+    print(f"Empirical Order of Convergence: {np.log2(err_coarse / err_fine):.2f}")

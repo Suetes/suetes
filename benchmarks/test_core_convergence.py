@@ -79,7 +79,7 @@ def run_study(core_type, alpha=0.55):
 
 # Gather data
 errors_se, order_se = run_study("split-explicit")
-errors_sisl_default, order_sisl_default = run_study("sisl", alpha=0.55)
+# errors_sisl_default, order_sisl_default = run_study("sisl", alpha=0.55)
 errors_sisl_symmetric, order_sisl_symmetric = run_study("sisl", alpha=0.5)
 
 # Plotting setup
@@ -89,7 +89,7 @@ dx_vals = np.array([250.0, 125.0])
 
 # Plot empirical errors
 plt.loglog(dx_vals, errors_se, 'o-', label=f'Split-Explicit (Order = {order_se:.2f})', linewidth=2, markersize=8)
-plt.loglog(dx_vals, errors_sisl_default, 's-', label=f'SISL (alpha=0.55, Order = {order_sisl_default:.2f})', linewidth=2, markersize=8)
+# plt.loglog(dx_vals, errors_sisl_default, 's-', label=f'SISL (alpha=0.55, Order = {order_sisl_default:.2f})', linewidth=2, markersize=8)
 plt.loglog(dx_vals, errors_sisl_symmetric, 'd-', label=f'SISL (alpha=0.5, Order = {order_sisl_symmetric:.2f})', linewidth=2, markersize=8)
 
 # Add reference 2nd order convergence slope
@@ -103,8 +103,9 @@ plt.title('Spatial Convergence Study: Rising Bubble Benchmark', fontsize=14, fon
 plt.grid(True, which="both", ls="--", alpha=0.5)
 plt.legend(fontsize=10, loc='lower right')
 
-# Save plot to current directory
-out_path = 'convergence_study.png'
+# Save plot to centralized output directory
+out_path = 'output/plots/convergence_study.png'
+os.makedirs(os.path.dirname(out_path), exist_ok=True)
 plt.savefig(out_path, dpi=300, bbox_inches='tight')
 plt.close()
 print(f"Saved convergence plot to {out_path}")

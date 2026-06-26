@@ -49,8 +49,8 @@ constants:
   epsilon: 0.622
 
 io:
-  data_dir: "suetes/data"
-  fig_dir: "suetes/plots/polar"
+  data_dir: "output/data"
+  fig_dir: "output/plots/polar"
   store_format: "zarr"
   coarsen_window: 1
   sponge_depth: 10

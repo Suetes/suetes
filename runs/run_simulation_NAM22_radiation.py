@@ -47,8 +47,8 @@ from suetes.physics.microphysics import KesslerWarmRain, SimplifiedBettsMiller
 from suetes.physics.radiation import SundqvistCloud, RRTMGPRadiation, CachedRadiation
 from suetes.physics.afgl import AFGLColumnExtension
 
-DATA_DIR = "suetes/data"          # default; overridden per-run by the config's data_dir
-OUTDIR = os.environ.get("SUETES_OUT_DIR", "suetes/output")   # NetCDF output dir (redirectable to another disk)
+DATA_DIR = "output/data"          # default; overridden per-run by the config's data_dir
+OUTDIR = os.environ.get("SUETES_OUT_DIR", "output/simulations")   # NetCDF output dir (redirectable to another disk)
 
 
 def main():

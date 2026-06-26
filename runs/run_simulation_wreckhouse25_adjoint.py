@@ -38,7 +38,7 @@ from suetes.physics.forcing import NewtonianRelaxation
 
 from suetes.vis.visualizer import Visualizer
 
-DATA_DIR = "suetes/data"
+DATA_DIR = "output/data"
 
 def main():
     ACTIVE_DOMAIN = "wreckhouse_adjoint"
@@ -47,7 +47,7 @@ def main():
     lat_c, lon_c = 47.71, -59.31
     wreckhouse_lat, wreckhouse_lon = 47.71, -59.31
     
-    output_dir = "suetes/plots/wreckhouse_adjoint"
+    output_dir = "output/plots/wreckhouse_adjoint"
     os.makedirs(output_dir, exist_ok=True)
 
     nx, ny, nz = 200, 200, 40

@@ -2,18 +2,21 @@
 
 **Suetes** is a high-performance, differentiable, non-hydrostatic atmospheric fluid dynamics solver written in **JAX**.
 
-It implements the fully compressible Euler equations on an **Arakawa C-grid** using **Terrain-Following Coordinates**. The codebase supports both a 2D vertical slice model and a full 3D regional model, enabling highly stable, large-timestep simulations via a **Semi-Implicit Semi-Lagrangian (SISL)** solver.
+It implements the fully compressible Euler equations on an **Arakawa C-grid** using **Terrain-Following Coordinates**. The codebase supports both a 2D vertical slice model and a full 3D regional model, featuring a dual-dynamical core architecture: a **Semi-Implicit Semi-Lagrangian (SISL)** solver for large-timestep coarse runs, and a strictly Eulerian **Split-Explicit Runge-Kutta** solver for convection-permitting high-resolution runs.
 
-Because it is built entirely in JAX, the dynamical core is end-to-end differentiable and fully fused by XLA, making it ideal for machine learning integration (e.g., neural closures, hybrid modeling, data assimilation, and learned coordinate transformations).
+Because it is built entirely in JAX, the dynamical cores are end-to-end differentiable and fully fused by XLA, making it ideal for machine learning integration (e.g., neural closures, hybrid modeling, data assimilation, and learned coordinate transformations).
 
 ---
 
 ##  Features
 
 ###  Dynamics & Numerics
-* **Time Integration:** Semi-Implicit Semi-Lagrangian (SISL) allowing large timesteps by overcoming explicit acoustic and advective CFL limits.
+* **Dual Dynamical Cores:** Support for two runtime-selectable dynamical cores:
+    * **Semi-Implicit Semi-Lagrangian (SISL):** 2nd-order time integration using midpoint trajectory and tendency extrapolation, bypassing explicit acoustic and advective CFL limits for highly efficient coarse simulations ($\ge 10$~km).
+    * **Eulerian Split-Explicit Runge-Kutta:** strictly Eulerian split-explicit scheme handling small-scale nonlinearities exceptionally well, optimal for high-resolution convection-permitting simulations ($\le 3$~km).
 * **Spatial Discretization:** Arakawa C-Grid for optimal dispersion properties.
-* **Advection:** * Optimized 3D Tricubic and 2D Bicubic Semi-Lagrangian advection.
+* **Advection:**
+    * Optimized 3D Tricubic and 2D Bicubic Semi-Lagrangian advection.
     * **Flux-Form Semi-Lagrangian (FFSL)** scheme for exact mass conservation of tracers and density.
     * **Quasi-Monotone Limiters** to prevent unphysical undershoots in tracer transport.
 * **Implicit Solver:** JAX-native GMRES solver for the 2D/3D Helmholtz acoustic problem.
@@ -44,26 +47,29 @@ Suetes is built upon decades of research in Semi-Implicit Semi-Lagrangian (SISL)
 ## Quickstart
 
 ### 1. Forward Simulation (ERA5 Driven)
-Run a real-world regional simulation over the Alps using ERA5 boundary conditions. This script will download data, initialize the 3D domain, and generate visualizations.
+Run a real-world regional simulation over Wreckhouse using ERA5 boundary conditions. This requires a three-step configuration-driven workflow:
+* **Preprocess boundary conditions** (download ERA5 and terrain raw data, compile Zarr boundary stores):
 ```bash
-python run_simulation.py
+python runs/preprocess.py --config configs/wreckhouse25_config.yaml
+```
+* **Execute the forward run** (integrated via JIT compiled core and save results):
+```bash
+python runs/run_simulation.py --config configs/wreckhouse25_config.yaml
+```
+* **Render output fields** (generate diagnostic figures in `output/plots`):
+```bash
+python runs/render.py --config configs/wreckhouse25_config.yaml
 ```
 
 ### 2. Adjoint Sensitivity Analysis
 Calculate the sensitivity of 3D wave energy with respect to the initial wind perturbation at $t=0$. This demonstrates the core's ability to propagate gradients backward through the solver.
 ```bash
-python run_simulation_adjoint.py
-python schaer_mountain_optimal_perturbation_3d.py
+python experiments/run_simulation_adjoint.py
+python experiments/schaer_mountain_optimal_perturbation_3d.py
 ```
 
 ### 3. Inverse Topography Optimization
 Optimize a 3D terrain profile to maximize the generation of gravity waves downstream, illustrating how the core can be used for "Atmospheric Engineering" and inverse modeling.
 ```bash
-python inverse_topography_optimal_3d.py
-```
-
-### 4. Learned Neural Diffusion
-Train a Flax neural network to predict an anisotropic Eddy Viscosity field ($\nu_h, \nu_v$) that preserves a target $k^{-5/3}$ spectral cascade, replacing traditional Smagorinsky closures with learned ones (does not work yet).
-```bash
-python learn_neural_diffusion.py
+python experiments/gravity_wave_optimal_topography_3d.py
 ```

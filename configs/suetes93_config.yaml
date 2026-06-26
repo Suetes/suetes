@@ -49,8 +49,8 @@ constants:
   epsilon: 0.622
 
 io:
-  data_dir: "suetes/data"
-  fig_dir: "suetes/plots/suetes_1km"
+  data_dir: "output/data"
+  fig_dir: "output/plots/suetes_1km"
   store_format: "zarr"
   coarsen_window: 1
   sponge_depth: 30      # Deepened sponge layer to absorb 31km -> 1km wave reflection
