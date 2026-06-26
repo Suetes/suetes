@@ -194,6 +194,10 @@ class RegionalGrid3D:
             'w': self.proj.get_map_factor(Xi_w_2d, Yi_w_2d)
         }
         
+        # Map factor gradients at mass points for the apparent Coriolis metric terms
+        self.dm_dx_m = Xi_m_2d / (2.0 * self.proj.R**2)
+        self.dm_dy_m = Yi_m_2d / (2.0 * self.proj.R**2)
+        
         # Coriolis Parameter: f = 2 \Omega \sin(\phi)
         Omega = 7.2921e-5
         lat_m, _ = self.proj.get_lat_lon(Xi_m_2d, Yi_m_2d)

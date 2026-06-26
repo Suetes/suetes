@@ -214,9 +214,9 @@ class Euler3D:
         m_u = jnp.expand_dims(self.grid.m_factors['u'], axis=-1)
         m_v = jnp.expand_dims(self.grid.m_factors['v'], axis=-1)
 
-        # Apply map factors to the physical gradient
-        tend_u = -self.c['cp'] * th_v_u * grad_pi_x_cart * m_u
-        tend_v = -self.c['cp'] * th_v_v * grad_pi_y_cart * m_v
+        # Apply map factors to the physical gradient (already applied inside op.diff)
+        tend_u = -self.c['cp'] * th_v_u * grad_pi_x_cart
+        tend_v = -self.c['cp'] * th_v_v * grad_pi_y_cart
 
         # Vertical pressure gradient
         grad_pi_prime_z_w = self.op.diff(pi_prime, axis=2, from_loc='m', to_loc='w') * (self.grid.dz / bg['dz_w_full'])
@@ -231,13 +231,27 @@ class Euler3D:
             # The implicit solver matrix requires strict linearity
             tend_w = -self.c['cp'] * bg['th_v_w'] * grad_pi_prime_z_w
 
-        # Coriolis
+        # Coriolis (Linear part is implicit)
         v_at_u = self.op.avg(self.op.avg(v, axis=1, from_loc='v', to_loc='m'), axis=0, from_loc='m', to_loc='u')
         u_at_v = self.op.avg(self.op.avg(u, axis=0, from_loc='u', to_loc='m'), axis=1, from_loc='m', to_loc='v')
         
         f_u_3d, f_v_3d = jnp.expand_dims(self.grid.f_u, axis=-1), jnp.expand_dims(self.grid.f_v, axis=-1)
         tend_u += f_u_3d * v_at_u
         tend_v -= f_v_3d * u_at_v
+
+        # Map Curvature Metric terms (Strictly non-linear, so explicit only)
+        if is_explicit:
+            u_m = self.op.avg(u, axis=0, from_loc='u', to_loc='m')
+            v_m = self.op.avg(v, axis=1, from_loc='v', to_loc='m')
+            dm_dx_m_3d = jnp.expand_dims(self.grid.dm_dx_m, axis=-1)
+            dm_dy_m_3d = jnp.expand_dims(self.grid.dm_dy_m, axis=-1)
+            metric_m = v_m * dm_dx_m_3d - u_m * dm_dy_m_3d
+            
+            metric_u = self.op.avg(metric_m, axis=0, from_loc='m', to_loc='u')
+            metric_v = self.op.avg(metric_m, axis=1, from_loc='m', to_loc='v')
+            
+            tend_u += metric_u * v_at_u
+            tend_v -= metric_v * u_at_v
 
         # Divergence
         m_u, m_v, m_m = self.grid.m_factors['u'][..., None], self.grid.m_factors['v'][..., None], self.grid.m_factors['m'][..., None]
