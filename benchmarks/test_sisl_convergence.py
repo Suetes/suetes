@@ -195,7 +195,8 @@ def run_bubble_at_resolution(dx, dt):
     nz = int(10000 / dx)
     ny = 3
     
-    core_kwargs = {"dt": dt, "nu_div_factor": 0.0, "nu_h_factor": 0.0, "damp_height": 7500.0, "max_damp": 0.05, "alpha": 0.5}
+    core_kwargs = {"dt": dt, "nu_div_factor": 0.0, "nu_h_factor": 0.0, "damp_height": 7500.0, "max_damp": 0.05, "alpha": 0.5,
+        "solver_tol": 1e-10, "solver_maxiter": 100, "solver_restart": 20}
 
     grid = RegionalGrid3D(nx, ny, nz, dx, dx, dx, lat_center=0.0, lon_center=0.0)
     op = CGridOperator3D(grid)

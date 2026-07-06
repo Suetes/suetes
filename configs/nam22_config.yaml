@@ -21,7 +21,9 @@ time:
 
 vertical:
   kappa: 1.0          # >1 -> near-surface stretching (StretchedSleveSimple)
-  scale_s: 10000.0
+  scale_s: 10
+  
+  000.0
   n: 1.0
 
 core:

@@ -16,10 +16,10 @@ os.makedirs(output_dir, exist_ok=True)
 # =====================================================================
 # CONFIGURATION SWITCHES
 # =====================================================================
-CORE_TYPE = "split-explicit"  # Toggle to "sisl" or "split-explicit"
+CORE_TYPE = "sisl"  # Toggle to "sisl" or "split-explicit"
 t_end = 1000.0 
 
-dx, dy, dz = 50.0, 50.0, 50.0  # Resolution (e.g. 125.0 or 50.0)
+dx, dy, dz = 50.0, 50.0, 50.0  # Resolution
 
 # Dynamically calculate grid cells to preserve a 10 km x 10 km physical domain
 domain_width = 10000.0
@@ -34,7 +34,8 @@ ref_dt = 2.5
 dt = ref_dt * (min(dx, dy, dz) / ref_dx)
 
 if CORE_TYPE.lower() == "sisl":
-    core_kwargs = {"dt": dt, "nu_div_factor": 0.05, "nu_h_factor": 0.05, "damp_height": 7500.0, "max_damp": 0.05, "N_bv": 0.0}
+    core_kwargs = {"dt": dt, "nu_div_factor": 0.05, "nu_h_factor": 0.05, "damp_height": 7500.0, "max_damp": 0.05, "N_bv": 0.0,
+    "solver_tol": 1e-6, "solver_maxiter": 20, "solver_restart": 20}
 elif CORE_TYPE.lower() == "split-explicit":
     core_kwargs = {"dt": dt, "ns": 12, "nu_div_factor": 0.0, "nu_h_factor": 0.0, "damp_height": 7500.0, "max_damp": 0.05, "N_bv": 0.0}
 

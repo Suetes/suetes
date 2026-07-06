@@ -38,6 +38,9 @@ def build_dynamical_core(core_type, grid, operators, constants, initial_state,
             "N_bv": 0.01,
             "alpha": 0.55,
             "use_limiter": False,
+            "solver_tol": 1e-4,
+            "solver_maxiter": 20,
+            "solver_restart": 20,
         }
         # Apply any explicit user overrides passed via kwargs
         params.update(kwargs)
@@ -64,7 +67,11 @@ def build_dynamical_core(core_type, grid, operators, constants, initial_state,
                 if key in initial_state:
                     initial_state[f'tend_{key}_prev'] = jnp.zeros_like(initial_state[key])
                     
-        stepper = SISLStepper3D(physics, params["dt"], alpha=params["alpha"], use_limiter=params["use_limiter"])
+        stepper = SISLStepper3D(
+            physics, params["dt"], alpha=params["alpha"], use_limiter=params["use_limiter"],
+            solver_tol=params["solver_tol"], solver_maxiter=params["solver_maxiter"],
+            solver_restart=params["solver_restart"]
+        )
         return stepper, params["dt"]
         
     elif core_str == "split-explicit":
@@ -247,7 +254,7 @@ class SemiLagrangianAdvector3D:
         self.grid, self.physics, self.dt, self.op = grid, physics, dt, physics.op
 
     def _get_index_velocities(self, u_phys, v_phys, eta_dot, loc='m'):
-        """
+        r"""
         Maps physical velocities to non-dimensional index crossing rates.
 
         Returns velocities in units of [indices / second] scaled by local map factors.
@@ -303,9 +310,10 @@ class SemiLagrangianAdvector3D:
         u_idx_sec, v_idx_sec, w_idx_sec = self._get_index_velocities(state['u'], state['v'], state['eta_dot'], loc)
         
         nx, ny, nz = self.grid.nx, self.grid.ny, self.grid.nz
-        idx_x = jnp.arange(nx + (1 if loc == 'u' else 0), dtype=jnp.float32)
-        idx_y = jnp.arange(ny + (1 if loc == 'v' else 0), dtype=jnp.float32)
-        idx_z = jnp.arange(nz + (1 if loc == 'w' else 0), dtype=jnp.float32)
+        dtype = state['u'].dtype
+        idx_x = jnp.arange(nx + (1 if loc == 'u' else 0), dtype=dtype)
+        idx_y = jnp.arange(ny + (1 if loc == 'v' else 0), dtype=dtype)
+        idx_z = jnp.arange(nz + (1 if loc == 'w' else 0), dtype=dtype)
         Xi_idx, Yi_idx, Zi_idx = jnp.meshgrid(idx_x, idx_y, idx_z, indexing='ij')
         
         # Initial guess (Explicit Euler displacement)
@@ -353,7 +361,7 @@ class SemiImplicitSolver3D:
     Couples the 3D linear operator $\mathcal{L}(\mathbf{x})$ with the 
     `VerticalPreconditioner` to solve for the implicit stabilizing adjustments.
     """
-    def __init__(self, physics, dt, alpha=0.55):
+    def __init__(self, physics, dt, alpha=0.55, solver_tol=1e-4, solver_maxiter=20, solver_restart=20):
         r"""
         Initializes the implicit solver.
 
@@ -366,19 +374,34 @@ class SemiImplicitSolver3D:
         self.dt = dt
         self.alpha = alpha
         self.pi_scale = 100000.0
+        self.solver_tol = solver_tol
+        self.solver_maxiter = solver_maxiter
+        self.solver_restart = solver_restart
 
-    def solve(self, rhs_prime, bg_precomputed):
+    def solve(self, rhs_prime, bg_precomputed, x0=None):
         r"""
         Solves the implicit system $\mathcal{A}\mathbf{x} = \mathbf{b}$ using preconditioned GMRES.
 
         Args:
             rhs_prime (dict): The linear residual (forcing terms) from the explicit step.
             bg_precomputed (dict): Precomputed hydrostatic background state metrics.
+            x0 (dict, optional): Initial guess for the solution variables.
 
         Returns:
             dict: The implicit correction vector $\mathbf{x}$.
         """
         rhs_scaled = {k: rhs_prime[k] * self.pi_scale if k == 'pi' else rhs_prime[k] for k in rhs_prime}
+
+        if x0 is not None:
+            x0_scaled = {
+                'u': x0['u'],
+                'v': x0['v'],
+                'w': x0['w'],
+                'pi': x0['pi'] * self.pi_scale,
+                'eta_dot': x0['eta_dot'] * bg_precomputed['dz_w_full']
+            }
+        else:
+            x0_scaled = rhs_scaled
 
         # Setup preconditioner
         preconditioner = VerticalPreconditioner(self.physics, self.dt, alpha=self.alpha)
@@ -419,7 +442,7 @@ class SemiImplicitSolver3D:
 
         self.physics.op.use_stop_grad = False
         try:
-            x_sol_scaled, info = gmres(A_fn, rhs_scaled, x0=rhs_scaled, tol=1e-4, maxiter=20, restart=20, M=M_fn)
+            x_sol_scaled, info = gmres(A_fn, rhs_scaled, x0=x0_scaled, tol=self.solver_tol, maxiter=self.solver_maxiter, restart=self.solver_restart, M=M_fn)
         finally:
             self.physics.op.use_stop_grad = True
         
@@ -543,7 +566,7 @@ class SISLStepper3D:
     4. State assembly and a-posteriori divergence damping.
     5. Boundary condition blending and thermodynamic reconciliation.
     """
-    def __init__(self, physics, dt, alpha=0.55, use_limiter=False, use_checkpointing = False):
+    def __init__(self, physics, dt, alpha=0.55, use_limiter=False, use_checkpointing=False, solver_tol=1e-4, solver_maxiter=20, solver_restart=20):
         r"""
         Initializes the integration stepper.
 
@@ -554,13 +577,18 @@ class SISLStepper3D:
             use_limiter (bool, optional): Toggles the advection limiter. Defaults to False.
             use_checkpointing (bool): Enables JAX gradient checkpointing (rematerialization) 
                 to trade re-computation for memory savings during adjoint/autodiff tasks.
+            solver_tol (float, optional): GMRES solver tolerance. Defaults to 1e-4.
+            solver_maxiter (int, optional): GMRES maximum iterations. Defaults to 20.
+            solver_restart (int, optional): GMRES restart dimension. Defaults to 20.
         """
         self.physics, self.dt = physics, dt
         self.alpha = alpha
         self.use_limiter = use_limiter
         self.advector = SemiLagrangianAdvector3D(physics.grid, physics, dt)
         self.ffsl_advector = FluxFormAdvector(physics.grid, dt)
-        self.implicit_solver = SemiImplicitSolver3D(physics, dt, alpha=alpha)
+        self.implicit_solver = SemiImplicitSolver3D(
+            physics, dt, alpha=alpha, solver_tol=solver_tol, solver_maxiter=solver_maxiter, solver_restart=solver_restart
+        )
         self.use_checkpointing = use_checkpointing
         
         # Ask the physics suite for the active tracers
@@ -725,7 +753,8 @@ class SISLStepper3D:
         rhs_u = cp_advect_cubic(u_in, coords_u, self.use_limiter)
         rhs_v = cp_advect_cubic(v_in, coords_v, self.use_limiter)
         rhs_w = cp_advect_cubic(w_in, coords_w, self.use_limiter)
-        rhs_pi_prime = cp_advect_cubic(pi_prime_in, coords_m, self.use_limiter)
+        # rhs_pi_prime = cp_advect_cubic(pi_prime_in, coords_m, self.use_limiter)
+        rhs_pi_prime = pi_prime_in # The previous line seems to have been a fundamental bug in how we treat an Eulerian quantity, so pi should not be advected!!!
         th_v_prime_next = cp_advect_cubic(th_v_prime_in, coords_m, self.use_limiter)
         
         # Advect mass with checkpointed FFSL scheme
@@ -746,7 +775,7 @@ class SISLStepper3D:
         # =====================================================================
         th_v_prime_next = th_v_next - self.physics.theta_bg
         th_v_prime_w_next = self.physics.op.avg(th_v_prime_next, axis=2, from_loc='m', to_loc='w')
-        rhs_w += 0.5 * self.dt * (self.physics.c['g'] * (th_v_prime_w_next / bg_precomputed['th_v_w']))
+        rhs_w += alpha * self.dt * (self.physics.c['g'] * (th_v_prime_w_next / bg_precomputed['th_v_w']))
 
         # --- ENFORCE KINEMATIC BOUNDARY ON RHS ---
         # Bring the explicit horizontal winds to the w-points
@@ -776,7 +805,7 @@ class SISLStepper3D:
         # 3. IMPLICIT SOLVE
         # =====================================================================
         rhs_prime = {'u': rhs_u, 'v': rhs_v, 'w': rhs_w, 'pi': rhs_pi_prime, 'eta_dot': R_eta_dot}
-        state_prime_next = self.implicit_solver.solve(rhs_prime, bg_precomputed)
+        state_prime_next = self.implicit_solver.solve(rhs_prime, bg_precomputed, x0=state_prime_n)
         
         # =====================================================================
         # 4. ASSEMBLE FINAL STATE
