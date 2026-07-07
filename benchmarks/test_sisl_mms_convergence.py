@@ -153,9 +153,6 @@ def analytic_tend_th(x, y, z):
     background_transport = -w * dth_bg_dz
     return advect + background_transport
 
-# =============================================================================
-# Implicit Linear Solver Parts (For split-forcing in SISL)
-# =============================================================================
 @jax.jit
 def analytic_tend_u_imp(x, y, z, f_val):
     m = 1.0 + (x**2 + y**2) / (4.0 * R_earth**2)
@@ -190,7 +187,11 @@ vmap_u_imp = jax.vmap(jax.vmap(jax.vmap(analytic_tend_u_imp, in_axes=(0, 0, 0, N
 vmap_v_imp = jax.vmap(jax.vmap(jax.vmap(analytic_tend_v_imp, in_axes=(0, 0, 0, None)), in_axes=(0, 0, 0, 0)), in_axes=(0, 0, 0, 0))
 vmap_w_imp = jax.vmap(jax.vmap(jax.vmap(analytic_tend_w_imp, in_axes=(0, 0, 0)), in_axes=(0, 0, 0)), in_axes=(0, 0, 0))
 
-def run_mms_at_resolution(core_type, n, num_steps=5):
+def compute_safe_err(final, initial, mask):
+    sq_err = (final - initial)**2
+    return float(jnp.sqrt(jnp.sum(sq_err * mask) / jnp.sum(mask)))
+
+def setup_sisl_test(n, use_sponge=True):
     nx, ny, nz = n, n, n
     dx = Lx / nx
     dy = Ly / ny
@@ -199,20 +200,15 @@ def run_mms_at_resolution(core_type, n, num_steps=5):
     grid = RegionalGrid3D(nx, ny, nz, dx, dy, dz, lat_center=60.0, lon_center=30.0)
     op = CGridOperator3D(grid)
     constants_dict = {'g': g, 'cp': cp, 'cvd': cvd, 'Rd': Rd, 'p0': p0}
-    t_end_fixed = 640.0 
-    dt_ref = t_end_fixed / 2.0  # 2 steps at reference resolution N=16
+    t_end_fixed = 320.0 
+    dt_ref = t_end_fixed / 2.0  # 160s at N=16
     dt = dt_ref * (16.0 / n)
     
-    if core_type == "sisl":
-        core_kwargs = {
-            "dt": dt, "nu_div_factor": 0.0, "nu_h_factor": 0.0, "alpha": 0.5,
-            "damp_height": 20000.0,
-            "solver_tol": 1e-14, "solver_maxiter": 100, "solver_restart": 100
-        }
-    elif core_type == "split-explicit":
-        core_kwargs = {"dt": dt, "ns": 10, "nu_div_factor": 0.0, "nu_h_factor": 0.0, "alpha": 0.55}
-    else:
-        raise ValueError(f"Unknown core: {core_type}")
+    core_kwargs = {
+        "dt": dt, "nu_div_factor": 0.0, "nu_h_factor": 0.0, "alpha": 0.5,
+        "damp_height": 20000.0,
+        "solver_tol": 1e-14, "solver_maxiter": 100, "solver_restart": 100
+    }
 
     X_u, Y_u, Z_u = jnp.meshgrid(grid.x_c, grid.y_m, grid.z_m, indexing='ij')
     X_v, Y_v, Z_v = jnp.meshgrid(grid.x_m, grid.y_c, grid.z_m, indexing='ij')
@@ -246,13 +242,17 @@ def run_mms_at_resolution(core_type, n, num_steps=5):
         dist_y = Ly / 2.0 - jnp.abs(Y)
         return (dist_x >= buffer) & (dist_y >= buffer)
 
-    eval_u = get_eval_mask(X_u, Y_u)
-    eval_v = get_eval_mask(X_v, Y_v)
-    eval_w = get_eval_mask(X_w, Y_w)
-    eval_m = get_eval_mask(X_m, Y_m)
+    eval_masks = {
+        'u': get_eval_mask(X_u, Y_u),
+        'v': get_eval_mask(X_v, Y_v),
+        'w': get_eval_mask(X_w, Y_w),
+        'm': get_eval_mask(X_m, Y_m)
+    }
 
     sponge_width = 300000.0 
     def get_sponge_mask(X, Y):
+        if not use_sponge:
+            return jnp.ones_like(X)
         dist_x = Lx / 2.0 - jnp.abs(X)
         dist_y = Ly / 2.0 - jnp.abs(Y)
         alpha_x = jnp.clip(dist_x / sponge_width, 0.0, 1.0)
@@ -261,13 +261,15 @@ def run_mms_at_resolution(core_type, n, num_steps=5):
         smooth_y = alpha_y**2 * (3.0 - 2.0 * alpha_y)
         return smooth_x * smooth_y
 
-    sponge_u = get_sponge_mask(X_u, Y_u)
-    sponge_v = get_sponge_mask(X_v, Y_v)
-    sponge_w = get_sponge_mask(X_w, Y_w)
-    sponge_m = get_sponge_mask(X_m, Y_m)
+    sponge_masks = {
+        'u': get_sponge_mask(X_u, Y_u),
+        'v': get_sponge_mask(X_v, Y_v),
+        'w': get_sponge_mask(X_w, Y_w),
+        'm': get_sponge_mask(X_m, Y_m)
+    }
     
     stepper, dt = build_dynamical_core(
-        core_type=core_type, grid=grid, operators=op, constants=constants_dict,
+        core_type="sisl", grid=grid, operators=op, constants=constants_dict,
         initial_state=initial_state, N_bv=N_bv, **core_kwargs
     )
     
@@ -282,52 +284,40 @@ def run_mms_at_resolution(core_type, n, num_steps=5):
     ana_w_imp = vmap_w_imp(X_w, Y_w, Z_w)
     
     alpha_val = stepper.alpha
-    
-    # Isolate explicit residuals using the full Eulerian reference frame
-    ana_u_exp = (ana_u - alpha_val * ana_u_imp) / (1.0 - alpha_val)
-    ana_v_exp = (ana_v - alpha_val * ana_v_imp) / (1.0 - alpha_val)
-    ana_w_exp = (ana_w - alpha_val * ana_w_imp) / (1.0 - alpha_val)
-    ana_th_exp = ana_th
+    ana_u_exp = ana_u
+    ana_v_exp = ana_v
+    ana_w_exp = ana_w
+    ana_th_exp = (1.0 - alpha_val) * ana_th
     
     original_get_tendencies = stepper.physics.get_tendencies
     
     def get_tendencies_with_forcing(state_prime, bg, is_explicit=False, ml_params=None):
         tends = original_get_tendencies(state_prime, bg, is_explicit, ml_params)
         if is_explicit:
-            if core_type == "sisl":
-                tends['u'] -= ana_u_exp
-                tends['v'] -= ana_v_exp
-                tends['w'] -= ana_w_exp
-                tends['pi'] -= ana_pi
-                tends['th_v'] -= ana_th_exp
-                
-                tends['u'] = tends['u'] * sponge_u + ana_u_exp * (1.0 - sponge_u)
-                tends['v'] = tends['v'] * sponge_v + ana_v_exp * (1.0 - sponge_v)
-                tends['w'] = tends['w'] * sponge_w + ana_w_exp * (1.0 - sponge_w)
-                tends['pi'] = tends['pi'] * sponge_m + ana_pi * (1.0 - sponge_m)
-                tends['th_v'] = tends['th_v'] * sponge_m + ana_th_exp * (1.0 - sponge_m)
-            else:
-                tends['u'] -= ana_u
-                tends['v'] -= ana_v
-                tends['w'] -= ana_w
-                tends['pi'] -= ana_pi
-                tends['th_v'] -= ana_th
+            tends['u'] -= ana_u_exp
+            tends['v'] -= ana_v_exp
+            tends['w'] -= ana_w_exp
+            tends['pi'] -= ana_pi
+            tends['th_v'] -= ana_th_exp
+            
+            if use_sponge:
+                tends['u'] = tends['u'] * sponge_masks['u'] + ana_u_exp * (1.0 - sponge_masks['u'])
+                tends['v'] = tends['v'] * sponge_masks['v'] + ana_v_exp * (1.0 - sponge_masks['v'])
+                tends['w'] = tends['w'] * sponge_masks['w'] + ana_w_exp * (1.0 - sponge_masks['w'])
+                tends['pi'] = tends['pi'] * sponge_masks['m'] + ana_pi * (1.0 - sponge_masks['m'])
+                tends['th_v'] = tends['th_v'] * sponge_masks['m'] + ana_th_exp * (1.0 - sponge_masks['m'])
         return tends
         
     stepper.physics.get_tendencies = get_tendencies_with_forcing
     
-    if core_type == "sisl":
-        original_solve = stepper.implicit_solver.solve
-        def solve_with_mms_forcing(rhs_prime, bg_precomputed, x0=None):
-            rhs_prime['u'] -= alpha_val * dt * ana_u_imp
-            rhs_prime['v'] -= alpha_val * dt * ana_v_imp
-            rhs_prime['w'] -= alpha_val * dt * ana_w_imp
-            rhs_prime['pi'] -= alpha_val * dt * ana_pi
-            return original_solve(rhs_prime, bg_precomputed, x0)
-        stepper.implicit_solver.solve = solve_with_mms_forcing
-        
-    num_steps = int(t_end_fixed / dt)
-    actual_t_end = num_steps * dt
+    original_solve = stepper.implicit_solver.solve
+    def solve_with_mms_forcing(rhs_prime, bg_precomputed, x0=None):
+        rhs_prime['u'] -= alpha_val * dt * ana_u
+        rhs_prime['v'] -= alpha_val * dt * ana_v
+        rhs_prime['w'] -= alpha_val * dt * ana_w
+        rhs_prime['pi'] -= alpha_val * dt * ana_pi
+        return original_solve(rhs_prime, bg_precomputed, x0)
+    stepper.implicit_solver.solve = solve_with_mms_forcing
     
     def bc_fn(s, f):
         for k in ['u', 'v', 'w']:
@@ -339,106 +329,124 @@ def run_mms_at_resolution(core_type, n, num_steps=5):
 
     def step_fn_mms(s, i):
         s_next = stepper.step(s, i*dt, None, bc_fn)
-        s_next['u'] = s_next['u'] * sponge_u + initial_state['u'] * (1.0 - sponge_u)
-        s_next['v'] = s_next['v'] * sponge_v + initial_state['v'] * (1.0 - sponge_v)
-        s_next['w'] = s_next['w'] * sponge_w + initial_state['w'] * (1.0 - sponge_w)
-        s_next['eta_dot'] = s_next['eta_dot'] * sponge_w + initial_state['eta_dot'] * (1.0 - sponge_w)
-        s_next['pi'] = s_next['pi'] * sponge_m + initial_state['pi'] * (1.0 - sponge_m)
-        s_next['th_v'] = s_next['th_v'] * sponge_m + initial_state['th_v'] * (1.0 - sponge_m)
+        s_next['th_v'] = s_next['th_v'] - alpha_val * dt * ana_th
         s_next['rho'] = p0 / (Rd * s_next['th_v']) * (s_next['pi'] ** (cvd / Rd))
-        if 'u_prev' in s_next:
-            s_next['u_prev'] = s_next['u_prev'] * sponge_u + initial_state['u'] * (1.0 - sponge_u)
-            s_next['v_prev'] = s_next['v_prev'] * sponge_v + initial_state['v'] * (1.0 - sponge_v)
-            s_next['w_prev'] = s_next['w_prev'] * sponge_w + initial_state['w'] * (1.0 - sponge_w)
-            s_next['eta_dot_prev'] = s_next['eta_dot_prev'] * sponge_w + initial_state['eta_dot'] * (1.0 - sponge_w)
-            s_next['tend_th_v_prev'] = s_next['tend_th_v_prev'] * sponge_m
+        if use_sponge:
+            s_next['u'] = s_next['u'] * sponge_masks['u'] + initial_state['u'] * (1.0 - sponge_masks['u'])
+            s_next['v'] = s_next['v'] * sponge_masks['v'] + initial_state['v'] * (1.0 - sponge_masks['v'])
+            s_next['w'] = s_next['w'] * sponge_masks['w'] + initial_state['w'] * (1.0 - sponge_masks['w'])
+            s_next['eta_dot'] = s_next['eta_dot'] * sponge_masks['w'] + initial_state['eta_dot'] * (1.0 - sponge_masks['w'])
+            s_next['pi'] = s_next['pi'] * sponge_masks['m'] + initial_state['pi'] * (1.0 - sponge_masks['m'])
+            s_next['th_v'] = s_next['th_v'] * sponge_masks['m'] + initial_state['th_v'] * (1.0 - sponge_masks['m'])
+            s_next['rho'] = p0 / (Rd * s_next['th_v']) * (s_next['pi'] ** (cvd / Rd))
+            if 'u_prev' in s_next:
+                s_next['u_prev'] = s_next['u_prev'] * sponge_masks['u'] + initial_state['u'] * (1.0 - sponge_masks['u'])
+                s_next['v_prev'] = s_next['v_prev'] * sponge_masks['v'] + initial_state['v'] * (1.0 - sponge_masks['v'])
+                s_next['w_prev'] = s_next['w_prev'] * sponge_masks['w'] + initial_state['w'] * (1.0 - sponge_masks['w'])
+                s_next['eta_dot_prev'] = s_next['eta_dot_prev'] * sponge_masks['w'] + initial_state['eta_dot'] * (1.0 - sponge_masks['w'])
+                s_next['tend_th_v_prev'] = s_next['tend_th_v_prev'] * sponge_masks['m']
         return s_next, 0.0
 
+    return stepper, grid, dt, initial_state, step_fn_mms, eval_masks, sponge_masks
+
+def debug_sisl_step(n, use_sponge=True):
+    """
+    Runs a diagnostic step for resolution N, inspecting intermediate advection and implicit solve errors.
+    """
+    stepper, grid, dt, initial_state, step_fn_mms, eval_masks, sponge_masks = setup_sisl_test(n, use_sponge)
+    
+    # Check 1 step error (with first-order trajectory Euler bootstrapping)
+    state_step1, _ = step_fn_mms(initial_state, 0)
+    err_u_step1 = compute_safe_err(state_step1['u'], initial_state['u'], eval_masks['u'])
+    err_th_step1 = compute_safe_err(state_step1['th_v'], initial_state['th_v'], eval_masks['m'])
+    
+    # Check 2 step error (now u_prev is active, midpoint trajectory is active)
+    state_step2, _ = step_fn_mms(state_step1, 1)
+    err_u_step2 = compute_safe_err(state_step2['u'], initial_state['u'], eval_masks['u'])
+    err_th_step2 = compute_safe_err(state_step2['th_v'], initial_state['th_v'], eval_masks['m'])
+    
+    # Run full simulation (t_end = 2 * dt)
+    t_end_fixed = 2.0 * dt
+    num_steps = 2
     sim = Simulation(step_fn=step_fn_mms, dt=dt)
-    final_state = sim.run(initial_state, t_start=0.0, t_end=actual_t_end, chunk_steps=num_steps)
-
-    def compute_safe_err(final, initial, mask):
-        sq_err = (final - initial)**2
-        return jnp.sqrt(jnp.sum(sq_err * mask) / jnp.sum(mask))
-
-    err_u = float(compute_safe_err(final_state['u'], initial_state['u'], eval_u))
-    err_v = float(compute_safe_err(final_state['v'], initial_state['v'], eval_v))
-    err_w = float(compute_safe_err(final_state['w'], initial_state['w'], eval_w))
-    err_pi = float(compute_safe_err(final_state['pi'], initial_state['pi'], eval_m))
-    err_th = float(compute_safe_err(final_state['th_v'], initial_state['th_v'], eval_m))
+    final_state = sim.run(initial_state, t_start=0.0, t_end=t_end_fixed, chunk_steps=num_steps)
     
-    return dx, err_u, err_v, err_w, err_pi, err_th
-
-def run_study(core_type):
-    print(f"\n========================================")
-    print(f"Running MMS study for {core_type.upper()} core...")
-    print(f"========================================")
+    err_u_final = compute_safe_err(final_state['u'], initial_state['u'], eval_masks['u'])
+    err_v_final = compute_safe_err(final_state['v'], initial_state['v'], eval_masks['v'])
+    err_w_final = compute_safe_err(final_state['w'], initial_state['w'], eval_masks['w'])
+    err_pi_final = compute_safe_err(final_state['pi'], initial_state['pi'], eval_masks['m'])
+    err_th_final = compute_safe_err(final_state['th_v'], initial_state['th_v'], eval_masks['m'])
     
-    resolutions = [8, 16, 32, 64, 128]
+    return {
+        'dx': grid.dx, 'dt': dt, 'num_steps': num_steps,
+        'err_u_step1': err_u_step1, 'err_th_step1': err_th_step1,
+        'err_u_step2': err_u_step2, 'err_th_step2': err_th_step2,
+        'err_u_final': err_u_final, 'err_v_final': err_v_final,
+        'err_w_final': err_w_final, 'err_pi_final': err_pi_final, 'err_th_final': err_th_final
+    }
+
+def run_sisl_convergence_study(use_sponge=True):
+    print(f"\n==================================================================================")
+    print(f"Running Dedicated SISL MMS Convergence & Diagnostic Study (Sponge={use_sponge})")
+    print(f"==================================================================================")
+    
+    resolutions = [8, 16, 32, 64]
     results = []
     
     for r in resolutions:
-        dx, eu, ev, ew, epi, eth = run_mms_at_resolution(core_type, r)
-        results.append((dx, eu, ev, ew, epi, eth))
-        print(f"Res: {r:2d} | dx: {dx/1000.:.1f}km | err_u: {eu:.2e} | err_v: {ev:.2e} | err_w: {ew:.2e} | err_pi: {epi:.2e} | err_th: {eth:.2e}")
+        res_dict = debug_sisl_step(r, use_sponge=use_sponge)
+        results.append(res_dict)
+        print(f"Res N={r:2d} (dx={res_dict['dx']/1000.:5.1f}km, dt={res_dict['dt']:4.1f}s, steps={res_dict['num_steps']:3d}):")
+        print(f"  [Step 1 Error] u: {res_dict['err_u_step1']:.2e} | th_v: {res_dict['err_th_step1']:.2e}")
+        print(f"  [Step 2 Error] u: {res_dict['err_u_step2']:.2e} | th_v: {res_dict['err_th_step2']:.2e}")
+        print(f"  [Final Error ] u: {res_dict['err_u_final']:.2e} | v: {res_dict['err_v_final']:.2e} | w: {res_dict['err_w_final']:.2e} | pi: {res_dict['err_pi_final']:.2e} | th_v: {res_dict['err_th_final']:.2e}")
         
-    print("\n--- Spatial Convergence Rates ---")
-    rates = {'u': [], 'v': [], 'w': [], 'pi': [], 'th': []}
+    print("\n--- Order of Accuracy (Rate of Convergence) ---")
+    print("Transition        | u (Step 1) | u (Step 2) | u (Final)  | th_v (Final) | pi (Final)")
+    print("-" * 75)
+    
+    rates_u_final = []
     for i in range(len(resolutions) - 1):
-        dx1, u1, v1, w1, pi1, th1 = results[i]
-        dx2, u2, v2, w2, pi2, th2 = results[i+1]
+        r1, r2 = results[i], results[i+1]
+        factor = r1['dx'] / r2['dx']
         
-        factor = dx1 / dx2
-        rate_u = np.log(u1 / u2) / np.log(factor) if u2 > 0 else np.nan
-        rate_v = np.log(v1 / v2) / np.log(factor) if v2 > 0 else np.nan
-        rate_w = np.log(w1 / w2) / np.log(factor) if w2 > 0 else np.nan
-        rate_pi = np.log(pi1 / pi2) / np.log(factor) if pi2 > 0 else np.nan
-        rate_th = np.log(th1 / th2) / np.log(factor) if th2 > 0 else np.nan
+        rate_u_s1 = np.log(r1['err_u_step1'] / r2['err_u_step1']) / np.log(factor)
+        rate_u_s2 = np.log(r1['err_u_step2'] / r2['err_u_step2']) / np.log(factor)
+        rate_u_f  = np.log(r1['err_u_final'] / r2['err_u_final']) / np.log(factor)
+        rate_th_f = np.log(r1['err_th_final'] / r2['err_th_final']) / np.log(factor)
+        rate_pi_f = np.log(r1['err_pi_final'] / r2['err_pi_final']) / np.log(factor)
         
-        rates['u'].append(rate_u)
-        rates['v'].append(rate_v)
-        rates['w'].append(rate_w)
-        rates['pi'].append(rate_pi)
-        rates['th'].append(rate_th)
+        rates_u_final.append(rate_u_f)
         
-        print(f"Res {resolutions[i]} -> {resolutions[i+1]}:")
-        print(f"  Rate u : {rate_u:.2f} (Expected ~2.00)" if not np.isnan(rate_u) else "  Rate u : N/A")
-        print(f"  Rate v : {rate_v:.2f} (Expected ~2.00)" if not np.isnan(rate_v) else "  Rate v : N/A")
-        print(f"  Rate w : {rate_w:.2f} (Expected ~2.00)" if not np.isnan(rate_w) else "  Rate w : N/A")
-        print(f"  Rate pi: {rate_pi:.2f} (Expected ~2.00)" if not np.isnan(rate_pi) else "  Rate pi: N/A")
-        print(f"  Rate th: {rate_th:.2f} (Expected ~2.00)" if not np.isnan(rate_th) else "  Rate th: N/A")
+        print(f"N={resolutions[i]:2d} -> N={resolutions[i+1]:2d}   |   {rate_u_s1:6.2f}   |   {rate_u_s2:6.2f}   |   {rate_u_f:6.2f}   |    {rate_th_f:6.2f}    |   {rate_pi_f:6.2f}")
         
-    return resolutions, results, rates
+    return resolutions, results, rates_u_final
 
 if __name__ == "__main__":
-    res_sisl, results_sisl, rates_sisl = run_study("sisl")
-    res_se, results_se, rates_se = run_study("split-explicit")
+    res_sponge, results_sponge, rates_sponge = run_sisl_convergence_study(use_sponge=True)
+    res_no_sponge, results_no_sponge, rates_no_sponge = run_sisl_convergence_study(use_sponge=False)
     
-    plt.figure(figsize=(10, 8))
-    dx_vals = [res[0] for res in results_sisl]
-    err_u_sisl = [res[1] for res in results_sisl]
-    err_u_se = [res[1] for res in results_se]
+    # Generate diagnostic comparison plot
+    plt.figure(figsize=(10, 7))
+    dx_vals = [r['dx'] for r in results_sponge]
+    err_u_sponge = [r['err_u_final'] for r in results_sponge]
+    err_u_no_sponge = [r['err_u_final'] for r in results_no_sponge]
     
-    valid_rates_sisl = [r for r in rates_sisl["u"] if not np.isnan(r)]
-    valid_rates_se = [r for r in rates_se["u"] if not np.isnan(r)]
-    avg_rate_sisl = np.mean(valid_rates_sisl) if valid_rates_sisl else 0.0
-    avg_rate_se = np.mean(valid_rates_se) if valid_rates_se else 0.0
+    plt.loglog(dx_vals, err_u_sponge, 'o-', label=f'SISL u-error (With Sponge, Avg Rate={np.mean(rates_sponge):.2f})', linewidth=2, markersize=8)
+    plt.loglog(dx_vals, err_u_no_sponge, 's--', label=f'SISL u-error (No Sponge, Avg Rate={np.mean(rates_no_sponge):.2f})', linewidth=2, markersize=8)
     
-    plt.loglog(dx_vals, err_u_sisl, 'o-', label=f'SISL u-error (Avg Rate = {avg_rate_sisl:.2f})', linewidth=2, markersize=8)
-    plt.loglog(dx_vals, err_u_se, 's-', label=f'Split-Explicit u-error (Avg Rate = {avg_rate_se:.2f})', linewidth=2, markersize=8)
-    
-    ref_start = max(err_u_sisl[0], err_u_se[0]) * 1.5
+    ref_start = max(err_u_sponge[0], err_u_no_sponge[0]) * 1.5
     ref_line = ref_start * (np.array(dx_vals) / dx_vals[0])**2
-    plt.loglog(dx_vals, ref_line, 'k--', label='Theoretical 2nd Order', alpha=0.7)
+    plt.loglog(dx_vals, ref_line, 'k:', label=r'Theoretical 2nd Order Slope ($O(\Delta x^2)$)', alpha=0.8, linewidth=2)
     
     plt.xlabel(r'Grid Spacing $\Delta x$ (m)', fontsize=12)
     plt.ylabel('$L_2$ Error in $u$ (m/s)', fontsize=12)
-    plt.title('MMS Time-Integrated Convergence Study: 3D Dynamical Core', fontsize=14, fontweight='bold')
+    plt.title('SISL Dynamical Core: MMS Convergence & Sponge Layer Diagnosis', fontsize=14, fontweight='bold')
     plt.grid(True, which="both", ls="--", alpha=0.5)
-    plt.legend(fontsize=10, loc='lower right')
+    plt.legend(fontsize=11, loc='lower right')
     
-    out_path = 'output/plots/mms_convergence_study.png'
+    out_path = 'output/plots/sisl_mms_convergence_diagnostics.png'
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     plt.savefig(out_path, dpi=300, bbox_inches='tight')
     plt.close()
-    print(f"\nSaved MMS convergence plot to {out_path}")
+    print(f"\nSaved diagnostic plot to {out_path}")

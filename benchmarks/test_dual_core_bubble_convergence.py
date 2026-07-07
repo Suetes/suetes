@@ -69,13 +69,17 @@ def run_study(core_type, alpha=0.55):
     res_250 = run_bubble_at_resolution(core_type, 250.0, alpha)
     res_125 = run_bubble_at_resolution(core_type, 125.0, alpha)
     res_062 = run_bubble_at_resolution(core_type, 62.5, alpha)
+    res_031 = run_bubble_at_resolution(core_type, 31.25, alpha)
 
-    err_coarse = float(jnp.sqrt(jnp.mean((block_average_2d(res_125['th_v'][:, 1, :], 2) - res_250['th_v'][:, 1, :])**2)))
-    err_fine = float(jnp.sqrt(jnp.mean((block_average_2d(res_062['th_v'][:, 1, :], 4) - block_average_2d(res_125['th_v'][:, 1, :], 2))**2)))
+    err_1 = float(jnp.sqrt(jnp.mean((block_average_2d(res_125['th_v'][:, 1, :], 2) - res_250['th_v'][:, 1, :])**2)))
+    err_2 = float(jnp.sqrt(jnp.mean((block_average_2d(res_062['th_v'][:, 1, :], 4) - block_average_2d(res_125['th_v'][:, 1, :], 2))**2)))
+    err_3 = float(jnp.sqrt(jnp.mean((block_average_2d(res_031['th_v'][:, 1, :], 8) - block_average_2d(res_062['th_v'][:, 1, :], 4))**2)))
     
-    order = np.log2(err_coarse / err_fine)
-    print(f"-> Errors: {err_coarse:.6f}, {err_fine:.6f} | Order: {order:.2f}")
-    return [err_coarse, err_fine], order
+    order_12 = np.log2(err_1 / err_2)
+    order_23 = np.log2(err_2 / err_3)
+    avg_order = (order_12 + order_23) / 2.0
+    print(f"-> Errors: {err_1:.6e}, {err_2:.6e}, {err_3:.6e} | Avg Order: {avg_order:.2f}")
+    return [err_1, err_2, err_3], avg_order
 
 # Gather data
 errors_se, order_se = run_study("split-explicit")
@@ -83,28 +87,27 @@ errors_se, order_se = run_study("split-explicit")
 errors_sisl_symmetric, order_sisl_symmetric = run_study("sisl", alpha=0.5)
 
 # Plotting setup
-plt.figure(figsize=(7, 6))
+plt.figure(figsize=(10, 8))
 
-dx_vals = np.array([250.0, 125.0])
+dx_vals = np.array([250.0, 125.0, 62.5])
 
 # Plot empirical errors
-plt.loglog(dx_vals, errors_se, 'o-', label=f'Split-Explicit (Order = {order_se:.2f})', linewidth=2, markersize=8)
-# plt.loglog(dx_vals, errors_sisl_default, 's-', label=f'SISL (alpha=0.55, Order = {order_sisl_default:.2f})', linewidth=2, markersize=8)
-plt.loglog(dx_vals, errors_sisl_symmetric, 'd-', label=f'SISL (alpha=0.5, Order = {order_sisl_symmetric:.2f})', linewidth=2, markersize=8)
+plt.loglog(dx_vals, errors_sisl_symmetric, 'o-', label=rf'SISL $\theta_v$-error (Avg Rate = {order_sisl_symmetric:.2f})', linewidth=2, markersize=8)
+plt.loglog(dx_vals, errors_se, 's-', label=rf'Split-Explicit  $\theta_v$-error (Avg Rate = {order_se:.2f})', linewidth=2, markersize=8)
 
 # Add reference 2nd order convergence slope
 ref_start = errors_se[0] * 1.2
 ref_line = ref_start * (dx_vals / dx_vals[0])**2
 plt.loglog(dx_vals, ref_line, 'k--', label='Theoretical 2nd Order', alpha=0.7)
 
-plt.xlabel('Grid Spacing $\Delta x$ (m)', fontsize=12)
-plt.ylabel('$L_2$ Error in $\\theta_v$', fontsize=12)
-plt.title('Spatial Convergence Study: Rising Bubble Benchmark', fontsize=14, fontweight='bold')
+plt.xlabel(r'Grid Spacing $\Delta x$ (m)', fontsize=12)
+plt.ylabel(r'$L_2$ Error in $\theta_v$', fontsize=12)
+plt.title('Spatial convergence study: Rising bubble benchmark', fontsize=14)
 plt.grid(True, which="both", ls="--", alpha=0.5)
 plt.legend(fontsize=10, loc='lower right')
 
 # Save plot to centralized output directory
-out_path = 'output/plots/convergence_study.png'
+out_path = 'output/plots/dual_core_bubble_convergence_study.png'
 os.makedirs(os.path.dirname(out_path), exist_ok=True)
 plt.savefig(out_path, dpi=300, bbox_inches='tight')
 plt.close()
