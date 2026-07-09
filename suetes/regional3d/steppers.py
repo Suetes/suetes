@@ -116,7 +116,7 @@ class VerticalPreconditioner:
     for the 3D GMRES solver, drastically reducing the iterations required to 
     resolve high-frequency sound waves.
     """
-    def __init__(self, physics, dt, alpha=0.55):
+    def __init__(self, physics, dt, alpha=0.55, pi_scale=1000.0):
         r"""
         Initializes the vertical preconditioner.
 
@@ -124,10 +124,12 @@ class VerticalPreconditioner:
             physics (Euler3D): The dynamical core physics configuration.
             dt (float): Integration time step $\Delta t$ [s].
             alpha (float, optional): Semi-implicit off-centering parameter. Defaults to 0.55.
+            pi_scale (float, optional): Scaling factor for Exner pressure. Defaults to 1000.0.
         """
         self.physics = physics
         self.dt = dt
         self.alpha = alpha
+        self.pi_scale = pi_scale
 
     def precompute_banded(self, bg):
         r"""
@@ -174,8 +176,7 @@ class VerticalPreconditioner:
             dict: The preconditioned state vector $\mathbf{x} = M^{-1}\mathbf{b}$.
         """
         # Unscale for physical math
-        pi_scale = 100000.0
-        rhs_pi_phys = rhs_scaled['pi'] / pi_scale
+        rhs_pi_phys = rhs_scaled['pi'] / self.pi_scale
         rhs_w_phys = rhs_scaled['w']
 
         # Kinematic 3d forcing
@@ -228,7 +229,7 @@ class VerticalPreconditioner:
             'u': rhs_scaled['u'],
             'v': rhs_scaled['v'],
             'w': precond_w_phys,
-            'pi': precond_pi_phys * pi_scale, 
+            'pi': precond_pi_phys * self.pi_scale, 
             'eta_dot': precond_eta_dot
         }
 
@@ -373,7 +374,7 @@ class SemiImplicitSolver3D:
         self.physics = physics
         self.dt = dt
         self.alpha = alpha
-        self.pi_scale = 100000.0
+        self.pi_scale = 1000.0
         self.solver_tol = solver_tol
         self.solver_maxiter = solver_maxiter
         self.solver_restart = solver_restart
@@ -404,7 +405,7 @@ class SemiImplicitSolver3D:
             x0_scaled = rhs_scaled
 
         # Setup preconditioner
-        preconditioner = VerticalPreconditioner(self.physics, self.dt, alpha=self.alpha)
+        preconditioner = VerticalPreconditioner(self.physics, self.dt, alpha=self.alpha, pi_scale=self.pi_scale)
         # Call the banded physics pre-computation!
         preconditioner.precompute_banded(bg_precomputed)  
 
@@ -442,7 +443,27 @@ class SemiImplicitSolver3D:
 
         self.physics.op.use_stop_grad = False
         try:
-            x_sol_scaled, info = gmres(A_fn, rhs_scaled, x0=x0_scaled, tol=self.solver_tol, maxiter=self.solver_maxiter, restart=self.solver_restart, M=M_fn)
+            def fwd_solve(matvec, b):
+                x_sol, _ = gmres(
+                    matvec, b, x0=x0_scaled,
+                    tol=self.solver_tol, maxiter=self.solver_maxiter, restart=self.solver_restart,
+                    M=M_fn
+                )
+                return x_sol
+
+            def bwd_solve(matvec_T, b):
+                M_T_raw = jax.linear_transpose(M_fn, rhs_scaled)
+                M_T_fn = lambda y: M_T_raw(y)[0]
+                y_sol, _ = gmres(
+                    matvec_T, b, x0=None,
+                    tol=self.solver_tol, maxiter=self.solver_maxiter, restart=self.solver_restart,
+                    M=M_T_fn
+                )
+                return y_sol
+
+            x_sol_scaled = jax.lax.custom_linear_solve(
+                A_fn, rhs_scaled, solve=fwd_solve, transpose_solve=bwd_solve
+            )
         finally:
             self.physics.op.use_stop_grad = True
         

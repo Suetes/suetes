@@ -75,7 +75,7 @@ class VerticalPreconditioner2D:
     Solving this proxy system provides an excellent initial guess for the full 2D GMRES solver, 
     massively accelerating convergence by resolving the vertically propagating sound waves analytically.
     """
-    def __init__(self, physics, dt, bg_precomputed, beta=0.65):
+    def __init__(self, physics, dt, bg_precomputed, beta=0.65, pi_scale=1000.0):
         r"""
         Initializes the preconditioner and pre-assembles the tridiagonal matrix coefficients.
         
@@ -84,11 +84,12 @@ class VerticalPreconditioner2D:
             dt (float): Time step $\Delta t$ in seconds.
             bg_precomputed (dict): Precomputed reference states and metrics.
             beta (float): Semi-implicit off-centering parameter ($0.5 \leq \beta \leq 1.0$).
+            pi_scale (float, optional): Scaling factor for Exner pressure. Defaults to 1000.0.
         """
         self.physics = physics
         self.dt = dt
         self.alpha = beta * dt
-        self.pi_scale = 100000.0
+        self.pi_scale = pi_scale
         
         # Extract background fields
         self.th_v_w = bg_precomputed['th_v_at_w']
@@ -367,7 +368,7 @@ class SemiImplicitSolver:
         self.grid = grid
         self.physics = physics
         self.dt = dt
-        self.pi_scale = 100000.0
+        self.pi_scale = 1000.0
         self.solver_tol = solver_tol
         self.solver_maxiter = solver_maxiter
         self.solver_restart = solver_restart
@@ -433,7 +434,36 @@ class SemiImplicitSolver:
         
         M_fn = preconditioner if preconditioner is not None else None
 
-        x_sol_scaled, _ = gmres(A_fn, rhs_scaled, x0=x0_scaled, tol=self.solver_tol, maxiter=self.solver_maxiter, restart=self.solver_restart, M=M_fn)
+        def fwd_solve(matvec, b):
+            x_sol, _ = gmres(
+                matvec, b, x0=x0_scaled,
+                tol=self.solver_tol, maxiter=self.solver_maxiter, restart=self.solver_restart,
+                M=M_fn
+            )
+            return x_sol
+
+        if M_fn is not None:
+            def bwd_solve(matvec_T, b):
+                M_T_raw = jax.linear_transpose(M_fn, rhs_scaled)
+                M_T_fn = lambda y: M_T_raw(y)[0]
+                y_sol, _ = gmres(
+                    matvec_T, b, x0=None,
+                    tol=self.solver_tol, maxiter=self.solver_maxiter, restart=self.solver_restart,
+                    M=M_T_fn
+                )
+                return y_sol
+        else:
+            def bwd_solve(matvec_T, b):
+                y_sol, _ = gmres(
+                    matvec_T, b, x0=None,
+                    tol=self.solver_tol, maxiter=self.solver_maxiter, restart=self.solver_restart,
+                    M=None
+                )
+                return y_sol
+
+        x_sol_scaled = jax.lax.custom_linear_solve(
+            A_fn, rhs_scaled, solve=fwd_solve, transpose_solve=bwd_solve
+        )
         
         return {
             'u': x_sol_scaled['u'], 'w': x_sol_scaled['w'], 'pi': x_sol_scaled['pi'] / self.pi_scale, 'eta_dot': x_sol_scaled['eta_dot']
@@ -586,7 +616,7 @@ class SISLStepper:
         rhs_prime = {'u': rhs_u, 'w': rhs_w, 'pi': rhs_pi_prime, 'eta_dot': R_eta_dot}
 
         # Instantiate preconditioner and solve
-        precond = VerticalPreconditioner2D(self.physics, self.dt, bg_precomputed, beta)
+        precond = VerticalPreconditioner2D(self.physics, self.dt, bg_precomputed, beta, pi_scale=self.implicit_solver.pi_scale)
         state_prime_next = self.implicit_solver.solve(rhs_prime, bg_precomputed, beta=beta, preconditioner=precond, x0=state_prime_n)
 
         # Final state assembly

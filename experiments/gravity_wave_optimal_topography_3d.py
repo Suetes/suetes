@@ -21,15 +21,16 @@ from suetes.shared.optimization import OptaxSolver
 output_dir = "output/plots/inversion"
 os.makedirs(output_dir, exist_ok=True)
 
+import sys
 # =====================================================================
 # CONFIGURATION SWITCHES
 # =====================================================================
-CORE_TYPE = "split-explicit"  # Toggle to "sisl" or "split-explicit"
+CORE_TYPE = sys.argv[1] if len(sys.argv) > 1 else "sisl"  # Toggle to "sisl" or "split-explicit"
 
 # --- 1. SETUP PARAMETERS ---
 nx, ny, nz = 300, 3, 50
 dx, dy, dz = 500.0, 500.0, 400.0  
-dt = 4.0
+dt = 15.0 if CORE_TYPE.lower() == "sisl" else 4.0
 t_end = 1800.0  
 num_steps = int(t_end / dt)
 u_bg = 10.0

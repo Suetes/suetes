@@ -17,10 +17,11 @@ from suetes.shared.driver import Simulation
 output_dir = "output/plots/inversion"
 os.makedirs(output_dir, exist_ok=True)
 
+import sys
 # =====================================================================
 # CONFIGURATION SWITCHES
 # =====================================================================
-CORE_TYPE = "split-explicit"  # Toggle to "sisl" or "split-explicit"
+CORE_TYPE = sys.argv[1] if len(sys.argv) > 1 else "sisl"  # Toggle to "sisl" or "split-explicit"
 
 # --- 1. SCHÄR MOUNTAIN PROFILE ---
 def schaer_mountain(x, y):
@@ -33,7 +34,7 @@ def schaer_mountain(x, y):
 nx, ny, nz = 300, 3, 50  
 dx, dy, dz = 500.0, 500.0, 400.0  
 t_end = 7200.0  
-dt = 4.0
+dt = 20.0 if CORE_TYPE.lower() == "sisl" else 4.0
 num_steps = int(t_end / dt)
 
 grid = RegionalGrid3D(nx, ny, nz, dx, dy, dz, lat_center=45.0, lon_center=0.0, h_func=schaer_mountain)
