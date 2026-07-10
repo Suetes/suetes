@@ -219,19 +219,13 @@ def run_sisl_gmres_convergence_study():
         print(f"Rel L2 Error: {rel_l2:.2e} | Rel Max Error: {rel_max:.2e}")
 
     # Plotting
-    fig, (ax0, ax1) = plt.subplots(1, 2, figsize=(14, 5))
+    fig, ax = plt.subplots(1, 1, figsize=(7.5, 5))
 
-    ax0.semilogy(iters_list, l2_errors, 'o-', color='#1f77b4', linewidth=2.5, markersize=8)
-    ax0.set_title('(a) SISL Adjoint Relative $L_2$ Error', fontsize=13, fontweight='bold')
-    ax0.set_xlabel('GMRES Iterations per Time Step', fontsize=11)
-    ax0.set_ylabel(r'Relative Error $\|\nabla \mathcal{L}_k - \nabla \mathcal{L}_{\text{ref}}\|_2 / \|\nabla \mathcal{L}_{\text{ref}}\|_2$', fontsize=11)
-    ax0.grid(True, which='both', ls='--', alpha=0.5)
-
-    ax1.semilogy(iters_list, max_errors, 's-', color='#2ca02c', linewidth=2.5, markersize=8)
-    ax1.set_title(r'(b) SISL Adjoint Relative $L_\infty$ (Max) Error', fontsize=13, fontweight='bold')
-    ax1.set_xlabel('GMRES Iterations per Time Step', fontsize=11)
-    ax1.set_ylabel(r'Relative Max Error $\|\nabla \mathcal{L}_k - \nabla \mathcal{L}_{\text{ref}}\|_\infty / \|\nabla \mathcal{L}_{\text{ref}}\|_\infty$', fontsize=11)
-    ax1.grid(True, which='both', ls='--', alpha=0.5)
+    ax.semilogy(iters_list, l2_errors, 'o-', color='#1f77b4', linewidth=2.5, markersize=8)
+    ax.set_title('SISL Adjoint Relative $L_2$ Convergence', fontsize=13, fontweight='bold')
+    ax.set_xlabel('GMRES Iterations per Time Step', fontsize=11)
+    ax.set_ylabel(r'Relative $L_2$ Error $\|\nabla \mathcal{L}_k - \nabla \mathcal{L}_{\text{ref}}\|_2 / \|\nabla \mathcal{L}_{\text{ref}}\|_2$', fontsize=11)
+    ax.grid(True, which='both', ls='--', alpha=0.5)
 
     out_path = 'output/plots/sisl_adjoint_gmres_convergence.png'
     fig.tight_layout()
