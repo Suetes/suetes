@@ -21,7 +21,8 @@ dependencies = [
     "cdsapi",
     "zarr>=3.0.0",
     "flax",
-    "dinosaur"
+    "dinosaur",
+    "pyyaml",
 ]
 
 [tool.setuptools]
