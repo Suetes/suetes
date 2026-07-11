@@ -25,7 +25,7 @@ def load_benchmark_data():
             if 'dt' in df_temp.columns:
                 df_temp['dt_multiplier'] = (df_temp['dt'] / 2.5).round()
             else:
-                df_temp['dt_multiplier'] = np.where(df_temp['core'] == 'sisl', 6.0, 1.0)
+                df_temp['dt_multiplier'] = np.where(df_temp['core'] == 'sisl', 10.0, 1.0)
         dfs.append(df_temp)
         
     return pd.concat(dfs).drop_duplicates(subset=['core', 'N', 'dt_multiplier'])
@@ -40,7 +40,11 @@ def main():
     # Separate by dynamical core type and timestep configuration
     se_data = df[(df['core'] == 'split-explicit') & (df['dt_multiplier'] == 1.0)].sort_values('N')
     sisl_1x_data = df[(df['core'] == 'sisl') & (df['dt_multiplier'] == 1.0)].sort_values('N')
-    sisl_6x_data = df[(df['core'] == 'sisl') & (df['dt_multiplier'] == 6.0)].sort_values('N')
+    # Determine large dt multiplier (10.0 or 6.0)
+    large_dt_mult = 10.0 if (df['dt_multiplier'] == 10.0).any() else 6.0
+    sisl_large_data = df[(df['core'] == 'sisl') & (df['dt_multiplier'] == large_dt_mult)].sort_values('N')
+    label_a_large = r'SISL ($\Delta t = 25.0$s)' if large_dt_mult == 10.0 else r'SISL ($\Delta t = 15.0$s)'
+    label_bc_large = r'SISL ($10\times$ dt)' if large_dt_mult == 10.0 else r'SISL ($6\times$ dt)'
 
     has_sisl_1x = not sisl_1x_data.empty
 
@@ -61,8 +65,8 @@ def main():
     if has_sisl_1x:
         ax.semilogy(sisl_1x_data['N'], sisl_1x_data['sypd'], 'd-', color='#4daf4a', 
                 lw=line_width, ms=marker_size, label=r'SISL ($\Delta t = 2.5$s)')
-    ax.semilogy(sisl_6x_data['N'], sisl_6x_data['sypd'], 's-', color='#377eb8', 
-            lw=line_width, ms=marker_size, label=r'SISL ($\Delta t = 15.0$s)')
+    ax.semilogy(sisl_large_data['N'], sisl_large_data['sypd'], 's-', color='#377eb8', 
+            lw=line_width, ms=marker_size, label=label_a_large)
     
     ax.set_title('(a) Simulation throughput', fontsize=14, pad=10)
     ax.set_xlabel('Grid dimension ($N \\times N \\times N$)', fontsize=12)
@@ -78,7 +82,7 @@ def main():
     ax.loglog(se_data['N'], se_data['ms_per_step'], 'o-', color='#e41a1c', lw=line_width, ms=marker_size, label='Split-explicit')
     if has_sisl_1x:
         ax.loglog(sisl_1x_data['N'], sisl_1x_data['ms_per_step'], 'd-', color='#4daf4a', lw=line_width, ms=marker_size, label=r'SISL ($1\times$ dt)')
-    ax.loglog(sisl_6x_data['N'], sisl_6x_data['ms_per_step'], 's-', color='#377eb8', lw=line_width, ms=marker_size, label=r'SISL ($6\times$ dt)')
+    ax.loglog(sisl_large_data['N'], sisl_large_data['ms_per_step'], 's-', color='#377eb8', lw=line_width, ms=marker_size, label=label_bc_large)
     
     # Add an ideal O(N^3) line to show where compute saturation happens
     n_vals = np.array(se_data['N'])
@@ -103,7 +107,7 @@ def main():
     ax.loglog(se_data['N'], se_data['vram_mb'], 'o-', color='#e41a1c', lw=line_width, ms=marker_size, label='Split-explicit')
     if has_sisl_1x:
         ax.loglog(sisl_1x_data['N'], sisl_1x_data['vram_mb'], 'd-', color='#4daf4a', lw=line_width, ms=marker_size, label=r'SISL ($1\times$ dt)')
-    ax.loglog(sisl_6x_data['N'], sisl_6x_data['vram_mb'], 's-', color='#377eb8', lw=line_width, ms=marker_size, label=r'SISL ($6\times$ dt)')
+    ax.loglog(sisl_large_data['N'], sisl_large_data['vram_mb'], 's-', color='#377eb8', lw=line_width, ms=marker_size, label=label_bc_large)
     
     ax.set_title('(c) Peak VRAM allocation', fontsize=14, pad=10)
     ax.set_xlabel('Grid dimension ($N \\times N \\times N$)', fontsize=12)

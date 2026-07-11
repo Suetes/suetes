@@ -149,7 +149,7 @@ def main():
     os.makedirs(os.path.dirname(out_csv), exist_ok=True)
     
     # Practical sweeping grid resolutions (up to 160^3 = 4.1 million grid points)
-    grid_sizes = [64, 96, 128, 160]
+    grid_sizes = [64, 96, 128, 160, 192]
     num_steps = 15
     
     results = []
@@ -174,12 +174,12 @@ def main():
             jax.clear_caches()
             gc.collect()
 
-        # SISL gets a 6x timestep to bypass advective CFL constraints
+        # SISL gets a 10x timestep to bypass advective CFL constraints
         try:
-            res_sisl_6x = run_bubble_benchmark("sisl", N=N, dt_multiplier=6.0, num_steps=num_steps)
-            results.append(res_sisl_6x)
+            res_sisl_10x = run_bubble_benchmark("sisl", N=N, dt_multiplier=10.0, num_steps=num_steps)
+            results.append(res_sisl_10x)
         except Exception as e:
-            print(f"  -> SISL 6x FAILED: {e}")
+            print(f"  -> SISL 10x FAILED: {e}")
         finally:
             jax.clear_caches()
             gc.collect()
