@@ -67,7 +67,7 @@ def main():
     # ==========================================
     # 2. DATA ACQUISITION
     # ==========================================
-    manager = ERA5Manager(data_dir="output/data")
+    manager = ERA5Manager(data_dir="inputs")
     days_to_run = [str(i).zfill(2) for i in range(1, 5)] 
     cache_prefix = f"{ACTIVE_DOMAIN}_Nx{nx}_Ny{ny}_dx{int(dx)}"
 
@@ -79,7 +79,7 @@ def main():
     # 3. GEOMETRY & TOPOGRAPHY
     # ==========================================
     base_grid = RegionalGrid3D(nx, ny, nz, dx, dy, dz, cfg["lat_c"], cfg["lon_c"])
-    topo_proc = TopographyProcessor(era5_sl_path=sl_file, gebco_path="output/data/gebco_data.nc")
+    topo_proc = TopographyProcessor(era5_sl_path=sl_file, gebco_path="inputs/gebco_data.nc")
     h_func = topo_proc.process_and_blend(base_grid, sponge_depth=sponge_depth, smooth_sigma=2.0)  
     grid = RegionalGrid3D(nx, ny, nz, dx, dy, dz, cfg["lat_c"], cfg["lon_c"], h_func=h_func, transform=SleveSimple(scale_s=10000.0, n=1.0))
 

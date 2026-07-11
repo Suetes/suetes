@@ -55,8 +55,8 @@ def main():
     out_base = os.environ.get("SUETES_OUT_DIR") or p.output_dir
     run_dir = os.path.join(out_base, RUN_NAME)
     
-    # We write plots to output_dir/plots or output_dir/plots/domain
-    plot_dir = os.path.join(out_base, "plots", p.domain)
+    # We write plots to output/plots/domain
+    plot_dir = os.path.join("output", "plots", p.domain)
     os.makedirs(plot_dir, exist_ok=True)
 
     print(f"[RENDER] Loading simulation output from: {run_dir}")

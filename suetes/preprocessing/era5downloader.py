@@ -76,7 +76,7 @@ class ERA5Manager:
         appropriate for a NAM-22 run with a ~100 hPa model lid.
     """
 
-    def __init__(self, data_dir="output/data",
+    def __init__(self, data_dir="inputs",
                  pressure_levels="buffered"):
         self.data_dir = data_dir
         self.client = cdsapi.Client()

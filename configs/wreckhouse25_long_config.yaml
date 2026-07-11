@@ -49,7 +49,7 @@ constants:
   epsilon: 0.622
 
 io:
-  data_dir: "output/data"
+  data_dir: "inputs"
   fig_dir: "output/plots/wreckhouse_long"
   store_format: "zarr"
   coarsen_window: 1   # No coarsening to preserve high-res wind gradients

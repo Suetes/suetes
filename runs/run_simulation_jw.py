@@ -777,7 +777,7 @@ def main():
         description="Run the dinosaur J-W global driver, then the Suetes "
                     "regional perfect-model test that consumes its netCDF.",
     )
-    parser.add_argument('--output', default='output/data/test.nc',
+    parser.add_argument('--output', default='inputs/test.nc',
                         help='Driver netCDF path. Reused as a cache if it '
                              'already exists; otherwise written by the dinosaur '
                              'stage. Read by the Suetes stage either way.')

@@ -10,11 +10,12 @@ env/
 
 # Project specific
 data/
-plots/
+inputs/
+output/
 results/
 suetes.egg-info/
 weights/
-output/
+
 
 # OS specific
 .DS_Store

@@ -18,9 +18,9 @@ from suetes.vis.visualizer import Visualizer
 import pytest
 
 required_files = [
-    "output/data/suetes_test_run_pressure_levels.nc",
-    "output/data/suetes_test_run_single_levels.nc",
-    "output/data/gebco_data.nc"
+    "inputs/suetes_test_run_pressure_levels.nc",
+    "inputs/suetes_test_run_single_levels.nc",
+    "inputs/gebco_data.nc"
 ]
 missing_files = [f for f in required_files if not os.path.exists(f)]
 pytestmark = pytest.mark.skipif(
@@ -41,8 +41,8 @@ def get_test_env():
 def test_1_era5_stitching():
     print("\n--- 1. ERA5 RAW DATA STITCHING ---")
     processor = ERA5Processor(
-        pl_path="output/data/suetes_test_run_pressure_levels.nc",
-        sl_path="output/data/suetes_test_run_single_levels.nc"
+        pl_path="inputs/suetes_test_run_pressure_levels.nc",
+        sl_path="inputs/suetes_test_run_single_levels.nc"
     )
     state = processor.get_stitched_state(time_idx=0)
     
@@ -58,8 +58,8 @@ def test_1_era5_stitching():
 def test_2_topography_blending(base_grid):
     print("\n--- 2. GEBCO + ERA5 TOPOGRAPHY BLENDING ---")
     topo_proc = TopographyProcessor(
-        era5_sl_path="output/data/suetes_test_run_single_levels.nc",
-        gebco_path="output/data/gebco_data.nc"
+        era5_sl_path="inputs/suetes_test_run_single_levels.nc",
+        gebco_path="inputs/gebco_data.nc"
     )
     # Blend topography with sponge smoothing
     h_func = topo_proc.process_and_blend(base_grid, sponge_depth=20, smooth_sigma=2.0)
@@ -123,7 +123,7 @@ def test_5_visualizations(processor, raw_state, grid):
 
     # 2. Topography Comparison (ERA5 vs GEBCO)
     print("Plotting Topography Comparison...")
-    ds_gebco = xr.open_dataset("output/data/gebco_data.nc")
+    ds_gebco = xr.open_dataset("inputs/gebco_data.nc")
     viz.plot_topography_comparison(processor.ds_sl, ds_gebco, time_idx=0, 
                                    save_path="out_topo_compare.png")
 
@@ -196,9 +196,9 @@ if __name__ == "__main__":
     
     # Ensure data files exist before running
     required_files = [
-        "output/data/suetes_test_run_pressure_levels.nc",
-        "output/data/suetes_test_run_single_levels.nc",
-        "output/data/gebco_data.nc"
+        "inputs/suetes_test_run_pressure_levels.nc",
+        "inputs/suetes_test_run_single_levels.nc",
+        "inputs/gebco_data.nc"
     ]
     for f in required_files:
         assert os.path.exists(f), f"Required test data missing: {f}"

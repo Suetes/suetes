@@ -35,7 +35,7 @@ from suetes.physics.forcing import NewtonianRelaxation
 from suetes.physics.ml import MLPhysicsClosure
 from suetes.vis.visualizer import Visualizer
 
-DATA_DIR = "output/data"
+DATA_DIR = "inputs"
 
 def main():
     ACTIVE_DOMAIN = "nam22"

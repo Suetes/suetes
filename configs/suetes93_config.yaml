@@ -49,7 +49,7 @@ constants:
   epsilon: 0.622
 
 io:
-  data_dir: "output/data"
+  data_dir: "inputs"
   fig_dir: "output/plots/suetes_1km"
   store_format: "zarr"
   coarsen_window: 1

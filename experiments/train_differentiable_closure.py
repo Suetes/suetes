@@ -27,7 +27,7 @@ from suetes.physics.ml import MLPhysicsClosure
 from suetes.physics.surface import McFarlaneSurfaceDrag
 from suetes.physics.forcing import NewtonianRelaxation
 
-DATA_DIR = 'output/data'
+DATA_DIR = 'inputs'
 
 # ---------------------------------------------------------
 # 1. DIFFERENTIABLE ROLLOUT

@@ -43,7 +43,7 @@ from suetes.vis.comparisons import (
         plot_ablation_spectrum
     )
 
-DATA_DIR = "output/data"
+DATA_DIR = "inputs"
 
 def main():
     ACTIVE_DOMAIN = "nam22"

@@ -38,7 +38,7 @@ from suetes.physics.forcing import NewtonianRelaxation
 
 from suetes.vis.visualizer import Visualizer
 
-DATA_DIR = "output/data"
+DATA_DIR = "inputs"
 
 def main():
     ACTIVE_DOMAIN = "wreckhouse_adjoint"

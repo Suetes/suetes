@@ -86,7 +86,7 @@ class ConstantsConfig:
 
 @dataclass
 class IOConfig:
-    data_dir: str = "output/data"    # ERA5 .nc + GEBCO (download output == preprocess input)
+    data_dir: str = "inputs"    # ERA5 .nc + GEBCO (download output == preprocess input)
     store_dir: str = ""              # Zarr stores (preprocess output == runner input); "" -> data_dir
     output_dir: str = ""             # simulation NetCDF output; "" -> "output/simulations"
     fig_dir: str = "output/plots/radiation"
