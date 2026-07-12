@@ -1,20 +1,16 @@
 #!/usr/bin/env python3
 """
-Evaluate NEUVE Coordinate (Paper Evaluation Suite)
+Evaluate NEUVE Coordinate: ZERO-SHOT GENERALIZATION on Unseen Topography
 =============================================================================
-Consolidates the complete evaluation pipeline comparing the frozen trained
-NEUVE coordinate against Gal-Chen and SLEVE over high-frequency jagged topography.
+Evaluates the frozen trained NEUVE coordinate (trained across TRAIN_SEEDS)
+against Gal-Chen and SLEVE on a HELD-OUT test topography (TEST_SEED = 999)
+that was NEVER seen during training.
 
-CRITICAL PHYSICAL & GEOMETRIC EXPERIMENTAL DESIGN FIXES:
-  1. Full Concentration Time-Series Observability (Breaking Snapshot Trap):
-     Instead of evaluating at a single vanishing spatial slice at t=900s,
-     sensor towers record the concentration time-series q(t, y, Z_obs) across
-     all time steps t in [0, t_end]. This provides a wide, convex temporal basin
-     with strong directional gradients pointing directly to the true origin.
-  2. Absolute Physical Altitude Sensor Array (Breaking Index Bias):
-     All sensor observations and model evaluations are interpolated to fixed
-     physical heights Z_obs (meters above sea level), never computational indices k.
-  3. High-Frequency Jagged Mountain Ridge & nz=32 High-Fidelity Reference Plume.
+Key Design:
+  1. Parametric Jagged Topography Generator (shared with train_neuve_coordinate.py).
+  2. Full Concentration Time-Series Observability (Breaking Snapshot Trap).
+  3. Absolute Physical Altitude Sensor Array (Breaking Index Bias).
+  4. Neutral nz=48 GalChenSigma ground truth (Breaking Inverse Crime).
 """
 
 import os
@@ -47,15 +43,41 @@ num_steps = int(t_end / dt)
 
 constants = {'g': 9.81, 'cp': 1004.0, 'Rd': 287.0, 'cvd': 717.0, 'p0': 100000.0}
 
-def terrain_profile(x, y):
-    h0 = 2400.0
-    ax, ay = 1100.0, 6000.0  # Widened along y so flow must pass over ridge barrier
-    jagged_noise = 1.0 + 0.12 * jnp.cos(2 * jnp.pi * x / 2000.0)
-    peak1 = h0 * jnp.exp(- ((x + 3500.0)**2 / ax**2 + y**2 / ay**2)) * jagged_noise
-    h1 = 1300.0
-    bx, by = 900.0, 5000.0
-    peak2 = h1 * jnp.exp(- ((x - 1000.0)**2 / bx**2 + y**2 / by**2))
-    return peak1 + peak2
+# --- PARAMETRIC JAGGED TOPOGRAPHY GENERATOR (shared with train_neuve_coordinate.py) ---
+TRAIN_SEEDS = [101, 202, 303, 404]
+TEST_SEED = 999
+
+def generate_jagged_terrain(seed):
+    """
+    Returns a terrain_profile(x, y) closure for a procedurally generated
+    jagged mountain barrier parameterised by an integer seed.
+    """
+    rng = np.random.RandomState(seed)
+
+    h0 = rng.uniform(1500.0, 1900.0)
+    cx0 = rng.uniform(-2000.0, 2000.0)
+    ax0 = rng.uniform(800.0, 1400.0)
+    ay0 = rng.uniform(4500.0, 7000.0)
+
+    h1 = rng.uniform(300.0, 600.0)
+    cx1 = rng.uniform(500.0, 2500.0)
+    ax1 = rng.uniform(600.0, 1200.0)
+    ay1 = rng.uniform(3500.0, 6000.0)
+
+    jagged_wavelength = rng.uniform(1200.0, 3000.0)
+    jagged_amp = rng.uniform(0.08, 0.18)
+    jagged_phase = rng.uniform(0.0, 2.0 * np.pi)
+
+    def terrain_profile(x, y):
+        jagged = 1.0 + jagged_amp * jnp.cos(2 * jnp.pi * x / jagged_wavelength + jagged_phase)
+        peak1 = h0 * jnp.exp(-((x - cx0)**2 / ax0**2 + y**2 / ay0**2)) * jagged
+        peak2 = h1 * jnp.exp(-((x - cx1)**2 / ax1**2 + y**2 / ay1**2))
+        return peak1 + peak2
+
+    return terrain_profile
+
+# Instantiate the UNSEEN test topography
+terrain_profile = generate_jagged_terrain(TEST_SEED)
 
 def get_wind_u(Z_coords, n_vert=nz, dz_val=dz):
     u_sfc, u_top = 8.0, 15.0
@@ -136,7 +158,7 @@ def make_core_ops(transform_op):
     stepper, _ = build_dynamical_core(
         core_type="split-explicit", grid=grid, operators=op, constants=constants,
         initial_state=base_state, physics_suite=suite,
-        dt=dt, ns=10, nu_div_factor=0.0, nu_h_factor=0.0,
+        dt=dt, ns=16, nu_div_factor=0.0, nu_h_factor=0.0,
         damp_height=4200.0, max_damp=0.5, N_bv=0.01
     )
     stepper.use_checkpointing = True
@@ -221,25 +243,33 @@ def compute_universal_ground_truth_timeseries():
 
 
 def main():
+    import argparse
+    parser = argparse.ArgumentParser(description="Zero-shot generalization evaluation of NEUVE coordinate.")
+    parser.add_argument("--steps", type=int, default=50, help="Number of optimization steps to take (default: 50)")
+    args = parser.parse_args()
+    steps = args.steps
+
     print("=========================================================================")
-    print("NEUVE VERTICAL COORDINATE: COMPREHENSIVE PAPER EVALUATION SUITE")
+    print(f"NEUVE zero-shot generalization: Unseen test topography (SEED={TEST_SEED})")
     print("=========================================================================")
+    print(f"Training Seeds:  {TRAIN_SEEDS}")
+    print(f"Test Seed:       {TEST_SEED} ")
     
     transforms_to_test = {
         'Gal-Chen': GalChenSigma(),
-        'SLEVE': StretchedSleveSimple(stretch_kappa=0.1, scale_s=4500.0),
-        'NEUVE (Trained)': get_neuve_transform()
+        'SLEVE': StretchedSleveSimple(stretch_kappa=0.5, scale_s=5000.0),
+        'NEUVE': get_neuve_transform()
     }
 
-    print("\nGenerating Universal Ground Truth Concentration Time-Series (nz=32, t_end=900s)...")
+    print(f"\nGenerating ground truth time-series on unseen test terrain (nz=48 GalChen, t_end=900s)...")
     universal_target_ts = compute_universal_ground_truth_timeseries()
     print(f"[INFO] Universal ground truth time-series generated. Shape: {universal_target_ts.shape}, Peak signal: {float(jnp.max(universal_target_ts)):.4e}")
 
     # =========================================================================
-    # METRIC 1: ADJOINT SHARPNESS & STEP 1 PARAMETER GRADIENTS (TIME-SERIES LOSS)
+    # Metric 1: Adjoint field sharpness & step 1 parameter gradients
     # =========================================================================
     print("\n-------------------------------------------------------------------------")
-    print("METRIC 1: ADJOINT FIELD SHARPNESS & STEP 1 PARAMETER GRADIENTS")
+    print("Metric 1: Adjoint field sharpness & step 1 parameter gradients")
     print("-------------------------------------------------------------------------")
 
     m1_results = {}
@@ -247,7 +277,7 @@ def main():
     step1_grads = {}
 
     for name, transform in transforms_to_test.items():
-        print(f"  -> Computing Time-Series Adjoint Sensitivity & Step 1 Gradient for [{name}]...")
+        print(f"  -> Computing time-series adjoint sensitivity & step 1 parameter gradients for [{name}]...")
         grid, base_state, stepper, bc_fn = make_core_ops(transform)
         
         X_km = grid.x_m[:, None, None] / 1000.0
@@ -305,7 +335,7 @@ def main():
         }
 
     print("\n=========================================================================")
-    print("METRIC 1: ADJOINT SHARPNESS & STEP 1 SOURCE PARAMETER GRADIENTS")
+    print("Metric 1: Adjoint field sharpness & step 1 parameter gradients")
     print("=========================================================================")
     print(f"{'Coordinate':<16} | {'Peak Sens':<12} | {'Entropy':<10} | {'Step 1 Loss':<12} | {'Grad x_s':<12} | {'Grad z_s':<12}")
     print("-" * 85)
@@ -319,7 +349,7 @@ def main():
     # METRIC 2: TIME-SERIES LOSS LANDSCAPE BASIN SMOOTHNESS
     # =========================================================================
     print("\n-------------------------------------------------------------------------")
-    print("METRIC 2: TIME-SERIES LOSS LANDSCAPE BASIN SMOOTHNESS J(x_s, y_s)")
+    print("Metric 2: Time-series loss landscape basin smoothness J(x_s, y_s)")
     print("-------------------------------------------------------------------------")
 
     m2_grids = {}
@@ -327,7 +357,7 @@ def main():
     y_range = jnp.linspace(-2.5, 2.5, 13)
 
     for name, transform in transforms_to_test.items():
-        print(f"  -> Computing 2D Time-Series Loss Landscape Grid for [{name}]...")
+        print(f"  -> Computing 2D time-series loss landscape grid for [{name}]...")
         grid, base_state, stepper, bc_fn = make_core_ops(transform)
         
         X_km = grid.x_m[:, None, None] / 1000.0
@@ -361,16 +391,16 @@ def main():
 
 
     # =========================================================================
-    # METRIC 3: 3D PARAMETER TRAJECTORIES & CONVERGENCE SPEED (TIME-SERIES LOSS)
+    # Metric 3: 3D parameter trajectories & convergence speed (time-series loss)
     # =========================================================================
     print("\n-------------------------------------------------------------------------")
-    print("METRIC 3: TIME-SERIES INVERSION TRAJECTORY & ADAM CONVERGENCE SPEED")
+    print("Metric 3: Time-series inversion trajectory & ADAM convergence speed")
     print("-------------------------------------------------------------------------")
 
     m3_history = {}
 
     for name, transform in transforms_to_test.items():
-        print(f"  -> Running 30-Step Source Inversion against time-series for [{name}]...")
+        print(f"  -> Running {steps}-step source inversion against time-series for [{name}]...")
         grid, base_state, stepper, bc_fn = make_core_ops(transform)
         
         X_km = grid.x_m[:, None, None] / 1000.0
@@ -405,7 +435,7 @@ def main():
         p_hist = [np.array(p_curr)]
         l_hist = []
         
-        for k in range(30):
+        for k in range(steps):
             lval, gval = loss_and_grad(p_curr)
             updates, opt_st = inner_opt.update(gval, opt_st, p_curr)
             p_curr = optax.apply_updates(p_curr, updates)
@@ -415,7 +445,7 @@ def main():
         m3_history[name] = {'params': np.array(p_hist), 'losses': np.array(l_hist)}
 
     print("\n=========================================================================")
-    print("METRIC 3: FINAL INVERSION RECOVERY ACCURACY AFTER 30 ADAM STEPS")
+    print(f"Metric 3: Final inversion recovery accuracy after {steps} ADAM steps")
     print("=========================================================================")
     print(f"{'Coordinate':<16} | {'Final Loss MSE':<14} | {'Final xs':<10} | {'Final zs':<10} | {'3D Pos Error (km)':<18}")
     print("-" * 80)
@@ -427,73 +457,33 @@ def main():
 
 
     # =========================================================================
-    # GENERATE MULTI-PANEL PAPER SUMMARY FIGURE
+    # GENERATE INVERSION TRAJECTORY & CONVERGENCE speed PLOT (Metric 3)
     # =========================================================================
-    print("\nGenerating publication-grade evaluation summary figures...")
-
-    fig1, axes1 = plt.subplots(3, 1, figsize=(10, 11))
-    fig1.suptitle("Metric 1: Time-Series Adjoint Sensitivities across Coordinate Grids", fontsize=14, y=0.98)
-    y_mid = ny // 2
-
-    for idx, (name, (grid, sens)) in enumerate(m1_results.items()):
-        ax = axes1[idx]
-        x_km = grid.x_m / 1000.0
-        Z_xz = grid.Z_m[:, y_mid, :] / 1000.0
-        X_xz, _ = np.meshgrid(x_km, np.arange(nz), indexing='ij')
-        h_xz = terrain_profile(grid.x_m, grid.y_m[y_mid]) / 1000.0
-        vmax = np.max(np.abs(sens)) * 0.9
-        
-        cf = ax.contourf(X_xz, Z_xz, sens[:, y_mid, :], levels=50, cmap='RdBu_r', vmin=-vmax, vmax=vmax)
-        ax.fill_between(x_km, 0, h_xz, color='#1f2937', alpha=0.9)
-        ax.set_title(f"{name} — Adjoint Field Sharpness (Entropy: {m1_metrics[name]['entropy']:.3f})", fontsize=11)
-        ax.set_ylabel("Altitude Z (km)")
-        ax.set_ylim([0, 6.0])
-
-    axes1[-1].set_xlabel("Domain X (km)")
-    fig1.tight_layout()
-    fig1.savefig(f"{output_dir}/1_adjoint_sharpness.png", dpi=200)
-    plt.close(fig1)
-
-    fig2, axes2 = plt.subplots(1, 3, figsize=(15, 4.5))
-    fig2.suptitle("Metric 2: Time-Series Inversion Loss Basin J(x_s, y_s) across Grids", fontsize=14, y=0.98)
-    X_g, Y_g = np.meshgrid(x_range, y_range)
-
-    for idx, (name, l_grid) in enumerate(m2_grids.items()):
-        ax = axes2[idx]
-        cf = ax.contourf(X_g, Y_g, np.log10(l_grid + 1e-18), levels=30, cmap='viridis')
-        ax.plot(true_params[0], true_params[1], 'r*', markersize=14, label='True Source')
-        ax.set_title(name, fontsize=12)
-        ax.set_xlabel("Source X (km)")
-        if idx == 0:
-            ax.set_ylabel("Source Y (km)")
-
-    fig2.tight_layout()
-    fig2.savefig(f"{output_dir}/2_loss_landscape.png", dpi=200)
-    plt.close(fig2)
+    print("\nGenerating evaluation summary figures...")
 
     fig3, (ax_t, ax_c) = plt.subplots(1, 2, figsize=(14, 5.5))
-    fig3.suptitle("Metric 3: Time-Series Parameter Recovery Trajectory & Adam Convergence Speed", fontsize=14, y=0.98)
+    fig3.suptitle(f"Metric 3: Time-series parameter recovery trajectory & Adam convergence speed ({steps} steps)", fontsize=14, y=0.98)
 
-    colors = {'Gal-Chen': '#e11d48', 'SLEVE': '#2563eb', 'NEUVE (Trained)': '#10b981'}
-    styles = {'Gal-Chen': '--', 'SLEVE': '-.', 'NEUVE (Trained)': '-'}
+    colors = {'Gal-Chen': '#e11d48', 'SLEVE': '#2563eb', 'NEUVE': '#10b981'}
+    styles = {'Gal-Chen': '--', 'SLEVE': '-.', 'NEUVE': '-'}
 
-    ax_t.plot(true_params[0], true_params[2], 'k*', markersize=16, label='True Source p*')
-    ax_t.plot(guess_params[0], guess_params[2], 'ko', markersize=9, label='Initial Guess p(0)')
+    ax_t.plot(true_params[0], true_params[2], 'k*', markersize=16, label='True source p*')
+    ax_t.plot(guess_params[0], guess_params[2], 'ko', markersize=9, label='Initial guess p(0)')
 
     for name, h in m3_history.items():
         p = h['params']
-        ax_t.plot(p[:, 0], p[:, 2], linestyle=styles[name], color=colors[name], linewidth=2.5, marker='.', label=name)
-        ax_c.semilogy(h['losses'], linestyle=styles[name], color=colors[name], linewidth=2.5, label=name)
+        ax_t.plot(p[:, 0], p[:, 2], linestyle=styles[name], color=colors[name], linewidth=1.0, marker='.', label=name)
+        ax_c.semilogy(h['losses'], linestyle=styles[name], color=colors[name], linewidth=1.0, label=name)
 
-    ax_t.set_title("Source Trajectory in Parameter Space (x_s vs z_s)", fontsize=12)
-    ax_t.set_xlabel("Source X (km)")
-    ax_t.set_ylabel("Source Altitude Z (km)")
+    ax_t.set_title("Source trajectory in parameter space (x vs z)", fontsize=12)
+    ax_t.set_xlabel("Source x (km)")
+    ax_t.set_ylabel("Source z (km)")
     ax_t.legend()
     ax_t.grid(True, alpha=0.3)
 
-    ax_c.set_title("Adam Inversion Convergence Curve J(p^(k))", fontsize=12)
-    ax_c.set_xlabel("Adam Optimization Step k")
-    ax_c.set_ylabel("Inversion MSE Loss")
+    ax_c.set_title("Adam inversion convergence curve J(p^(k))", fontsize=12)
+    ax_c.set_xlabel("Adam optimization step k")
+    ax_c.set_ylabel("Inversion MSE loss")
     ax_c.legend()
     ax_c.grid(True, alpha=0.3)
 
