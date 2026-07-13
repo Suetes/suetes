@@ -38,12 +38,13 @@ constants = {
     'p0': 100000.0, 'kappa': 287.0 / 1004.0, 'cvd': 717.0
 }
 
-TRAIN_SEEDS = [101, 202, 303, 404]
-
-def generate_rugged_terrain(seed):
+def generate_rugged_terrain(seed_or_key):
     # Aggressive multi-peak mountain range with sharp peaks and deep valleys
-    # Centered in the domain interior [3 km, 13 km] away from boundaries
-    key = jax.random.PRNGKey(seed)
+    # Centered in the domain interior away from boundaries
+    if isinstance(seed_or_key, int):
+        key = jax.random.PRNGKey(seed_or_key)
+    else:
+        key = seed_or_key
     k1, k2, k3 = jax.random.split(key, 3)
 
     amp1 = 1800.0 + jax.random.uniform(k1, minval=-150.0, maxval=150.0)
@@ -129,19 +130,23 @@ def main():
     print("Physics-guided neural coordinate discovery")
     print("=========================================================================")
     print(f"Domain: nx={nx}, ny={ny}, nz={nz}, Lz={nz*dz:.0f} m | Impinging wind: u=15 m/s")
-    print(f"Training seeds: {TRAIN_SEEDS}")
 
     neuve_init = NEUVECoordinate(hidden_dim=64, key_seed=42)
 
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", type=str, default="unconstrained", choices=["unconstrained", "flat_aloft"])
+    parser.add_argument("--num-topographies", type=int, default=4, help="Number of training topographies to generate via key split")
+    parser.add_argument("--master-seed", type=int, default=1, help="Master PRNG seed for generating training topographies")
     args = parser.parse_args()
 
-    print(f"Training mode: [{args.mode}]")
+    master_key = jax.random.PRNGKey(args.master_seed)
+    train_keys = jax.random.split(master_key, args.num_topographies)
 
-    def physics_discovery_loss(phi, seed):
-        terrain_fn = generate_rugged_terrain(seed)
+    print(f"Training mode: [{args.mode}] | Num topographies: {args.num_topographies} | Master seed: {args.master_seed}")
+
+    def physics_discovery_loss(phi, key):
+        terrain_fn = generate_rugged_terrain(key)
         grid, base_state, stepper, bc_fn = make_simulation(phi, terrain_fn, neuve_init)
 
         @jax.checkpoint
@@ -192,16 +197,16 @@ def main():
         epoch_loss = 0.0
         epoch_grad = jax.tree.map(jnp.zeros_like, phi)
 
-        for seed in TRAIN_SEEDS:
-            lval, gval = val_and_grad_fn(phi, seed)
+        for key in train_keys:
+            lval, gval = val_and_grad_fn(phi, key)
             l_safe = jnp.where(jnp.isnan(lval), 0.0, lval)
             g_safe = jax.tree.map(lambda g: jnp.where(jnp.isnan(g), 0.0, g), gval)
 
             epoch_loss += float(l_safe)
             epoch_grad = jax.tree.map(lambda a, b: a + b, epoch_grad, g_safe)
 
-        epoch_loss /= len(TRAIN_SEEDS)
-        epoch_grad = jax.tree.map(lambda g: g / len(TRAIN_SEEDS), epoch_grad)
+        epoch_loss /= len(train_keys)
+        epoch_grad = jax.tree.map(lambda g: g / len(train_keys), epoch_grad)
 
         updates, opt_state = optimizer.update(epoch_grad, opt_state, phi)
         phi = optax.apply_updates(phi, updates)

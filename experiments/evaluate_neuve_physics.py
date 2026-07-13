@@ -112,7 +112,7 @@ def main():
 
     terrain_fn = generate_rugged_terrain(TEST_SEED)
     neuve_unconstrained = load_trained_neuve("output/trained_neuve_physics_unconstrained_weights.bin.npz")
-    neuve_flat = load_trained_neuve("output/trained_neuve_physics_flat_weights.bin.npz")
+    neuve_flat = load_trained_neuve("output/trained_neuve_physics_flat_aloft_weights.bin.npz")
 
     coords = {
         'Gal-Chen': GalChenSigma(),
