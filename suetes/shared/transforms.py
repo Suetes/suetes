@@ -181,7 +181,7 @@ class IntegralNeuralTransform(BaseTransform):
 
             def eval_density(y_inputs, h_inputs, s_inputs, l_inputs):
                 raw_out = self.apply_fn(self.params, y_inputs, h_inputs, s_inputs, l_inputs).squeeze(-1)
-                return 1.0 + 0.5 * jax.nn.tanh(raw_out)
+                return 0.08 + 1.90 * jax.nn.sigmoid(raw_out)
 
             # --- 1. Compute I(1) = \int_0^1 \rho(y) dy ---
             y_1 = (0.5 * x_nodes + 0.5)[None, None, None, :, None]
@@ -214,7 +214,7 @@ class IntegralNeuralTransform(BaseTransform):
                 s_in = jnp.zeros_like(y_inputs)
                 l_in = jnp.zeros_like(y_inputs)
                 raw_out = self.apply_fn(self.params, y_inputs, h_in, s_in, l_in).squeeze(-1)
-                return 1.0 + 0.5 * jax.nn.tanh(raw_out)
+                return 0.08 + 1.90 * jax.nn.sigmoid(raw_out)
 
             y_1 = (0.5 * x_nodes + 0.5)[:, None]
             density_1 = eval_density_1d(y_1)
