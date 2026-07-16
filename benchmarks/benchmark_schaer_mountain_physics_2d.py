@@ -15,7 +15,7 @@ from suetes.shared.driver import Simulation
 from suetes.physics.base import PhysicsSuite
 from suetes.physics.gravity_waves import UpperRayleighDamping, McFarlaneGWD
 
-output_dir = "output/plots/physics"
+output_dir = "output/plots/benchmarks"
 os.makedirs(output_dir, exist_ok=True)
 
 # --- 1. SCHÄR MOUNTAIN PROFILE ---

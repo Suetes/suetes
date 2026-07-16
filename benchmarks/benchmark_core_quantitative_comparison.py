@@ -12,6 +12,9 @@ from suetes.regional3d.euler import Euler3D
 from suetes.regional3d.steppers import build_dynamical_core
 from suetes.shared.driver import Simulation
 
+output_dir = "output/plots/benchmarks"
+os.makedirs(output_dir, exist_ok=True)
+
 def compute_metrics(state, grid):
     # 1. Total Kinetic Energy: 0.5 * sum(rho * (u^2 + w^2)) * dV
     # Average u and w to cell centers
@@ -173,7 +176,7 @@ if __name__ == "__main__":
     axes[2].grid(True, which="both", ls="--", alpha=0.5)
     axes[2].legend(fontsize=10)
     
-    out_path = 'output/plots/dual_core_quantitative_comparison.png'
+    out_path = f'{output_dir}/dual_core_quantitative_comparison.png'
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     plt.savefig(out_path, dpi=300, bbox_inches='tight')
     plt.close()

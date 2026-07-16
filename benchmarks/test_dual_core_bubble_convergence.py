@@ -13,6 +13,9 @@ from suetes.regional3d.operators import CGridOperator3D
 from suetes.regional3d.steppers import build_dynamical_core
 from suetes.shared.driver import Simulation
 
+output_dir = "output/plots/benchmarks"
+os.makedirs(output_dir, exist_ok=True)
+
 def block_average_2d(field_2d, factor):
     nx, nz = field_2d.shape
     return jnp.mean(field_2d.reshape(nx // factor, factor, nz // factor, factor), axis=(1, 3))
@@ -107,7 +110,7 @@ plt.grid(True, which="both", ls="--", alpha=0.5)
 plt.legend(fontsize=10, loc='lower right')
 
 # Save plot to centralized output directory
-out_path = 'output/plots/dual_core_bubble_convergence_study.png'
+out_path = f'{output_dir}/dual_core_bubble_convergence_study.png'
 os.makedirs(os.path.dirname(out_path), exist_ok=True)
 plt.savefig(out_path, dpi=300, bbox_inches='tight')
 plt.close()

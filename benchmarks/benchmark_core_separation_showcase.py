@@ -196,7 +196,8 @@ if __name__ == "__main__":
     
     # --- SEPARATE PUBLICATION PLOTS ---
     print("\n[PLOTTING] Generating separate publication figures...")
-    os.makedirs('output/plots', exist_ok=True)
+    output_dir = "output/plots/benchmarks"
+    os.makedirs(output_dir, exist_ok=True)
     
     x_km = grid.x_m / 1000.0
     z_km = grid.z_m / 1000.0
@@ -225,7 +226,7 @@ if __name__ == "__main__":
     ax1.set_xlabel('Horizontal Distance (km)', fontsize=12)
     ax1.set_ylabel('Altitude (km)', fontsize=12)
     plt.colorbar(c1, ax=ax1, label=r"Vorticity $\omega_y$ ($\text{s}^{-1}$)")
-    fig1.savefig('output/plots/dual_core_vorticity_split_explicit.png', dpi=300, bbox_inches='tight')
+    fig1.savefig(f'{output_dir}/dual_core_vorticity_split_explicit.png', dpi=300, bbox_inches='tight')
     plt.close(fig1)
     
     # 2. Figure: SISL Equal-Timestep Vorticity
@@ -235,7 +236,7 @@ if __name__ == "__main__":
     ax2.set_xlabel('Horizontal Distance (km)', fontsize=12)
     ax2.set_ylabel('Altitude (km)', fontsize=12)
     plt.colorbar(c2, ax=ax2, label=r"Vorticity $\omega_y$ ($\text{s}^{-1}$)")
-    fig2.savefig('output/plots/dual_core_vorticity_sisl_fair.png', dpi=300, bbox_inches='tight')
+    fig2.savefig(f'{output_dir}/dual_core_vorticity_sisl_fair.png', dpi=300, bbox_inches='tight')
     plt.close(fig2)
 
     # 3. Figure: SISL Operational Large-Timestep Vorticity
@@ -245,7 +246,7 @@ if __name__ == "__main__":
     ax3.set_xlabel('Horizontal Distance (km)', fontsize=12)
     ax3.set_ylabel('Altitude (km)', fontsize=12)
     plt.colorbar(c3, ax=ax3, label=r"Vorticity $\omega_y$ ($\text{s}^{-1}$)")
-    fig3.savefig('output/plots/dual_core_vorticity_sisl_op.png', dpi=300, bbox_inches='tight')
+    fig3.savefig(f'{output_dir}/dual_core_vorticity_sisl_op.png', dpi=300, bbox_inches='tight')
     plt.close(fig3)
     
     # 4. Figure: Enstrophy Time Series (3-Way Comparison)
@@ -258,7 +259,7 @@ if __name__ == "__main__":
     ax4.set_ylabel(r'Enstrophy $\int \omega_y^2 \, dV$ ($\text{m}^3/\text{s}^2$)', fontsize=12)
     ax4.grid(True, which="both", ls="--", alpha=0.5)
     ax4.legend(fontsize=11)
-    fig4.savefig('output/plots/dual_core_enstrophy_series.png', dpi=300, bbox_inches='tight')
+    fig4.savefig(f'{output_dir}/dual_core_enstrophy_series.png', dpi=300, bbox_inches='tight')
     plt.close(fig4)
     
     # 5. Figure: Kinetic Energy Spectrum E(k) (3-Way Comparison)
@@ -275,7 +276,7 @@ if __name__ == "__main__":
     ax5.set_ylabel(r'Power Density $E(k)$', fontsize=12)
     ax5.grid(True, which="both", ls="--", alpha=0.5)
     ax5.legend(fontsize=11)
-    fig5.savefig('output/plots/dual_core_energy_spectrum.png', dpi=300, bbox_inches='tight')
+    fig5.savefig(f'{output_dir}/dual_core_energy_spectrum.png', dpi=300, bbox_inches='tight')
     plt.close(fig5)
     
-    print("[SUCCESS] All 5 separate publication figures saved to output/plots/\n")
+    print(f"[SUCCESS] All 5 separate publication figures saved to {output_dir}/\n")

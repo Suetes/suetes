@@ -138,7 +138,8 @@ if __name__ == "__main__":
     import matplotlib.pyplot as plt
     import numpy as np
 
-    os.makedirs('output/plots', exist_ok=True)
+    output_dir = "output/plots/benchmarks"
+    os.makedirs(output_dir, exist_ok=True)
     
     print("\n==========================================================================")
     print("EXPERIMENT: 3D DOMAIN SIZE SCALING ON A SINGLE GPU (T = 30s)")
@@ -231,7 +232,7 @@ if __name__ == "__main__":
     ax_mem.legend(fontsize=10)
 
     fig.tight_layout()
-    fig.savefig('output/plots/single_gpu_domain_scaling.png', dpi=300, bbox_inches='tight')
+    fig.savefig(f'{output_dir}/single_gpu_domain_scaling.png', dpi=300, bbox_inches='tight')
     plt.close(fig)
 
-    print("\n[SUCCESS] Benchmark complete. Plot saved to output/plots/single_gpu_domain_scaling.png\n")
+    print(f"\n[SUCCESS] Benchmark complete. Plot saved to {output_dir}/single_gpu_domain_scaling.png\n")

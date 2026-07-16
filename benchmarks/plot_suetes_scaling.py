@@ -9,6 +9,9 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 
+output_dir = "output/plots/benchmarks"
+os.makedirs(output_dir, exist_ok=True)
+
 def load_benchmark_data():
     """Finds and combines all massive benchmark CSVs in the directory."""
     csv_files = glob.glob("output/benchmark_bubble_scaling_*.csv") + glob.glob("benchmark_results_massive_*.csv")
@@ -119,8 +122,7 @@ def main():
     ax.legend(fontsize=10, loc='upper left')
 
     # Save final high-res figure for GMD submission to centralized output
-    out_path = "output/plots/suetes_scaling_metrics.png"
-    os.makedirs(os.path.dirname(out_path), exist_ok=True)
+    out_path = f"{output_dir}/suetes_scaling_metrics.png"
     plt.savefig(out_path, dpi=300, bbox_inches='tight')
     plt.close()
     print(f"[SUCCESS] Figure saved to: {out_path}")

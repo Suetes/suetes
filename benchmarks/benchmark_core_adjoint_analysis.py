@@ -27,6 +27,9 @@ from suetes.regional3d.operators import CGridOperator3D
 from suetes.regional3d.euler import Euler3D
 from suetes.regional3d.steppers import build_dynamical_core
 
+output_dir = "output/plots/benchmarks"
+os.makedirs(output_dir, exist_ok=True)
+
 
 def build_experiment_case(nx=96, ny=3, nz=32, dx=100.0):
     """Sets up grid, constants, and a warm bubble initial condition."""
@@ -99,7 +102,7 @@ def compute_adjoint_gradient(core_type, grid, op, constants, initial_state, T_va
 
 def run_gradient_field_comparison():
     print("\n==========================================================================")
-    print("EXPERIMENT 1: ADJOINT GRADIENT FIELD COMPARISON (SISL vs. SPLIT-EXPLICIT)")
+    print("Experiment 1: Adjoint gradient field comparison (SISL vs. Split-Explicit)")
     print("==========================================================================")
 
     grid, op, constants, state = build_experiment_case(nx=96, ny=3, nz=32, dx=100.0)
@@ -128,7 +131,7 @@ def run_gradient_field_comparison():
     g_sisl_flat = np.array(grad_sisl).flatten()
     cos_sim = np.dot(g_se_flat, g_sisl_flat) / (np.linalg.norm(g_se_flat) * np.linalg.norm(g_sisl_flat) + 1e-15)
     pearson_corr = np.corrcoef(g_se_flat, g_sisl_flat)[0, 1]
-    print(f"\n  [QUANTITATIVE CONSISTENCY] Split-Explicit vs. SISL Adjoint Gradients:")
+    print(f"\n  [CONSISTENCY] Split-Explicit versus SISL adjoint gradients:")
     print(f"    - Cosine Similarity:     {cos_sim:.6f}")
     print(f"    - Pearson Correlation:   {pearson_corr:.6f}\n")
 
@@ -137,7 +140,6 @@ def run_gradient_field_comparison():
     g_sisl_2d = np.array(grad_sisl[:, 1, :])
 
     # Plotting
-    os.makedirs('output/plots', exist_ok=True)
     fig = plt.figure(figsize=(18, 5.5))
     gs = fig.add_gridspec(1, 3, width_ratios=[1, 1, 1.15], wspace=0.25)
 
@@ -150,32 +152,32 @@ def run_gradient_field_comparison():
     # Panel (a): Split-Explicit
     ax0 = fig.add_subplot(gs[0])
     cf0 = ax0.pcolormesh(X, Z, g_se_2d, cmap='RdBu_r', vmin=-vmax, vmax=vmax, shading='gouraud')
-    ax0.set_title(r'(a) Split-Explicit Adjoint Sensitivity $\frac{\partial \mathcal{L}}{\partial \theta_{v,0}}$', fontsize=13, fontweight='bold')
-    ax0.set_xlabel('Horizontal Distance x (km)', fontsize=11)
-    ax0.set_ylabel('Altitude z (km)', fontsize=11)
+    ax0.set_title(r'(a) Split-Explicit adjoint sensitivity $\frac{\partial \mathcal{L}}{\partial \theta_{v,0}}$', fontsize=14)
+    ax0.set_xlabel('Horizontal distance $x$ (km)', fontsize=11)
+    ax0.set_ylabel('Altitude $z$ (km)', fontsize=11)
 
     # Panel (b): SISL
     ax1 = fig.add_subplot(gs[1])
     cf1 = ax1.pcolormesh(X, Z, g_sisl_2d, cmap='RdBu_r', vmin=-vmax, vmax=vmax, shading='gouraud')
-    ax1.set_title(r'(b) SISL Adjoint Sensitivity $\frac{\partial \mathcal{L}}{\partial \theta_{v,0}}$', fontsize=13, fontweight='bold')
-    ax1.set_xlabel('Horizontal Distance x (km)', fontsize=11)
-    ax1.set_ylabel('Altitude z (km)', fontsize=11)
+    ax1.set_title(r'(b) SISL adjoint sensitivity $\frac{\partial \mathcal{L}}{\partial \theta_{v,0}}$', fontsize=14)
+    ax1.set_xlabel('Horizontal distance $x$ (km)', fontsize=11)
+    ax1.set_ylabel('Altitude $z$ (km)', fontsize=11)
 
     # Panel (c): Horizontal profile cut at z = 1.5 km (center of bubble)
     z_idx = np.argmin(np.abs(grid.z_m - 1500.0))
     ax2 = fig.add_subplot(gs[2])
-    ax2.plot(x_km, g_se_2d[:, z_idx], 'o-', color='#e377c2', label=r'Split-Explicit ($\Delta t=1.0$s)', linewidth=2, markersize=4, alpha=0.9)
-    ax2.plot(x_km, g_sisl_2d[:, z_idx], 's-', color='#1f77b4', label=r'SISL ($\Delta t=10.0$s)', linewidth=2.5, markersize=4)
-    ax2.set_title(f'(c) Sensitivity Profile at $z = {grid.z_m[z_idx]/1000.0:.1f}$ km', fontsize=13, fontweight='bold')
-    ax2.set_xlabel('Horizontal Distance x (km)', fontsize=11)
-    ax2.set_ylabel(r'$\frac{\partial \mathcal{L}}{\partial \theta_{v,0}}$ Sensitivity Value', fontsize=11)
+    ax2.plot(x_km, g_se_2d[:, z_idx], 'o-', color='#e377c2', label=r'Split-Explicit ($\Delta t=1$ s)', linewidth=2, markersize=4, alpha=0.9)
+    ax2.plot(x_km, g_sisl_2d[:, z_idx], 's-', color='#1f77b4', label=r'SISL ($\Delta t=10$ s)', linewidth=2.5, markersize=4)
+    ax2.set_title(f'(c) Sensitivity profile at $z = {grid.z_m[z_idx]/1000.0:.1f}$ km', fontsize=14)
+    ax2.set_xlabel('Horizontal distance $x$ (km)', fontsize=11)
+    ax2.set_ylabel(r'$\frac{\partial \mathcal{L}}{\partial \theta_{v,0}}$ sensitivity value', fontsize=11)
     ax2.grid(True, ls='--', alpha=0.5)
     ax2.legend(fontsize=10.5)
 
     cbar = fig.colorbar(cf1, ax=[ax0, ax1], orientation='horizontal', fraction=0.06, pad=0.18)
-    cbar.set_label(r'Adjoint Gradient Amplitude $\nabla_{\theta_0} \mathcal{L}$', fontsize=11)
+    cbar.set_label(r'Adjoint gradient amplitude $\nabla_{\theta_0} \mathcal{L}$', fontsize=11)
 
-    out_path = 'output/plots/adjoint_gradient_field_comparison.png'
+    out_path = f'{output_dir}/adjoint_gradient_field_comparison.png'
     fig.savefig(out_path, dpi=300, bbox_inches='tight')
     plt.close(fig)
     print(f"  [SUCCESS] Saved gradient field comparison to {out_path}")
@@ -183,7 +185,7 @@ def run_gradient_field_comparison():
 
 def run_sisl_gmres_convergence_study():
     print("\n==========================================================================")
-    print("EXPERIMENT 2: SISL ADJOINT ACCURACY vs. GMRES ITERATIONS")
+    print("Experiment 2: SISL adjoint accuracy versus GMRES iterations")
     print("==========================================================================")
 
     grid, op, constants, state = build_experiment_case(nx=64, ny=3, nz=32, dx=100.0)
@@ -216,18 +218,18 @@ def run_sisl_gmres_convergence_study():
 
         l2_errors.append(rel_l2)
         max_errors.append(rel_max)
-        print(f"Rel L2 Error: {rel_l2:.2e} | Rel Max Error: {rel_max:.2e}")
+        print(f"Rel L2-error: {rel_l2:.2e} | Rel Max error: {rel_max:.2e}")
 
     # Plotting
     fig, ax = plt.subplots(1, 1, figsize=(7.5, 5))
 
     ax.semilogy(iters_list, l2_errors, 'o-', color='#1f77b4', linewidth=2.5, markersize=8)
-    ax.set_title('SISL Adjoint Relative $L_2$ Convergence', fontsize=13, fontweight='bold')
-    ax.set_xlabel('GMRES Iterations per Time Step', fontsize=11)
-    ax.set_ylabel(r'Relative $L_2$ Error $\|\nabla \mathcal{L}_k - \nabla \mathcal{L}_{\text{ref}}\|_2 / \|\nabla \mathcal{L}_{\text{ref}}\|_2$', fontsize=11)
+    ax.set_title('SISL adjoint relative $L_2$-convergence', fontsize=13)
+    ax.set_xlabel('GMRES iterations per time step', fontsize=11)
+    ax.set_ylabel(r'Relative $L_2$-error $\|\nabla \mathcal{L}_k - \nabla \mathcal{L}_{\text{ref}}\|_2 / \|\nabla \mathcal{L}_{\text{ref}}\|_2$', fontsize=11)
     ax.grid(True, which='both', ls='--', alpha=0.5)
 
-    out_path = 'output/plots/sisl_adjoint_gmres_convergence.png'
+    out_path = f'{output_dir}/sisl_adjoint_gmres_convergence.png'
     fig.tight_layout()
     fig.savefig(out_path, dpi=300, bbox_inches='tight')
     plt.close(fig)

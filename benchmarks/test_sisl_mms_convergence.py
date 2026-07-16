@@ -12,6 +12,9 @@ from suetes.regional3d.operators import CGridOperator3D
 from suetes.regional3d.steppers import build_dynamical_core
 from suetes.shared.driver import Simulation
 
+output_dir = "output/plots/benchmarks"
+os.makedirs(output_dir, exist_ok=True)
+
 # Physical Constants
 R_earth = 6371229.0
 Omega = 7.2921e-5
@@ -445,7 +448,7 @@ if __name__ == "__main__":
     plt.grid(True, which="both", ls="--", alpha=0.5)
     plt.legend(fontsize=11, loc='lower right')
     
-    out_path = 'output/plots/sisl_mms_convergence_diagnostics.png'
+    out_path = f'{output_dir}/sisl_mms_convergence_diagnostics.png'
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     plt.savefig(out_path, dpi=300, bbox_inches='tight')
     plt.close()
