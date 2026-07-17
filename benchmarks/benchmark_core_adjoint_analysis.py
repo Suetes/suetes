@@ -183,59 +183,5 @@ def run_gradient_field_comparison():
     print(f"  [SUCCESS] Saved gradient field comparison to {out_path}")
 
 
-def run_sisl_gmres_convergence_study():
-    print("\n==========================================================================")
-    print("Experiment 2: SISL adjoint accuracy versus GMRES iterations")
-    print("==========================================================================")
-
-    grid, op, constants, state = build_experiment_case(nx=64, ny=3, nz=32, dx=100.0)
-
-    iters_list = [3, 5, 8, 10, 15, 20, 30, 50, 100, 200]
-    print("  [0] Computing reference SISL adjoint gradient (maxiter=200, tol=1e-10)...")
-    grad_ref = compute_adjoint_gradient(
-        "sisl", grid, op, constants, state, T_val=30.0,
-        dt=10.0, solver_tol=1e-10, solver_maxiter=40, solver_restart=40,
-        damp_height=7500.0, max_damp=0.05, alpha=0.55
-    )
-    grad_ref_arr = np.array(grad_ref)
-    ref_norm = np.linalg.norm(grad_ref_arr)
-
-    l2_errors = []
-    max_errors = []
-
-    for it in iters_list:
-        print(f"  Computing SISL adjoint with GMRES maxiter={it:2d} ...", end=" ", flush=True)
-        grad_k = compute_adjoint_gradient(
-            "sisl", grid, op, constants, state, T_val=30.0,
-            dt=10.0, solver_tol=1e-6, solver_maxiter=it, solver_restart=it,
-            damp_height=7500.0, max_damp=0.05, alpha=0.55
-        )
-        grad_k_arr = np.array(grad_k)
-
-        diff = grad_k_arr - grad_ref_arr
-        rel_l2 = np.linalg.norm(diff) / (ref_norm + 1e-15)
-        rel_max = np.max(np.abs(diff)) / (np.max(np.abs(grad_ref_arr)) + 1e-15)
-
-        l2_errors.append(rel_l2)
-        max_errors.append(rel_max)
-        print(f"Rel L2-error: {rel_l2:.2e} | Rel Max error: {rel_max:.2e}")
-
-    # Plotting
-    fig, ax = plt.subplots(1, 1, figsize=(7.5, 5))
-
-    ax.semilogy(iters_list, l2_errors, 'o-', color='#1f77b4', linewidth=2.5, markersize=8)
-    ax.set_title('SISL adjoint relative $L_2$-convergence', fontsize=13)
-    ax.set_xlabel('GMRES iterations per time step', fontsize=11)
-    ax.set_ylabel(r'Relative $L_2$-error $\|\nabla \mathcal{L}_k - \nabla \mathcal{L}_{\text{ref}}\|_2 / \|\nabla \mathcal{L}_{\text{ref}}\|_2$', fontsize=11)
-    ax.grid(True, which='both', ls='--', alpha=0.5)
-
-    out_path = f'{output_dir}/sisl_adjoint_gmres_convergence.png'
-    fig.tight_layout()
-    fig.savefig(out_path, dpi=300, bbox_inches='tight')
-    plt.close(fig)
-    print(f"  [SUCCESS] Saved SISL GMRES adjoint convergence plot to {out_path}\n")
-
-
 if __name__ == "__main__":
     run_gradient_field_comparison()
-    run_sisl_gmres_convergence_study()
