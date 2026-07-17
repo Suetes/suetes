@@ -108,13 +108,27 @@ def compute_adjoint_gradient(grid, op, constants, initial_state, T_val=30.0, dt=
     return grad_st['th_v']
 
 
-def evaluate_adjoint(dt_val, maxiter, tol):
-    """Computes exact or GMRES adjoint gradient with fresh experiment state to prevent JAX tracer leakage."""
+import multiprocessing as mp
+
+def _worker_eval(dt_val, maxiter, tol, result_queue):
+    """Isolated worker function that computes adjoint gradient in a clean process."""
     grid, op, constants, state = build_experiment_case(nx=40, ny=3, nz=20, dx=150.0)
     grad = compute_adjoint_gradient(grid, op, constants, state, T_val=30.0, dt=dt_val, solver_maxiter=maxiter, solver_tol=tol)
     grad_arr = np.array(grad)
-    jax.clear_caches()
-    gc.collect()
+    result_queue.put(grad_arr)
+
+
+def evaluate_adjoint(dt_val, maxiter, tol):
+    """Spawns an isolated worker process to compute adjoint gradient without XLA/CUDA memory corruption or hangs."""
+    ctx = mp.get_context('spawn')
+    q = ctx.Queue()
+    p = ctx.Process(target=_worker_eval, args=(dt_val, maxiter, tol, q))
+    p.start()
+    grad_arr = q.get()
+    p.join(timeout=0.5)
+    if p.is_alive():
+        p.terminate()
+        p.join()
     return grad_arr
 
 
@@ -176,9 +190,9 @@ def main():
     ax.axhline(1e-4, color='gray', linestyle=':', alpha=0.7, label=r'Target accuracy ($10^{-4}$)')
     ax.axhline(1e-6, color='black', linestyle='-.', alpha=0.7, label=r'High accuracy ($10^{-6}$)')
 
-    ax.set_title("SISL Adjoint Relative $L_2$-Error Convergence versus Time-Step", fontsize=13)
-    ax.set_xlabel("GMRES Iterations per Time Step", fontsize=11)
-    ax.set_ylabel(r"Relative $L_2$-Error $\|\nabla \mathcal{L}_k - \nabla \mathcal{L}_{\text{ref}}\|_2 / \|\nabla \mathcal{L}_{\text{ref}}\|_2$", fontsize=11)
+    ax.set_title("SISL adjoint relative $L_2$-error convergence vs. time-step", fontsize=13)
+    ax.set_xlabel("GMRES iterations per time-step", fontsize=11)
+    ax.set_ylabel(r"Relative $L_2$-error $\|\nabla \mathcal{L}_k - \nabla \mathcal{L}_{\text{ref}}\|_2 / \|\nabla \mathcal{L}_{\text{ref}}\|_2$", fontsize=11)
     ax.grid(True, which='both', ls='--', alpha=0.5)
     ax.legend(fontsize=10, loc='upper right')
 
