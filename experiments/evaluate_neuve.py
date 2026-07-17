@@ -283,14 +283,14 @@ def main():
         ax.fill_between(x_km, 0.0, h_slice, color='#718096', alpha=0.4, label='Topography')
         ax.plot(x_km, h_slice, color='#1A202C', linewidth=2.0)
 
-        ax.set_title(name, fontsize=13, fontweight='bold')
+        ax.set_title(name, fontsize=13)
         ax.set_xlabel("x (km)", fontsize=11)
         if i == 0:
             ax.set_ylabel("Altitude z (km)", fontsize=11)
         ax.set_ylim(0, nz * dz / 1000.0)
         ax.grid(True, linestyle=':', alpha=0.6)
 
-    plt.suptitle(f"Discovered vertical coordinate geometry", fontsize=13, y=0.98)
+    plt.suptitle(f"Discovered vertical coordinate geometry", fontsize=14, y=0.98)
     plt.tight_layout()
     plot_grids = os.path.join(plots_dir, f"eval_{args.target}_grids.png")
     plt.savefig(plot_grids, dpi=300)
