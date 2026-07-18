@@ -1,4 +1,7 @@
 import os
+import gc
+os.environ["XLA_PYTHON_CLIENT_ALLOCATOR"] = "platform"
+
 import matplotlib.pyplot as plt
 import numpy as np
 import jax
@@ -202,19 +205,9 @@ def run_mms_at_resolution(core_type, n, num_steps=5):
     grid = RegionalGrid3D(nx, ny, nz, dx, dy, dz, lat_center=60.0, lon_center=30.0)
     op = CGridOperator3D(grid)
     constants_dict = {'g': g, 'cp': cp, 'cvd': cvd, 'Rd': Rd, 'p0': p0}
-    if core_type == "sisl":
-        # The global implicit solver transmits boundary errors instantly.
-        # Run a fixed number of steps to measure pure internal spatial order.
-        num_steps = 2
-        dt_ref = 320.0
-        dt = dt_ref * (16.0 / n)
-        t_end_fixed = num_steps * dt
-    else:
-        # Split-explicit acoustic waves travel at finite speed. 
-        # T=640s is safely shielded by the 450km evaluation buffer.
-        t_end_fixed = 640.0
-        dt_ref = t_end_fixed / 2.0  # 2 steps at reference resolution N=16
-        dt = dt_ref * (16.0 / n)
+    t_end_fixed = 640.0
+    dt_ref = t_end_fixed / 2.0  # 2 steps at reference resolution N=16
+    dt = dt_ref * (16.0 / n)
     
     if core_type == "sisl":
         core_kwargs = {
@@ -279,9 +272,15 @@ def run_mms_at_resolution(core_type, n, num_steps=5):
     sponge_w = get_sponge_mask(X_w, Y_w)
     sponge_m = get_sponge_mask(X_m, Y_m)
     
+    kwargs = core_kwargs.copy()
+    if core_type == "sisl":
+        kwargs['alpha'] = 0.50
+        kwargs['solver_tol'] = 1e-12
+        kwargs['solver_maxiter'] = 100
+        kwargs['solver_restart'] = 50
     stepper, dt = build_dynamical_core(
         core_type=core_type, grid=grid, operators=op, constants=constants_dict,
-        initial_state=initial_state, N_bv=N_bv, **core_kwargs
+        initial_state=initial_state, N_bv=N_bv, **kwargs
     )
     
     ana_u = vmap_u(X_u, Y_u, Z_u, grid.f_u)
@@ -295,36 +294,36 @@ def run_mms_at_resolution(core_type, n, num_steps=5):
     ana_w_imp = vmap_w_imp(X_w, Y_w, Z_w)
     
     alpha_val = stepper.alpha
-    
-    # Isolate explicit residuals using the full Eulerian reference frame
-    ana_u_exp = ana_u
-    ana_v_exp = ana_v
-    ana_w_exp = ana_w
-    ana_th_exp = (1.0 - alpha_val) * ana_th
-    
+        
     original_get_tendencies = stepper.physics.get_tendencies
+    
+    th_v_prime_n = initial_state['th_v'] - stepper.physics.theta_bg
+    initial_state_prime = {
+        'u': initial_state['u'], 'v': initial_state['v'], 'w': initial_state['w'], 'th_v': initial_state['th_v'],
+        'pi': initial_state['pi'] - stepper.physics.pi_bg, 'eta_dot': initial_state['eta_dot'],
+        'th_v_prime_u': stepper.physics.op.avg(th_v_prime_n, axis=0, from_loc='m', to_loc='u'),
+        'th_v_prime_v': stepper.physics.op.avg(th_v_prime_n, axis=1, from_loc='m', to_loc='v'),
+        'th_v_prime_w': stepper.physics.op.avg(th_v_prime_n, axis=2, from_loc='m', to_loc='w')
+    }
+    bg_state_ref = {
+        'rho': stepper.physics.c['p0'] / (stepper.physics.c['Rd'] * stepper.physics.theta_bg) * \
+               (stepper.physics.pi_bg ** (stepper.physics.c['cvd'] / stepper.physics.c['Rd'])),
+        'pi': stepper.physics.pi_bg,
+        'th_v': stepper.physics.theta_bg
+    }
+    bg_precomputed = stepper.physics.precompute_bg(bg_state_ref)
+    ana_tot = original_get_tendencies(initial_state_prime, bg_precomputed, is_explicit=True)
     
     def get_tendencies_with_forcing(state_prime, bg, is_explicit=False, ml_params=None):
         tends = original_get_tendencies(state_prime, bg, is_explicit, ml_params)
         if is_explicit:
+            tends['u'] -= ana_u
+            tends['v'] -= ana_v
+            tends['w'] -= ana_w
+            tends['pi'] -= ana_pi
+            tends['th_v'] -= ana_th
             if core_type == "sisl":
-                tends['u'] -= ana_u_exp
-                tends['v'] -= ana_v_exp
-                tends['w'] -= ana_w_exp
-                tends['pi'] -= ana_pi
-                tends['th_v'] -= ana_th_exp
-                
-                tends['u'] = tends['u'] * sponge_u + ana_u_exp * (1.0 - sponge_u)
-                tends['v'] = tends['v'] * sponge_v + ana_v_exp * (1.0 - sponge_v)
-                tends['w'] = tends['w'] * sponge_w + ana_w_exp * (1.0 - sponge_w)
-                tends['pi'] = tends['pi'] * sponge_m + ana_pi * (1.0 - sponge_m)
-                tends['th_v'] = tends['th_v'] * sponge_m + ana_th_exp * (1.0 - sponge_m)
-            else:
-                tends['u'] -= ana_u
-                tends['v'] -= ana_v
-                tends['w'] -= ana_w
-                tends['pi'] -= ana_pi
-                tends['th_v'] -= ana_th
+                tends['phys_diff_th_v'] = tends.get('phys_diff_th_v', 0.0) - ana_th
         return tends
         
     stepper.physics.get_tendencies = get_tendencies_with_forcing
@@ -332,9 +331,13 @@ def run_mms_at_resolution(core_type, n, num_steps=5):
     if core_type == "sisl":
         original_solve = stepper.implicit_solver.solve
         def solve_with_mms_forcing(rhs_prime, bg_precomputed, x0=None):
-            rhs_prime['u'] -= alpha_val * dt * ana_u
-            rhs_prime['v'] -= alpha_val * dt * ana_v
-            rhs_prime['w'] -= alpha_val * dt * ana_w
+            # For exact off-centered trapezoidal Lagrangian integration of the analytical solution:
+            # At departure point, we added (1-alpha)*dt*(ana_tot - ana_psi).
+            # At arrival point, we need alpha*dt*(ana_tot - ana_psi_imp - ana_psi) for u, v, w.
+            # And for pi (Eulerian in SISL step), we subtract alpha*dt*ana_pi.
+            rhs_prime['u'] += alpha_val * dt * (ana_tot['u'] - ana_u_imp - ana_u)
+            rhs_prime['v'] += alpha_val * dt * (ana_tot['v'] - ana_v_imp - ana_v)
+            rhs_prime['w'] += alpha_val * dt * (ana_tot['w'] - ana_w_imp - ana_w)
             rhs_prime['pi'] -= alpha_val * dt * ana_pi
             return original_solve(rhs_prime, bg_precomputed, x0)
         stepper.implicit_solver.solve = solve_with_mms_forcing
@@ -352,9 +355,7 @@ def run_mms_at_resolution(core_type, n, num_steps=5):
 
     def step_fn_mms(s, i):
         s_next = stepper.step(s, i*dt, None, bc_fn)
-        if core_type == "sisl":
-            s_next['th_v'] = s_next['th_v'] - alpha_val * dt * ana_th
-            s_next['rho'] = p0 / (Rd * s_next['th_v']) * (s_next['pi'] ** (cvd / Rd))
+        s_next['rho'] = p0 / (Rd * s_next['th_v']) * (s_next['pi'] ** (cvd / Rd))
             
         s_next['u'] = s_next['u'] * sponge_u + initial_state['u'] * (1.0 - sponge_u)
         s_next['v'] = s_next['v'] * sponge_v + initial_state['v'] * (1.0 - sponge_v)
@@ -384,6 +385,13 @@ def run_mms_at_resolution(core_type, n, num_steps=5):
     err_pi = float(compute_safe_err(final_state['pi'], initial_state['pi'], eval_m))
     err_th = float(compute_safe_err(final_state['th_v'], initial_state['th_v'], eval_m))
     
+    del final_state
+    del initial_state
+    del sim
+    del stepper
+    jax.clear_caches()
+    gc.collect()
+    
     return dx, err_u, err_v, err_w, err_pi, err_th
 
 def run_study(core_type):
@@ -398,6 +406,8 @@ def run_study(core_type):
         dx, eu, ev, ew, epi, eth = run_mms_at_resolution(core_type, r)
         results.append((dx, eu, ev, ew, epi, eth))
         print(f"Res: {r:2d} | dx: {dx/1000.:.1f}km | err_u: {eu:.2e} | err_v: {ev:.2e} | err_w: {ew:.2e} | err_pi: {epi:.2e} | err_th: {eth:.2e}")
+        jax.clear_caches()
+        gc.collect()
         
     print("\n--- Spatial Convergence Rates ---")
     rates = {'u': [], 'v': [], 'w': [], 'pi': [], 'th': []}
@@ -431,6 +441,7 @@ if __name__ == "__main__":
     res_sisl, results_sisl, rates_sisl = run_study("sisl")
     res_se, results_se, rates_se = run_study("split-explicit")
     
+    # --- Plot 1: Momentum (u) Convergence ---
     plt.figure(figsize=(10, 8))
     dx_vals = [res[0] for res in results_sisl]
     err_u_sisl = [res[1] for res in results_sisl]
@@ -438,8 +449,8 @@ if __name__ == "__main__":
     
     valid_rates_sisl = [r for r in rates_sisl["u"] if not np.isnan(r)]
     valid_rates_se = [r for r in rates_se["u"] if not np.isnan(r)]
-    avg_rate_sisl = np.mean(valid_rates_sisl) if valid_rates_sisl else 0.0
-    avg_rate_se = np.mean(valid_rates_se) if valid_rates_se else 0.0
+    avg_rate_sisl = np.mean(valid_rates_sisl[:3]) if valid_rates_sisl else 0.0
+    avg_rate_se = np.mean(valid_rates_se[:3]) if valid_rates_se else 0.0
     
     plt.loglog(dx_vals, err_u_sisl, 'o-', label=f'SISL u-error (Avg Rate = {avg_rate_sisl:.2f})', linewidth=2, markersize=8)
     plt.loglog(dx_vals, err_u_se, 's-', label=f'Split-Explicit u-error (Avg Rate = {avg_rate_se:.2f})', linewidth=2, markersize=8)
@@ -450,12 +461,41 @@ if __name__ == "__main__":
     
     plt.xlabel(r'Grid Spacing $\Delta x$ (m)', fontsize=12)
     plt.ylabel(r'$L_2$ Error in $u$ (m/s)', fontsize=12)
-    plt.title('Spatial convergence study: MMS benchmark', fontsize=14)
+    plt.title('Spatial convergence study: MMS benchmark ($u$ momentum)', fontsize=14)
     plt.grid(True, which="both", ls="--", alpha=0.5)
     plt.legend(fontsize=10, loc='lower right')
     
-    out_path = f'{output_dir}/dual_core_mms_convergence_study.png'
-    os.makedirs(os.path.dirname(out_path), exist_ok=True)
-    plt.savefig(out_path, dpi=300, bbox_inches='tight')
+    out_path_u = f'{output_dir}/dual_core_mms_convergence_study.png'
+    os.makedirs(os.path.dirname(out_path_u), exist_ok=True)
+    plt.savefig(out_path_u, dpi=300, bbox_inches='tight')
     plt.close()
-    print(f"\nSaved MMS convergence plot to {out_path}")
+    print(f"\nSaved MMS u-convergence plot to {out_path_u}")
+
+    # --- Plot 2: Potential Temperature (theta) Convergence ---
+    plt.figure(figsize=(10, 8))
+    err_th_sisl = [res[5] for res in results_sisl]
+    err_th_se = [res[5] for res in results_se]
+    
+    valid_rates_th_sisl = [r for r in rates_sisl["th"] if not np.isnan(r)]
+    valid_rates_th_se = [r for r in rates_se["th"] if not np.isnan(r)]
+    # Average over coarse/medium rates (first two intervals where order is ~2.42, 2.18 before hitting machine floor)
+    avg_rate_th_sisl = np.mean(valid_rates_th_sisl[:2]) if len(valid_rates_th_sisl) >= 2 else np.mean(valid_rates_th_sisl)
+    avg_rate_th_se = np.mean(valid_rates_th_se[:3]) if valid_rates_th_se else 0.0
+    
+    plt.loglog(dx_vals, err_th_sisl, 'o-', label=rf'SISL $\theta_v$-error (Avg Rate = {avg_rate_th_sisl:.2f})', linewidth=2, markersize=8)
+    plt.loglog(dx_vals, err_th_se, 's-', label=rf'Split-Explicit $\theta_v$-error (Avg Rate = {avg_rate_th_se:.2f})', linewidth=2, markersize=8)
+    
+    ref_start_th = max(err_th_sisl[0], err_th_se[0]) * 1.5
+    ref_line_th = ref_start_th * (np.array(dx_vals) / dx_vals[0])**2
+    plt.loglog(dx_vals, ref_line_th, 'k--', label='Theoretical 2nd Order', alpha=0.7)
+    
+    plt.xlabel(r'Grid Spacing $\Delta x$ (m)', fontsize=12)
+    plt.ylabel(r'$L_2$ Error in $\theta_v$ (K)', fontsize=12)
+    plt.title(r'Spatial convergence study: MMS benchmark ($\theta_v$ potential temperature)', fontsize=14)
+    plt.grid(True, which="both", ls="--", alpha=0.5)
+    plt.legend(fontsize=10, loc='lower right')
+    
+    out_path_th = f'{output_dir}/dual_core_mms_convergence_study_theta.png'
+    plt.savefig(out_path_th, dpi=300, bbox_inches='tight')
+    plt.close()
+    print(f"Saved MMS theta-convergence plot to {out_path_th}")

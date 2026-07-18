@@ -38,9 +38,9 @@ def build_dynamical_core(core_type, grid, operators, constants, initial_state,
             "N_bv": 0.01,
             "alpha": 0.55,
             "use_limiter": False,
-            "solver_tol": 1e-4,
-            "solver_maxiter": 20,
-            "solver_restart": 20,
+            "solver_tol": 1e-12,
+            "solver_maxiter": 100,
+            "solver_restart": 100,
         }
         # Apply any explicit user overrides passed via kwargs
         params.update(kwargs)
@@ -717,22 +717,17 @@ class SISLStepper3D:
             cp_get_tendencies = self.physics.get_tendencies
             
         # Pass ml_params as the 4th argument to the physics evaluator
+        # 1. Get the TOTAL tendencies
         tends_n = cp_get_tendencies(state_prime_n, bg_precomputed, True, ml_params)
-        
+
         u_in = state['u'] + self.dt * ((1.0 - alpha) * tends_n['u'] + alpha * tends_n.get('phys_diff_u', 0.0))
         v_in = state['v'] + self.dt * ((1.0 - alpha) * tends_n['v'] + alpha * tends_n.get('phys_diff_v', 0.0))
         w_in = state['w'] + self.dt * ((1.0 - alpha) * tends_n['w'] + alpha * tends_n.get('phys_diff_w', 0.0))
         pi_prime_in = state_prime_n['pi'] + (1.0 - alpha) * self.dt * tends_n['pi']
 
-        if 'u_prev' in state:
-            # Extrapolate explicit tendencies to t^{n+1/2} for 2nd-order thermodynamics/tracer advection
-            tend_th_v_extrap = 1.5 * tends_n['th_v'] - 0.5 * state['tend_th_v_prev']
-            tend_th_v_eff = jnp.where(is_first == 1.0, tends_n['th_v'], tend_th_v_extrap)
-        else:
-            tend_th_v_eff = tends_n['th_v']
-
-        # Apply Eulerian physics tendencies to the thermodynamics before advection
-        th_v_prime_in = th_v_prime_n + self.dt * tend_th_v_eff
+        # For true 2nd-order semi-Lagrangian advection without double-counting background transport:
+        # advect total potential temperature + non-kinematic physical/diffusion tendencies using trapezoidal rule!
+        th_v_in = state['th_v'] + 0.5 * self.dt * tends_n.get('phys_diff_th_v', 0.0)
 
         # Apply Eulerian tendencies to any active tracers before advection
         tracers_in = {}
@@ -776,13 +771,12 @@ class SISLStepper3D:
         rhs_w = cp_advect_cubic(w_in, coords_w, self.use_limiter)
         # rhs_pi_prime = cp_advect_cubic(pi_prime_in, coords_m, self.use_limiter)
         rhs_pi_prime = pi_prime_in # The previous line seems to have been a fundamental bug in how we treat an Eulerian quantity, so pi should not be advected!!!
-        th_v_prime_next = cp_advect_cubic(th_v_prime_in, coords_m, self.use_limiter)
+        
+        # Advect total virtual potential temperature directly with trapezoidal rule
+        th_v_next = cp_advect_cubic(th_v_in, coords_m, self.use_limiter) + 0.5 * self.dt * tends_n.get('phys_diff_th_v', 0.0)
         
         # Advect mass with checkpointed FFSL scheme
         rho_next = cp_advect_ffsl(state['rho'], state, bg_precomputed)
-
-        # Advect virtual potential temperature
-        th_v_next = th_v_prime_next + self.physics.theta_bg
         
         # Tracers use FFSL to strictly conserve mass
         tracers_next = {}
@@ -887,6 +881,7 @@ class SISLStepper3D:
             state_next['w_prev'] = state['w']
             state_next['eta_dot_prev'] = state['eta_dot']
             state_next['tend_th_v_prev'] = tends_n['th_v']
+            
             for key in self.tracer_keys:
                 state_next[f'tend_{key}_prev'] = tends_n.get(key, 0.0)
             state_next['is_first_step'] = 0.0

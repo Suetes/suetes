@@ -289,6 +289,7 @@ class Euler3D:
             phys_diff_u = 0.0
             phys_diff_v = 0.0
             phys_diff_w = 0.0
+            phys_diff_th_v = 0.0
 
             # Diffusion
             if self.nu_h > 0.0 or self.nu_div > 0.0:
@@ -300,6 +301,7 @@ class Euler3D:
                 phys_diff_u += diff_tends['u']
                 phys_diff_v += diff_tends['v']
                 phys_diff_w += diff_tends['w']
+                phys_diff_th_v += diff_tends['th_v']
 
             # Call physics suite
             if self.physics_suite is not None:
@@ -318,10 +320,12 @@ class Euler3D:
                     if k == 'w': 
                         tend_w += phys_tends['w']
                         phys_diff_w += phys_tends['w']
-                    if k == 'th_v': tend_th_v += phys_tends['th_v']
+                    if k == 'th_v': 
+                        tend_th_v += phys_tends['th_v']
+                        phys_diff_th_v += phys_tends['th_v']
 
             return {'u': tend_u, 'v': tend_v, 'w': tend_w, 'pi': tend_pi, 'th_v': tend_th_v, 
-                    'phys_diff_u': phys_diff_u, 'phys_diff_v': phys_diff_v, 'phys_diff_w': phys_diff_w}
+                    'phys_diff_u': phys_diff_u, 'phys_diff_v': phys_diff_v, 'phys_diff_w': phys_diff_w, 'phys_diff_th_v': phys_diff_th_v}
 
         return {'u': tend_u, 'v': tend_v, 'w': tend_w, 'pi': tend_pi, 'th_v': tend_th_v}
 

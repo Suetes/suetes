@@ -1,15 +1,18 @@
 import os
+import gc
+os.environ["XLA_PYTHON_CLIENT_ALLOCATOR"] = "platform"
+
 import matplotlib.pyplot as plt
 import numpy as np
 import jax
 import jax.numpy as jnp
-from types import SimpleNamespace
 
 # Enable X64 for precise convergence tests
 jax.config.update("jax_enable_x64", True)
 
 from suetes.regional3d.geometry import RegionalGrid3D
 from suetes.regional3d.operators import CGridOperator3D
+from suetes.regional3d.euler import Euler3D
 from suetes.regional3d.steppers import build_dynamical_core
 from suetes.shared.driver import Simulation
 
@@ -20,6 +23,23 @@ def block_average_2d(field_2d, factor):
     nx, nz = field_2d.shape
     return jnp.mean(field_2d.reshape(nx // factor, factor, nz // factor, factor), axis=(1, 3))
 
+def get_cell_center_slices(res_3d):
+    u = res_3d['u'][:, 1, :]
+    v = res_3d['v'][:, 1, :]
+    w = res_3d['w'][:, 1, :]
+    pi = res_3d['pi'][:, 1, :]
+    th = res_3d['th_v'][:, 1, :]
+    
+    u_m = 0.5 * (u[:-1, :] + u[1:, :])
+    w_m = 0.5 * (w[:, :-1] + w[:, 1:])
+    return {
+        'u': np.array(u_m),
+        'v': np.array(v),
+        'w': np.array(w_m),
+        'pi': np.array(pi),
+        'th_v': np.array(th)
+    }
+
 def run_bubble_at_resolution(core_type, dx, alpha=0.55):
     nx = int(10000 / dx)
     nz = int(10000 / dx)
@@ -27,7 +47,7 @@ def run_bubble_at_resolution(core_type, dx, alpha=0.55):
     
     if core_type == "sisl":
         dt = (dx / 125.0) * 5.0  # Linear scaling of timestep with grid spacing
-        core_kwargs = {"dt": dt, "nu_div_factor": 0.0, "nu_h_factor": 0.0, "damp_height": 7500.0, "max_damp": 0.05, "alpha": alpha}
+        core_kwargs = {"dt": dt, "nu_div_factor": 0.0, "nu_h_factor": 0.0, "damp_height": 7500.0, "max_damp": 0.05, "alpha": alpha, "solver_tol": 1e-12, "solver_maxiter": 100, "solver_restart": 100}
     elif core_type == "split-explicit":
         dt = (dx / 125.0) * 2.5
         core_kwargs = {"dt": dt, "ns": 24, "nu_div_factor": 0.0, "nu_h_factor": 0.0, "damp_height": 7500.0, "max_damp": 0.05, "alpha": alpha}
@@ -35,10 +55,18 @@ def run_bubble_at_resolution(core_type, dx, alpha=0.55):
         raise ValueError(f"Unknown core: {core_type}")
 
     grid = RegionalGrid3D(nx, ny, nz, dx, dx, dx, lat_center=0.0, lon_center=0.0)
+    # Force pure Cartesian geometry to eliminate pseudo-2D advection boundary artifacts
+    for k in grid.m_factors: 
+        grid.m_factors[k] = jnp.ones_like(grid.m_factors[k])
+    grid.dm_dx_m = jnp.zeros_like(grid.dm_dx_m)
+    grid.dm_dy_m = jnp.zeros_like(grid.dm_dy_m)
+    grid.f_u = jnp.zeros_like(grid.f_u)
+    grid.f_v = jnp.zeros_like(grid.f_v)
+
+
     op = CGridOperator3D(grid)
     constants = {'g': 9.81, 'cp': 1004.0, 'Rd': 287.0, 'cvd': 717.0, 'p0': 100000.0}
 
-    from suetes.regional3d.euler import Euler3D
     tmp_phys = Euler3D(grid, op, constants, dt=dt)
     bg_ref = {
         'rho': tmp_phys.c['p0'] / (tmp_phys.c['Rd'] * tmp_phys.theta_bg) * \
@@ -65,38 +93,73 @@ def run_bubble_at_resolution(core_type, dx, alpha=0.55):
     )
 
     sim = Simulation(step_fn=lambda s, i: (stepper.step(s, i*dt, None, lambda x, f: x), jnp.max(jnp.abs(s['w']))), dt=dt)
-    return sim.run(state, t_start=0.0, t_end=200.0, chunk_steps=int(200.0/dt))
+    raw_res = sim.run(state, t_start=0.0, t_end=200.0, chunk_steps=min(int(200.0/dt), 40))
+    slices = get_cell_center_slices(raw_res)
+    del raw_res
+    del state
+    del tmp_phys
+    del stepper
+    del sim
+    jax.clear_caches()
+    gc.collect()
+    return slices
 
 def run_study(core_type, alpha=0.55):
-    print(f"Running study for {core_type} (alpha={alpha})...")
-    res_250 = run_bubble_at_resolution(core_type, 250.0, alpha)
-    res_125 = run_bubble_at_resolution(core_type, 125.0, alpha)
-    res_062 = run_bubble_at_resolution(core_type, 62.5, alpha)
-    res_031 = run_bubble_at_resolution(core_type, 31.25, alpha)
+    print(f"\n========================================")
+    print(f"Running self-convergence study for {core_type.upper()} (alpha={alpha})...")
+    print(f"========================================")
+    dxs = [1000.0, 500.0, 250.0, 125.0, 62.5, 31.25]
+    slices = []
+    for dx in dxs:
+        s = run_bubble_at_resolution(core_type, dx, alpha)
+        slices.append(s)
+        print(f"Completed simulation at dx = {dx} m | VRAM caches cleared.")
 
-    err_1 = float(jnp.sqrt(jnp.mean((block_average_2d(res_125['th_v'][:, 1, :], 2) - res_250['th_v'][:, 1, :])**2)))
-    err_2 = float(jnp.sqrt(jnp.mean((block_average_2d(res_062['th_v'][:, 1, :], 4) - block_average_2d(res_125['th_v'][:, 1, :], 2))**2)))
-    err_3 = float(jnp.sqrt(jnp.mean((block_average_2d(res_031['th_v'][:, 1, :], 8) - block_average_2d(res_062['th_v'][:, 1, :], 4))**2)))
+    keys = ['u', 'v', 'w', 'pi', 'th_v']
+    errors = {k: [] for k in keys}
     
-    order_12 = np.log2(err_1 / err_2)
-    order_23 = np.log2(err_2 / err_3)
-    avg_order = (order_12 + order_23) / 2.0
-    print(f"-> Errors: {err_1:.6e}, {err_2:.6e}, {err_3:.6e} | Avg Order: {avg_order:.2f}")
-    return [err_1, err_2, err_3], avg_order
+    for i in range(len(dxs) - 1):
+        coarse = slices[i]
+        fine = slices[i+1]
+        for k in keys:
+            fine_avg = block_average_2d(fine[k], 2)
+            err = float(jnp.sqrt(jnp.mean((fine_avg - coarse[k])**2)))
+            errors[k].append(err)
+            
+        print(f"Res {dxs[i]:6.1f} -> {dxs[i+1]:6.1f}m | "
+              f"err_u: {errors['u'][-1]:.2e} | err_v: {errors['v'][-1]:.2e} | "
+              f"err_w: {errors['w'][-1]:.2e} | err_pi: {errors['pi'][-1]:.2e} | "
+              f"err_th: {errors['th_v'][-1]:.2e}")
 
-# Gather data
-errors_se, order_se = run_study("split-explicit")
-# errors_sisl_default, order_sisl_default = run_study("sisl", alpha=0.55)
+    print("\n--- Self Convergence Rates ---")
+    rates = {k: [] for k in keys}
+    for i in range(len(dxs) - 2):
+        print(f"Res {dxs[i]:6.1f} -> {dxs[i+1]:6.1f}m:")
+        for k in ['u', 'v', 'w', 'pi', 'th_v']:
+            if errors[k][i+1] == 0.0 or errors[k][i] == 0.0:
+                rate = np.nan
+            else:
+                rate = np.log2(errors[k][i] / errors[k][i+1])
+            rates[k].append(rate)
+            print(f"  Rate {k:2s}: {rate:.2f}")
+
+    avg_order_th = np.mean(rates['th_v'])
+    return errors['th_v'], avg_order_th
+
 errors_sisl_symmetric, order_sisl_symmetric = run_study("sisl", alpha=0.5)
+errors_sisl_offcentered, order_sisl_offcentered = run_study("sisl", alpha=0.55)
+errors_se, order_se = run_study("split-explicit")
+
 
 # Plotting setup
 plt.figure(figsize=(10, 8))
 
-dx_vals = np.array([250.0, 125.0, 62.5])
+dx_vals = np.array([1000.0, 500.0, 250.0, 125.0, 62.5])
 
 # Plot empirical errors
-plt.loglog(dx_vals, errors_sisl_symmetric, 'o-', label=rf'SISL $\theta_v$-error (Avg Rate = {order_sisl_symmetric:.2f})', linewidth=2, markersize=8)
-plt.loglog(dx_vals, errors_se, 's-', label=rf'Split-Explicit  $\theta_v$-error (Avg Rate = {order_se:.2f})', linewidth=2, markersize=8)
+plt.loglog(dx_vals, errors_sisl_symmetric, 'o-', label=rf'SISL ($\alpha=0.50$) $\theta_v$-error (Avg Rate = {order_sisl_symmetric:.2f})', linewidth=2, markersize=8)
+plt.loglog(dx_vals, errors_sisl_offcentered, '^-', label=rf'SISL ($\alpha=0.55$) $\theta_v$-error (Avg Rate = {order_sisl_offcentered:.2f})', linewidth=2, markersize=8)
+plt.loglog(dx_vals, errors_se, 's-', label=rf'Split-Explicit ($\alpha=0.55$) $\theta_v$-error (Avg Rate = {order_se:.2f})', linewidth=2, markersize=8)
 
 # Add reference 2nd order convergence slope
 ref_start = errors_se[0] * 1.2
