@@ -725,10 +725,10 @@ class SISLStepper3D:
         w_in = state['w'] + self.dt * ((1.0 - alpha) * tends_n['w'] + alpha * tends_n.get('phys_diff_w', 0.0))
         pi_prime_in = state_prime_n['pi'] + (1.0 - alpha) * self.dt * tends_n['pi']
 
-        # For true 2nd-order semi-Lagrangian advection without double-counting background transport:
-        # advect total potential temperature + non-kinematic physical/diffusion tendencies using trapezoidal rule!
-        th_v_in = state['th_v'] + 0.5 * self.dt * tends_n.get('phys_diff_th_v', 0.0)
-
+        # To eliminate spatial truncation error on the exponential background profile,
+        # advect the perturbation and integrate the total tendencies using the trapezoidal rule.
+        th_v_prime_in = th_v_prime_n + (1.0 - alpha) * self.dt * tends_n['th_v']
+        
         # Apply Eulerian tendencies to any active tracers before advection
         tracers_in = {}
         for key in self.tracer_keys:
@@ -768,12 +768,20 @@ class SISLStepper3D:
 
         rhs_u = cp_advect_cubic(u_in, coords_u, self.use_limiter)
         rhs_v = cp_advect_cubic(v_in, coords_v, self.use_limiter)
-        rhs_w = cp_advect_cubic(w_in, coords_w, self.use_limiter)
-        # rhs_pi_prime = cp_advect_cubic(pi_prime_in, coords_m, self.use_limiter)
-        rhs_pi_prime = pi_prime_in # The previous line seems to have been a fundamental bug in how we treat an Eulerian quantity, so pi should not be advected!!!
         
-        # Advect total virtual potential temperature directly with trapezoidal rule
-        th_v_next = cp_advect_cubic(th_v_in, coords_m, self.use_limiter) + 0.5 * self.dt * tends_n.get('phys_diff_th_v', 0.0)
+        # Enforce lateral boundary conditions on RHS to prevent advection boundary drift
+        rhs_u = rhs_u.at[0, :, :].set(state['u'][0, :, :])
+        rhs_u = rhs_u.at[-1, :, :].set(state['u'][-1, :, :])
+        rhs_v = rhs_v.at[:, 0, :].set(state['v'][:, 0, :])
+        rhs_v = rhs_v.at[:, -1, :].set(state['v'][:, -1, :])
+
+        rhs_w = cp_advect_cubic(w_in, coords_w, self.use_limiter)
+        rhs_pi_prime = cp_advect_cubic(pi_prime_in, coords_m, self.use_limiter)
+        # rhs_pi_prime = pi_prime_in # The previous line seems to have been a fundamental bug in how we treat an Eulerian quantity, so pi should not be advected!!!
+        
+        # Advect the perturbation and add the arrival-point tendencies
+        th_v_prime_adv = cp_advect_cubic(th_v_prime_in, coords_m, self.use_limiter)
+        th_v_next = th_v_prime_adv + alpha * self.dt * tends_n['th_v'] + self.physics.theta_bg
         
         # Advect mass with checkpointed FFSL scheme
         rho_next = cp_advect_ffsl(state['rho'], state, bg_precomputed)
@@ -786,42 +794,79 @@ class SISLStepper3D:
                 tracers_next[key] = rho_tr_next / (rho_next + self.physics.c.get('eps', 1e-15))
 
         # =====================================================================
-        # 2. ADD BUOYANCY
+        # 2 & 3. PREDICTOR-CORRECTOR IMPLICIT SOLVE
         # =====================================================================
-        th_v_prime_next = th_v_next - self.physics.theta_bg
-        th_v_prime_w_next = self.physics.op.avg(th_v_prime_next, axis=2, from_loc='m', to_loc='w')
-        rhs_w += alpha * self.dt * (self.physics.c['g'] * (th_v_prime_w_next / bg_precomputed['th_v_w']))
+        # Isolate the base explicit RHS fields outside the loop
+        rhs_u_adv, rhs_v_adv, rhs_w_adv = rhs_u, rhs_v, rhs_w
+        R_eta_dot_adv = R_eta_dot.at[:, :, 0].set(0.0).at[:, :, -1].set(0.0)
 
-        # --- ENFORCE KINEMATIC BOUNDARY ON RHS ---
-        # Bring the explicit horizontal winds to the w-points
-        u_m_rhs = self.physics.op.avg(rhs_u, axis=0, from_loc='u', to_loc='m')
-        u_w_rhs = self.physics.op.avg(u_m_rhs, axis=2, from_loc='m', to_loc='w')
-
-        v_m_rhs = self.physics.op.avg(rhs_v, axis=1, from_loc='v', to_loc='m')
-        v_w_rhs = self.physics.op.avg(v_m_rhs, axis=2, from_loc='m', to_loc='w')
-
+        # Precalculate vertical background gradients and initial w_m for the thermodynamic predictor
+        dth_bg_dz_w = self.physics.op.diff(bg_precomputed['th_v'], axis=2, from_loc='m', to_loc='w') * (self.physics.grid.dz / bg_precomputed['dz_w_full'])
+        dth_bg_dz_m = self.physics.op.avg(dth_bg_dz_w, axis=2, from_loc='w', to_loc='m')
+        w_m = self.physics.op.avg(state['w'], axis=2, from_loc='w', to_loc='m')
+        
+        # Define the vertical map factor for the kinematic boundary condition
         m_w = jnp.expand_dims(self.physics.grid.m_factors['w'], axis=-1)
 
-        # Calculate the flow forced vertically by the explicit winds hitting the terrain
-        rhs_kinematic_bottom = m_w[:, :, 0] * (
-            u_w_rhs[:, :, 0] * self.physics.grid.z_xi_w[:, :, 0] + 
-            v_w_rhs[:, :, 0] * self.physics.grid.z_eta_w[:, :, 0]
-        )
-
-        # Apply correct kinematic w at surface, 0.0 at the rigid lid top
-        rhs_w = rhs_w.at[:, :, 0].set(rhs_kinematic_bottom)
-        rhs_w = rhs_w.at[:, :, -1].set(0.0)
-
-        # eta_dot is the cross-coordinate velocity, so 0.0 at coordinate boundaries is correct
-        R_eta_dot = R_eta_dot.at[:, :, 0].set(0.0)
-        R_eta_dot = R_eta_dot.at[:, :, -1].set(0.0)
+        # Initialize trackers for the iterative loop
+        w_m_next = w_m  # The first guess for w^{n+1} is just w^n
+        state_prime_guess = state_prime_n
         
-        # =====================================================================
-        # 3. IMPLICIT SOLVE
-        # =====================================================================
-        rhs_prime = {'u': rhs_u, 'v': rhs_v, 'w': rhs_w, 'pi': rhs_pi_prime, 'eta_dot': R_eta_dot}
-        state_prime_next = self.implicit_solver.solve(rhs_prime, bg_precomputed, x0=state_prime_n)
-        
+        # u_gmres tracks the linear solver's previous output for the nonlinear PGF correction.
+        # Initializing it to rhs_u_adv ensures the nonlinear correction is 0.0 on the first pass.
+        u_gmres, v_gmres, w_gmres = rhs_u_adv, rhs_v_adv, rhs_w_adv 
+
+        # JAX cleanly unrolls this loop during XLA compilation
+        for _ in range(2): 
+            # A) Update Thermodynamic Predictor with the latest w estimate
+            tends_np1_th_v = tends_n['th_v'] + (w_m - w_m_next) * dth_bg_dz_m
+            th_v_next = th_v_prime_adv + alpha * self.dt * tends_np1_th_v + self.physics.theta_bg
+            
+            th_v_prime_next = th_v_next - self.physics.theta_bg
+            th_v_prime_u_next = self.physics.op.avg(th_v_prime_next, axis=0, from_loc='m', to_loc='u')
+            th_v_prime_v_next = self.physics.op.avg(th_v_prime_next, axis=1, from_loc='m', to_loc='v')
+            th_v_prime_w_next = self.physics.op.avg(th_v_prime_next, axis=2, from_loc='m', to_loc='w')
+
+            # B) Compute Updated Buoyancy
+            buoyancy = alpha * self.dt * (self.physics.c['g'] * (th_v_prime_w_next / bg_precomputed['th_v_w']))
+            
+            # C) Isolate and apply the nonlinear PGF residual from the previous solver pass.
+            nl_pgf_u = - (rhs_u_adv - u_gmres) * (th_v_prime_u_next / bg_precomputed['th_v_u'])
+            nl_pgf_v = - (rhs_v_adv - v_gmres) * (th_v_prime_v_next / bg_precomputed['th_v_v'])
+            nl_pgf_w = - (rhs_w_adv - w_gmres) * (th_v_prime_w_next / bg_precomputed['th_v_w'])
+
+            # D) Assemble the modified RHS for this GMRES iteration
+            rhs_u_k = rhs_u_adv + nl_pgf_u
+            rhs_v_k = rhs_v_adv + nl_pgf_v
+            rhs_w_k = rhs_w_adv + buoyancy + nl_pgf_w
+
+            # Enforce Kinematic Bottom Boundary on the updated RHS
+            u_m_rhs = self.physics.op.avg(rhs_u_k, axis=0, from_loc='u', to_loc='m')
+            u_w_rhs = self.physics.op.avg(u_m_rhs, axis=2, from_loc='m', to_loc='w')
+            v_m_rhs = self.physics.op.avg(rhs_v_k, axis=1, from_loc='v', to_loc='m')
+            v_w_rhs = self.physics.op.avg(v_m_rhs, axis=2, from_loc='m', to_loc='w')
+
+            rhs_kinematic_bottom = m_w[:, :, 0] * (
+                u_w_rhs[:, :, 0] * self.physics.grid.z_xi_w[:, :, 0] + 
+                v_w_rhs[:, :, 0] * self.physics.grid.z_eta_w[:, :, 0]
+            )
+            rhs_w_k = rhs_w_k.at[:, :, 0].set(rhs_kinematic_bottom).at[:, :, -1].set(0.0)
+
+            # E) Execute the Implicit GMRES Solve
+            rhs_prime_k = {
+                'u': rhs_u_k, 'v': rhs_v_k, 'w': rhs_w_k, 
+                'pi': rhs_pi_prime, 'eta_dot': R_eta_dot_adv
+            }
+            
+            state_prime_next = self.implicit_solver.solve(rhs_prime_k, bg_precomputed, x0=state_prime_guess)
+            
+            # F) Update state trackers for the next loop
+            state_prime_guess = state_prime_next
+            w_m_next = self.physics.op.avg(state_prime_next['w'], axis=2, from_loc='w', to_loc='m')
+            u_gmres = state_prime_next['u']
+            v_gmres = state_prime_next['v']
+            w_gmres = state_prime_next['w']
+
         # =====================================================================
         # 4. ASSEMBLE FINAL STATE
         # =====================================================================
@@ -874,17 +919,16 @@ class SISLStepper3D:
         cvd, Rd, p0 = self.physics.c['cvd'], self.physics.c['Rd'], self.physics.c['p0']
         state_next['rho'] = p0 / (Rd * state_next['th_v']) * (state_next['pi'] ** (cvd / Rd))
 
-        # Save current state and tendencies for next step's history if history is active
-        if 'u_prev' in state:
-            state_next['u_prev'] = state['u']
-            state_next['v_prev'] = state['v']
-            state_next['w_prev'] = state['w']
-            state_next['eta_dot_prev'] = state['eta_dot']
-            state_next['tend_th_v_prev'] = tends_n['th_v']
-            
-            for key in self.tracer_keys:
-                state_next[f'tend_{key}_prev'] = tends_n.get(key, 0.0)
-            state_next['is_first_step'] = 0.0
+        # Always save current state and tendencies for next step's history to enable 2nd-order trajectory calculations
+        state_next['u_prev'] = state['u']
+        state_next['v_prev'] = state['v']
+        state_next['w_prev'] = state['w']
+        state_next['eta_dot_prev'] = state['eta_dot']
+        state_next['tend_th_v_prev'] = tends_n['th_v']
+        
+        for key in self.tracer_keys:
+            state_next[f'tend_{key}_prev'] = tends_n.get(key, 0.0)
+        state_next['is_first_step'] = 0.0
 
         return state_next
 

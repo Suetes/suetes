@@ -62,8 +62,9 @@ class SpatialFilter:
         
         # We diffuse momentum and thermodynamics, but NOT pressure.
         for k in ['u', 'v', 'w', 'th_v']:
-            if k in state_prime:
-                f = state_prime[k]
+            field_key = k if k in state_prime else ('th_v_prime_m' if k == 'th_v' and 'th_v_prime_m' in state_prime else None)
+            if field_key is not None:
+                f = state_prime[field_key]
                 
                 # Horizontal Diffusion
                 diff_x = self.nu_h * self._laplacian_1d(f, axis=0, dx=self.grid.dx)
@@ -135,7 +136,7 @@ class HyperFilter:
     def get_tendencies(self, state_prime, bg_precomputed):
         diff_tends = {}
         for k in ['u', 'v', 'w', 'th_v']:
-            if k in state_prime:
+            if k in state_prime or (k == 'th_v' and 'th_v_prime_m' in state_prime):
                 # Map field to mass points for stable tensor math
                 if k == 'u':
                     f_m = self.op.avg(state_prime['u'], axis=0, from_loc='u', to_loc='m')
@@ -144,7 +145,10 @@ class HyperFilter:
                 elif k == 'w':
                     f_m = self.op.avg(state_prime['w'], axis=2, from_loc='w', to_loc='m')
                 else: 
-                    f_m = state_prime['th_v'] - bg_precomputed['th_v']
+                    if 'th_v' in state_prime:
+                        f_m = state_prime['th_v'] - bg_precomputed['th_v']
+                    else:
+                        f_m = state_prime['th_v_prime_m']
 
                 # 1st Laplacian
                 lap1_h = self._cartesian_horizontal_laplacian(f_m, bg_precomputed)

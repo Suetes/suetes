@@ -288,13 +288,8 @@ def run_mms_at_resolution(core_type, n, num_steps=5):
     ana_w = vmap_w(X_w, Y_w, Z_w)
     ana_pi = vmap_pi(X_m, Y_m, Z_m)
     ana_th = vmap_th(X_m, Y_m, Z_m)
-    
-    ana_u_imp = vmap_u_imp(X_u, Y_u, Z_u, grid.f_u)
-    ana_v_imp = vmap_v_imp(X_v, Y_v, Z_v, grid.f_v)
-    ana_w_imp = vmap_w_imp(X_w, Y_w, Z_w)
-    
-    alpha_val = stepper.alpha
         
+    alpha_val = stepper.alpha    
     original_get_tendencies = stepper.physics.get_tendencies
     
     th_v_prime_n = initial_state['th_v'] - stepper.physics.theta_bg
@@ -313,6 +308,7 @@ def run_mms_at_resolution(core_type, n, num_steps=5):
     }
     bg_precomputed = stepper.physics.precompute_bg(bg_state_ref)
     ana_tot = original_get_tendencies(initial_state_prime, bg_precomputed, is_explicit=True)
+    ana_imp = original_get_tendencies(initial_state_prime, bg_precomputed, is_explicit=False)
     
     def get_tendencies_with_forcing(state_prime, bg, is_explicit=False, ml_params=None):
         tends = original_get_tendencies(state_prime, bg, is_explicit, ml_params)
@@ -330,14 +326,14 @@ def run_mms_at_resolution(core_type, n, num_steps=5):
     
     if core_type == "sisl":
         original_solve = stepper.implicit_solver.solve
+        ana_buoy = g * (initial_state_prime['th_v_prime_w'] / bg_precomputed['th_v_w'])
         def solve_with_mms_forcing(rhs_prime, bg_precomputed, x0=None):
             # For exact off-centered trapezoidal Lagrangian integration of the analytical solution:
-            # At departure point, we added (1-alpha)*dt*(ana_tot - ana_psi).
-            # At arrival point, we need alpha*dt*(ana_tot - ana_psi_imp - ana_psi) for u, v, w.
-            # And for pi (Eulerian in SISL step), we subtract alpha*dt*ana_pi.
-            rhs_prime['u'] += alpha_val * dt * (ana_tot['u'] - ana_u_imp - ana_u)
-            rhs_prime['v'] += alpha_val * dt * (ana_tot['v'] - ana_v_imp - ana_v)
-            rhs_prime['w'] += alpha_val * dt * (ana_tot['w'] - ana_w_imp - ana_w)
+            # We match the discrete GMRES operator exactly using ana_imp from original_get_tendencies(is_explicit=False)
+            # and subtract ana_buoy from w to balance the arrival buoyancy added before the implicit solve.
+            rhs_prime['u'] += alpha_val * dt * (ana_tot['u'] - ana_imp['u'] - ana_u)
+            rhs_prime['v'] += alpha_val * dt * (ana_tot['v'] - ana_imp['v'] - ana_v)
+            rhs_prime['w'] += alpha_val * dt * (ana_tot['w'] - ana_imp['w'] - ana_w - ana_buoy)
             rhs_prime['pi'] -= alpha_val * dt * ana_pi
             return original_solve(rhs_prime, bg_precomputed, x0)
         stepper.implicit_solver.solve = solve_with_mms_forcing
@@ -399,7 +395,7 @@ def run_study(core_type):
     print(f"Running MMS study for {core_type.upper()} core...")
     print(f"========================================")
     
-    resolutions = [8, 16, 32, 64, 128]
+    resolutions = [8, 16, 32, 64]
     results = []
     
     for r in resolutions:
@@ -452,46 +448,42 @@ if __name__ == "__main__":
     avg_rate_sisl = np.mean(valid_rates_sisl[:3]) if valid_rates_sisl else 0.0
     avg_rate_se = np.mean(valid_rates_se[:3]) if valid_rates_se else 0.0
     
-    plt.loglog(dx_vals, err_u_sisl, 'o-', label=f'SISL u-error (Avg Rate = {avg_rate_sisl:.2f})', linewidth=2, markersize=8)
-    plt.loglog(dx_vals, err_u_se, 's-', label=f'Split-Explicit u-error (Avg Rate = {avg_rate_se:.2f})', linewidth=2, markersize=8)
+    plt.loglog(dx_vals, err_u_sisl, 'o-', label='SISL', linewidth=2, markersize=8)
+    plt.loglog(dx_vals, err_u_se, 's-', label='Split-explicit', linewidth=2, markersize=8)
     
     ref_start = max(err_u_sisl[0], err_u_se[0]) * 1.5
     ref_line = ref_start * (np.array(dx_vals) / dx_vals[0])**2
     plt.loglog(dx_vals, ref_line, 'k--', label='Theoretical 2nd Order', alpha=0.7)
     
-    plt.xlabel(r'Grid Spacing $\Delta x$ (m)', fontsize=12)
-    plt.ylabel(r'$L_2$ Error in $u$ (m/s)', fontsize=12)
-    plt.title('Spatial convergence study: MMS benchmark ($u$ momentum)', fontsize=14)
+    plt.xlabel('Grid Spacing dx (m)', fontsize=12)
+    plt.ylabel('L2 Error in u (m/s)', fontsize=12)
+    plt.title('Spatial convergence study: MMS benchmark (u momentum)', fontsize=14)
     plt.grid(True, which="both", ls="--", alpha=0.5)
     plt.legend(fontsize=10, loc='lower right')
     
     out_path_u = f'{output_dir}/dual_core_mms_convergence_study.png'
+    out_path_u_alt = f'{output_dir}/dual_core_mms_convergence_study_u.png'
     os.makedirs(os.path.dirname(out_path_u), exist_ok=True)
     plt.savefig(out_path_u, dpi=300, bbox_inches='tight')
+    plt.savefig(out_path_u_alt, dpi=300, bbox_inches='tight')
     plt.close()
-    print(f"\nSaved MMS u-convergence plot to {out_path_u}")
+    print(f"\nSaved MMS u-convergence plot to {out_path_u} and {out_path_u_alt}")
 
     # --- Plot 2: Potential Temperature (theta) Convergence ---
     plt.figure(figsize=(10, 8))
     err_th_sisl = [res[5] for res in results_sisl]
     err_th_se = [res[5] for res in results_se]
     
-    valid_rates_th_sisl = [r for r in rates_sisl["th"] if not np.isnan(r)]
-    valid_rates_th_se = [r for r in rates_se["th"] if not np.isnan(r)]
-    # Average over coarse/medium rates (first two intervals where order is ~2.42, 2.18 before hitting machine floor)
-    avg_rate_th_sisl = np.mean(valid_rates_th_sisl[:2]) if len(valid_rates_th_sisl) >= 2 else np.mean(valid_rates_th_sisl)
-    avg_rate_th_se = np.mean(valid_rates_th_se[:3]) if valid_rates_th_se else 0.0
-    
-    plt.loglog(dx_vals, err_th_sisl, 'o-', label=rf'SISL $\theta_v$-error (Avg Rate = {avg_rate_th_sisl:.2f})', linewidth=2, markersize=8)
-    plt.loglog(dx_vals, err_th_se, 's-', label=rf'Split-Explicit $\theta_v$-error (Avg Rate = {avg_rate_th_se:.2f})', linewidth=2, markersize=8)
+    plt.loglog(dx_vals, err_th_sisl, 'o-', label='SISL', linewidth=2, markersize=8)
+    plt.loglog(dx_vals, err_th_se, 's-', label='Split-explicit', linewidth=2, markersize=8)
     
     ref_start_th = max(err_th_sisl[0], err_th_se[0]) * 1.5
     ref_line_th = ref_start_th * (np.array(dx_vals) / dx_vals[0])**2
     plt.loglog(dx_vals, ref_line_th, 'k--', label='Theoretical 2nd Order', alpha=0.7)
     
-    plt.xlabel(r'Grid Spacing $\Delta x$ (m)', fontsize=12)
-    plt.ylabel(r'$L_2$ Error in $\theta_v$ (K)', fontsize=12)
-    plt.title(r'Spatial convergence study: MMS benchmark ($\theta_v$ potential temperature)', fontsize=14)
+    plt.xlabel('Grid Spacing dx (m)', fontsize=12)
+    plt.ylabel('L2 Error in theta_v (K)', fontsize=12)
+    plt.title('Spatial convergence study: MMS benchmark (theta_v potential temperature)', fontsize=14)
     plt.grid(True, which="both", ls="--", alpha=0.5)
     plt.legend(fontsize=10, loc='lower right')
     

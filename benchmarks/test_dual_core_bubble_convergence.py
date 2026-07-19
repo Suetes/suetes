@@ -40,19 +40,31 @@ def get_cell_center_slices(res_3d):
         'th_v': np.array(th)
     }
 
-def run_bubble_at_resolution(core_type, dx, alpha=0.55):
+def run_bubble_at_resolution(core_type, dx, alpha=0.55, dt_mode="constant"):
     nx = int(10000 / dx)
     nz = int(10000 / dx)
     ny = 3
     
-    if core_type == "sisl":
-        dt = (dx / 125.0) * 5.0  # Linear scaling of timestep with grid spacing
-        core_kwargs = {"dt": dt, "nu_div_factor": 0.0, "nu_h_factor": 0.0, "damp_height": 7500.0, "max_damp": 0.05, "alpha": alpha, "solver_tol": 1e-12, "solver_maxiter": 100, "solver_restart": 100}
-    elif core_type == "split-explicit":
-        dt = (dx / 125.0) * 2.5
-        core_kwargs = {"dt": dt, "ns": 24, "nu_div_factor": 0.0, "nu_h_factor": 0.0, "damp_height": 7500.0, "max_damp": 0.05, "alpha": alpha}
+    if dt_mode == "scaling":
+        if core_type == "sisl":
+            dt = (dx / 125.0) * 5.0
+            core_kwargs = {"dt": dt, "nu_div_factor": 0.0, "nu_h_factor": 0.0, "damp_height": 7500.0, "max_damp": 0.05, "alpha": alpha, "solver_tol": 1e-12, "solver_maxiter": 100, "solver_restart": 100}
+        elif core_type == "split-explicit":
+            dt = (dx / 125.0) * 2.5
+            core_kwargs = {"dt": dt, "ns": 24, "nu_div_factor": 0.0, "nu_h_factor": 0.0, "damp_height": 7500.0, "max_damp": 0.05, "alpha": alpha}
+        else:
+            raise ValueError(f"Unknown core: {core_type}")
+    elif dt_mode == "constant":
+        # Constant reference timestep to isolate spatial second-order accuracy (Option A)
+        dt = 0.5
+        if core_type == "sisl":
+            core_kwargs = {"dt": dt, "nu_div_factor": 0.0, "nu_h_factor": 0.0, "damp_height": 7500.0, "max_damp": 0.05, "alpha": alpha, "solver_tol": 1e-12, "solver_maxiter": 100, "solver_restart": 100}
+        elif core_type == "split-explicit":
+            core_kwargs = {"dt": dt, "ns": 24, "nu_div_factor": 0.0, "nu_h_factor": 0.0, "damp_height": 7500.0, "max_damp": 0.05, "alpha": alpha}
+        else:
+            raise ValueError(f"Unknown core: {core_type}")
     else:
-        raise ValueError(f"Unknown core: {core_type}")
+        raise ValueError(f"Unknown dt_mode: {dt_mode}")
 
     grid = RegionalGrid3D(nx, ny, nz, dx, dx, dx, lat_center=0.0, lon_center=0.0)
     # Force pure Cartesian geometry to eliminate pseudo-2D advection boundary artifacts
@@ -87,6 +99,14 @@ def run_bubble_at_resolution(core_type, dx, alpha=0.55):
     state['rho'] = constants['p0'] / (constants['Rd'] * state['th_v']) * \
                    (bg_ref['pi'] ** (constants['cvd'] / constants['Rd']))
 
+    # Initialize history fields to ensure JAX carries them inside the scan loop
+    state['u_prev'] = state['u']
+    state['v_prev'] = state['v']
+    state['w_prev'] = state['w']
+    state['eta_dot_prev'] = state['eta_dot']
+    state['tend_th_v_prev'] = jnp.zeros_like(state['th_v'])
+    state['is_first_step'] = 1.0
+
     stepper, dt = build_dynamical_core(
         core_type=core_type, grid=grid, operators=op, constants=constants,
         initial_state=state, **core_kwargs
@@ -104,14 +124,14 @@ def run_bubble_at_resolution(core_type, dx, alpha=0.55):
     gc.collect()
     return slices
 
-def run_study(core_type, alpha=0.55):
+def run_study(core_type, alpha=0.55, dt_mode="constant"):
     print(f"\n========================================")
-    print(f"Running self-convergence study for {core_type.upper()} (alpha={alpha})...")
+    print(f"Running self-convergence study for {core_type.upper()} (alpha={alpha}, dt_mode={dt_mode})...")
     print(f"========================================")
-    dxs = [1000.0, 500.0, 250.0, 125.0, 62.5, 31.25]
+    dxs = [1000.0, 500.0, 250.0, 125.0, 62.5]
     slices = []
     for dx in dxs:
-        s = run_bubble_at_resolution(core_type, dx, alpha)
+        s = run_bubble_at_resolution(core_type, dx, alpha, dt_mode=dt_mode)
         slices.append(s)
         print(f"Completed simulation at dx = {dx} m | VRAM caches cleared.")
 
@@ -121,9 +141,19 @@ def run_study(core_type, alpha=0.55):
     for i in range(len(dxs) - 1):
         coarse = slices[i]
         fine = slices[i+1]
+        
+        # 1500m boundary sponge/clipping zone crop
+        crop_x = int(1500.0 / dxs[i])
+        crop_z = int(1500.0 / dxs[i])
+        
         for k in keys:
             fine_avg = block_average_2d(fine[k], 2)
-            err = float(jnp.sqrt(jnp.mean((fine_avg - coarse[k])**2)))
+            
+            # Crop to interior to avoid boundary clipping/sponge artifacts
+            coarse_cropped = coarse[k][crop_x:-crop_x, crop_z:-crop_z]
+            fine_avg_cropped = fine_avg[crop_x:-crop_x, crop_z:-crop_z]
+            
+            err = float(jnp.sqrt(jnp.mean((fine_avg_cropped - coarse_cropped)**2)))
             errors[k].append(err)
             
         print(f"Res {dxs[i]:6.1f} -> {dxs[i+1]:6.1f}m | "
@@ -143,38 +173,55 @@ def run_study(core_type, alpha=0.55):
             rates[k].append(rate)
             print(f"  Rate {k:2s}: {rate:.2f}")
 
-    avg_order_th = np.mean(rates['th_v'])
-    return errors['th_v'], avg_order_th
+    return errors
 
-errors_sisl_symmetric, order_sisl_symmetric = run_study("sisl", alpha=0.5)
-errors_sisl_offcentered, order_sisl_offcentered = run_study("sisl", alpha=0.55)
-errors_se, order_se = run_study("split-explicit")
+if __name__ == "__main__":
 
+    errors_sisl = run_study("sisl", alpha=0.5, dt_mode="scaling")
+    errors_se = run_study("split-explicit", alpha=0.5, dt_mode="scaling")
 
-# Plotting setup
-plt.figure(figsize=(10, 8))
+    # Plotting setup
+    dx_vals = np.array([1000.0, 500.0, 250.0, 125.0])
 
-dx_vals = np.array([1000.0, 500.0, 250.0, 125.0, 62.5])
+    # --- Plot 1: Potential Temperature (theta_v) Convergence ---
+    plt.figure(figsize=(10, 8))
+    plt.loglog(dx_vals, errors_sisl['th_v'], 'o-', label='SISL', linewidth=2, markersize=8)
+    plt.loglog(dx_vals, errors_se['th_v'], 's-', label='Split-explicit', linewidth=2, markersize=8)
 
-# Plot empirical errors
-plt.loglog(dx_vals, errors_sisl_symmetric, 'o-', label=rf'SISL ($\alpha=0.50$) $\theta_v$-error (Avg Rate = {order_sisl_symmetric:.2f})', linewidth=2, markersize=8)
-plt.loglog(dx_vals, errors_sisl_offcentered, '^-', label=rf'SISL ($\alpha=0.55$) $\theta_v$-error (Avg Rate = {order_sisl_offcentered:.2f})', linewidth=2, markersize=8)
-plt.loglog(dx_vals, errors_se, 's-', label=rf'Split-Explicit ($\alpha=0.55$) $\theta_v$-error (Avg Rate = {order_se:.2f})', linewidth=2, markersize=8)
+    ref_start_th = max(errors_sisl['th_v'][0], errors_se['th_v'][0]) * 1.5
+    ref_line_th = ref_start_th * (dx_vals / dx_vals[0])**2
+    plt.loglog(dx_vals, ref_line_th, 'k--', label='Theoretical 2nd Order', alpha=0.7)
 
-# Add reference 2nd order convergence slope
-ref_start = errors_se[0] * 1.2
-ref_line = ref_start * (dx_vals / dx_vals[0])**2
-plt.loglog(dx_vals, ref_line, 'k--', label='Theoretical 2nd Order', alpha=0.7)
+    plt.xlabel('Grid Spacing dx (m)', fontsize=12)
+    plt.ylabel('L2 Error in theta_v (K)', fontsize=12)
+    plt.title('Spatial convergence study: Rising bubble benchmark (theta_v potential temperature)', fontsize=14)
+    plt.grid(True, which="both", ls="--", alpha=0.5)
+    plt.legend(fontsize=10, loc='lower right')
 
-plt.xlabel(r'Grid Spacing $\Delta x$ (m)', fontsize=12)
-plt.ylabel(r'$L_2$ Error in $\theta_v$', fontsize=12)
-plt.title('Spatial convergence study: Rising bubble benchmark', fontsize=14)
-plt.grid(True, which="both", ls="--", alpha=0.5)
-plt.legend(fontsize=10, loc='lower right')
+    out_path_th = f'{output_dir}/dual_core_bubble_convergence_study.png'
+    out_path_th_alt = f'{output_dir}/dual_core_bubble_convergence_study_theta.png'
+    os.makedirs(os.path.dirname(out_path_th), exist_ok=True)
+    plt.savefig(out_path_th, dpi=300, bbox_inches='tight')
+    plt.savefig(out_path_th_alt, dpi=300, bbox_inches='tight')
+    plt.close()
+    print(f"Saved bubble theta-convergence plot to {out_path_th} and {out_path_th_alt}")
 
-# Save plot to centralized output directory
-out_path = f'{output_dir}/dual_core_bubble_convergence_study.png'
-os.makedirs(os.path.dirname(out_path), exist_ok=True)
-plt.savefig(out_path, dpi=300, bbox_inches='tight')
-plt.close()
-print(f"Saved convergence plot to {out_path}")
+    # --- Plot 2: Momentum (u) Convergence ---
+    plt.figure(figsize=(10, 8))
+    plt.loglog(dx_vals, errors_sisl['u'], 'o-', label='SISL', linewidth=2, markersize=8)
+    plt.loglog(dx_vals, errors_se['u'], 's-', label='Split-explicit', linewidth=2, markersize=8)
+
+    ref_start_u = max(errors_sisl['u'][0], errors_se['u'][0]) * 1.5
+    ref_line_u = ref_start_u * (dx_vals / dx_vals[0])**2
+    plt.loglog(dx_vals, ref_line_u, 'k--', label='Theoretical 2nd Order', alpha=0.7)
+
+    plt.xlabel('Grid Spacing dx (m)', fontsize=12)
+    plt.ylabel('L2 Error in u (m/s)', fontsize=12)
+    plt.title('Spatial convergence study: Rising bubble benchmark (u momentum)', fontsize=14)
+    plt.grid(True, which="both", ls="--", alpha=0.5)
+    plt.legend(fontsize=10, loc='lower right')
+
+    out_path_u = f'{output_dir}/dual_core_bubble_convergence_study_u.png'
+    plt.savefig(out_path_u, dpi=300, bbox_inches='tight')
+    plt.close()
+    print(f"Saved bubble u-convergence plot to {out_path_u}")

@@ -191,9 +191,14 @@ class Euler3D:
         """
         u, v, w, pi_prime, eta_dot = state_prime['u'], state_prime['v'], state_prime['w'], state_prime['pi'], state_prime['eta_dot']
         
-        th_v_u = bg['th_v_u'] + state_prime.get('th_v_prime_u', 0.0)
-        th_v_v = bg['th_v_v'] + state_prime.get('th_v_prime_v', 0.0)
-        th_v_w = bg['th_v_w'] + state_prime.get('th_v_prime_w', 0.0)
+        if is_explicit:
+            th_v_u = bg['th_v_u'] + state_prime.get('th_v_prime_u', 0.0)
+            th_v_v = bg['th_v_v'] + state_prime.get('th_v_prime_v', 0.0)
+            th_v_w = bg['th_v_w'] + state_prime.get('th_v_prime_w', 0.0)
+        else:
+            th_v_u = bg['th_v_u']
+            th_v_v = bg['th_v_v']
+            th_v_w = bg['th_v_w']
 
         # Horizontal pressure gradients (use pi_prime)
         grad_pi_prime_x = self.op.diff(pi_prime, axis=0, from_loc='m', to_loc='u')
@@ -225,11 +230,10 @@ class Euler3D:
             # Perturbation form cancels discrete gravity at rest
             th_v_prime_w = state_prime.get('th_v_prime_w', 0.0)
             buoyancy = self.c['g'] * (th_v_prime_w / bg['th_v_w'])
-            
             tend_w = -self.c['cp'] * th_v_w * grad_pi_prime_z_w + buoyancy
         else:
             # The implicit solver matrix requires strict linearity
-            tend_w = -self.c['cp'] * bg['th_v_w'] * grad_pi_prime_z_w
+            tend_w = -self.c['cp'] * th_v_w * grad_pi_prime_z_w
 
         # Coriolis (Linear part is implicit)
         v_at_u = self.op.avg(self.op.avg(v, axis=1, from_loc='v', to_loc='m'), axis=0, from_loc='m', to_loc='u')
@@ -294,14 +298,14 @@ class Euler3D:
             # Diffusion
             if self.nu_h > 0.0 or self.nu_div > 0.0:
                 diff_tends = self.diffusion.get_tendencies(state_prime, bg_precomputed=bg)
-                tend_u += diff_tends['u']
-                tend_v += diff_tends['v']
-                tend_w += diff_tends['w']
-                tend_th_v += diff_tends['th_v']
-                phys_diff_u += diff_tends['u']
-                phys_diff_v += diff_tends['v']
-                phys_diff_w += diff_tends['w']
-                phys_diff_th_v += diff_tends['th_v']
+                tend_u += diff_tends.get('u', 0.0)
+                tend_v += diff_tends.get('v', 0.0)
+                tend_w += diff_tends.get('w', 0.0)
+                tend_th_v += diff_tends.get('th_v', 0.0)
+                phys_diff_u += diff_tends.get('u', 0.0)
+                phys_diff_v += diff_tends.get('v', 0.0)
+                phys_diff_w += diff_tends.get('w', 0.0)
+                phys_diff_th_v += diff_tends.get('th_v', 0.0)
 
             # Call physics suite
             if self.physics_suite is not None:

@@ -439,13 +439,18 @@ if __name__ == "__main__":
         print(f"  [1 Step Final]      u: {res[4]:.2e} | w: {res[6]:.2e} | pi: {res[7]:.2e} | th: {res[8]:.2e}")
         print(f"  [2 Steps Final]     u: {res[9]:.2e} | w: {res[11]:.2e} | pi: {res[12]:.2e} | th: {res[13]:.2e}")
         
+    def safe_rate(e1, e2, factor):
+        if e1 <= 1e-16 or e2 <= 1e-16:
+            return 0.0
+        return float(np.log(e1 / e2) / np.log(factor))
+
     print("\n--- 1 Step Convergence Rates ---")
     for i in range(len(resolutions) - 1):
         dx1 = results[i][0]
         dx2 = results[i+1][0]
         factor = dx1 / dx2
         print(f"Res {resolutions[i]} -> {resolutions[i+1]}:")
-        print(f"  [L(x_exact)-RHS]    Rate L_u: {np.log(results[i][14]/results[i+1][14])/np.log(factor):.2f} | Rate L_w: {np.log(results[i][16]/results[i+1][16])/np.log(factor):.2f} | Rate L_pi: {np.log(results[i][17]/results[i+1][17])/np.log(factor):.2f}")
-        print(f"  [L(x_sol)  -RHS]    Rate sol_u: {np.log(results[i][19]/results[i+1][19])/np.log(factor):.2f} | Rate sol_w: {np.log(results[i][20]/results[i+1][20])/np.log(factor):.2f} | Rate sol_pi: {np.log(results[i][21]/results[i+1][21])/np.log(factor):.2f}")
-        print(f"  [x_sol - x_exact]   Rate err_u: {np.log(results[i][22]/results[i+1][22])/np.log(factor):.2f} | Rate err_w: {np.log(results[i][24]/results[i+1][24])/np.log(factor):.2f} | Rate err_pi: {np.log(results[i][25]/results[i+1][25])/np.log(factor):.2f} | Rate err_eta: {np.log(results[i][26]/results[i+1][26])/np.log(factor):.2f}")
-        print(f"  [2 Steps Final]     Rate u: {np.log(results[i][9]/results[i+1][9])/np.log(factor):.2f} | Rate w: {np.log(results[i][11]/results[i+1][11])/np.log(factor):.2f} | Rate pi: {np.log(results[i][12]/results[i+1][12])/np.log(factor):.2f} | Rate th: {np.log(results[i][13]/results[i+1][13])/np.log(factor):.2f}")
+        print(f"  [L(x_exact)-RHS]    Rate L_u: {safe_rate(results[i][14], results[i+1][14], factor):.2f} | Rate L_w: {safe_rate(results[i][16], results[i+1][16], factor):.2f} | Rate L_pi: {safe_rate(results[i][17], results[i+1][17], factor):.2f}")
+        print(f"  [L(x_sol)  -RHS]    Rate sol_u: {safe_rate(results[i][19], results[i+1][19], factor):.2f} | Rate sol_w: {safe_rate(results[i][20], results[i+1][20], factor):.2f} | Rate sol_pi: {safe_rate(results[i][21], results[i+1][21], factor):.2f}")
+        print(f"  [x_sol - x_exact]   Rate err_u: {safe_rate(results[i][22], results[i+1][22], factor):.2f} | Rate err_w: {safe_rate(results[i][24], results[i+1][24], factor):.2f} | Rate err_pi: {safe_rate(results[i][25], results[i+1][25], factor):.2f} | Rate err_eta: {safe_rate(results[i][26], results[i+1][26], factor):.2f}")
+        print(f"  [2 Steps Final]     Rate u: {safe_rate(results[i][9], results[i+1][9], factor):.2f} | Rate w: {safe_rate(results[i][11], results[i+1][11], factor):.2f} | Rate pi: {safe_rate(results[i][12], results[i+1][12], factor):.2f} | Rate th: {safe_rate(results[i][13], results[i+1][13], factor):.2f}")

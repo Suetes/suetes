@@ -1,4 +1,5 @@
 import os
+import gc
 import matplotlib.pyplot as plt
 import numpy as np
 import jax
@@ -403,6 +404,8 @@ def run_sisl_convergence_study(use_sponge=True):
         print(f"  [Step 1 Error] u: {res_dict['err_u_step1']:.2e} | th_v: {res_dict['err_th_step1']:.2e}")
         print(f"  [Step 2 Error] u: {res_dict['err_u_step2']:.2e} | th_v: {res_dict['err_th_step2']:.2e}")
         print(f"  [Final Error ] u: {res_dict['err_u_final']:.2e} | v: {res_dict['err_v_final']:.2e} | w: {res_dict['err_w_final']:.2e} | pi: {res_dict['err_pi_final']:.2e} | th_v: {res_dict['err_th_final']:.2e}")
+        jax.clear_caches()
+        gc.collect()
         
     print("\n--- Order of Accuracy (Rate of Convergence) ---")
     print("Transition        | u (Step 1) | u (Step 2) | u (Final)  | th_v (Final) | pi (Final)")
