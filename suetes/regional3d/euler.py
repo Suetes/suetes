@@ -159,6 +159,52 @@ class Euler3D:
             'th_v': th_v_bg
         }
 
+    def nonlinear_pi_tendency(self, state_prime, th_v_prime, bg):
+        """Return the theta-prime contribution to Exner continuity."""
+        th_prime_u = self.op.avg(th_v_prime, axis=0, from_loc='m', to_loc='u')
+        th_prime_v = self.op.avg(th_v_prime, axis=1, from_loc='m', to_loc='v')
+        th_prime_w = self.op.avg(th_v_prime, axis=2, from_loc='m', to_loc='w')
+
+        m_u = self.grid.m_factors['u'][..., None]
+        m_v = self.grid.m_factors['v'][..., None]
+        m_m = self.grid.m_factors['m'][..., None]
+
+        flux_x = state_prime['u'] * bg['rho_u'] * th_prime_u * bg['dz_u'] / m_u
+        flux_y = state_prime['v'] * bg['rho_v'] * th_prime_v * bg['dz_v'] / m_v
+        flux_z = (
+            state_prime['eta_dot'] * bg['dz_w_full']
+            * bg['rho_w'] * th_prime_w
+        )
+        flux_z = flux_z.at[:, :, 0].set(0.0).at[:, :, -1].set(0.0)
+
+        div_x = self.op.diff(flux_x, axis=0, from_loc='u', to_loc='m') / bg['dz_m_full']
+        div_y = self.op.diff(flux_y, axis=1, from_loc='v', to_loc='m') / bg['dz_m_full']
+        div_z = (
+            self.op.diff(flux_z, axis=2, from_loc='w', to_loc='m')
+            * self.grid.dz / bg['dz_m_full']
+        )
+        return -bg['C_pi'] * (m_m * (div_x + div_y) + div_z)
+
+    def metric_curvature_tendencies(self, u, v):
+        """Return the nonlinear horizontal map-curvature accelerations."""
+        u_m = self.op.avg(u, axis=0, from_loc='u', to_loc='m')
+        v_m = self.op.avg(v, axis=1, from_loc='v', to_loc='m')
+        v_at_u = self.op.avg(
+            self.op.avg(v, axis=1, from_loc='v', to_loc='m'),
+            axis=0, from_loc='m', to_loc='u'
+        )
+        u_at_v = self.op.avg(
+            self.op.avg(u, axis=0, from_loc='u', to_loc='m'),
+            axis=1, from_loc='m', to_loc='v'
+        )
+        metric_m = (
+            v_m * self.grid.dm_dx_m[..., None]
+            - u_m * self.grid.dm_dy_m[..., None]
+        )
+        metric_u = self.op.avg(metric_m, axis=0, from_loc='m', to_loc='u')
+        metric_v = self.op.avg(metric_m, axis=1, from_loc='m', to_loc='v')
+        return metric_u * v_at_u, -metric_v * u_at_v
+
     def get_tendencies(self, state_prime, bg, is_explicit=False, ml_params=None):
         r"""
         Evaluates the spatial right-hand side (RHS) tendencies for the system.
@@ -245,17 +291,9 @@ class Euler3D:
 
         # Map Curvature Metric terms (Strictly non-linear, so explicit only)
         if is_explicit:
-            u_m = self.op.avg(u, axis=0, from_loc='u', to_loc='m')
-            v_m = self.op.avg(v, axis=1, from_loc='v', to_loc='m')
-            dm_dx_m_3d = jnp.expand_dims(self.grid.dm_dx_m, axis=-1)
-            dm_dy_m_3d = jnp.expand_dims(self.grid.dm_dy_m, axis=-1)
-            metric_m = v_m * dm_dx_m_3d - u_m * dm_dy_m_3d
-            
-            metric_u = self.op.avg(metric_m, axis=0, from_loc='m', to_loc='u')
-            metric_v = self.op.avg(metric_m, axis=1, from_loc='m', to_loc='v')
-            
-            tend_u += metric_u * v_at_u
-            tend_v -= metric_v * u_at_v
+            metric_tend_u, metric_tend_v = self.metric_curvature_tendencies(u, v)
+            tend_u += metric_tend_u
+            tend_v += metric_tend_v
 
         # Divergence
         m_u, m_v, m_m = self.grid.m_factors['u'][..., None], self.grid.m_factors['v'][..., None], self.grid.m_factors['m'][..., None]

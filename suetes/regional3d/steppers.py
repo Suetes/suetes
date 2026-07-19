@@ -639,6 +639,10 @@ class SISLStepper3D:
         final_state, _ = jax.lax.scan(scan_fn, state, jnp.arange(num_steps))
         return final_state
 
+    def _nonlinear_pi_tendency(self, state_prime, th_v_prime, bg):
+        """Compute the theta-prime contribution to Exner continuity."""
+        return self.physics.nonlinear_pi_tendency(state_prime, th_v_prime, bg)
+
     def step(self, state, t, forcing, bc_fn, ml_params=None):
         r"""
         Executes a single SISL time step.
@@ -723,7 +727,15 @@ class SISLStepper3D:
         u_in = state['u'] + self.dt * ((1.0 - alpha) * tends_n['u'] + alpha * tends_n.get('phys_diff_u', 0.0))
         v_in = state['v'] + self.dt * ((1.0 - alpha) * tends_n['v'] + alpha * tends_n.get('phys_diff_v', 0.0))
         w_in = state['w'] + self.dt * ((1.0 - alpha) * tends_n['w'] + alpha * tends_n.get('phys_diff_w', 0.0))
-        pi_prime_in = state_prime_n['pi'] + (1.0 - alpha) * self.dt * tends_n['pi']
+        # The linear tendency contains only the background theta contribution.
+        # Add the old-time theta-prime flux here so nonlinear continuity uses
+        # the same departure/arrival trapezoidal rule as the other wave terms.
+        nl_pi_n = self._nonlinear_pi_tendency(
+            state_prime_n, th_v_prime_n, bg_precomputed
+        )
+        pi_prime_in = state_prime_n['pi'] + (1.0 - alpha) * self.dt * (
+            tends_n['pi'] + nl_pi_n
+        )
 
         # To eliminate spatial truncation error on the exponential background profile,
         # advect the perturbation and integrate the total tendencies using the trapezoidal rule.
@@ -777,7 +789,6 @@ class SISLStepper3D:
 
         rhs_w = cp_advect_cubic(w_in, coords_w, self.use_limiter)
         rhs_pi_prime = cp_advect_cubic(pi_prime_in, coords_m, self.use_limiter)
-        # rhs_pi_prime = pi_prime_in # The previous line seems to have been a fundamental bug in how we treat an Eulerian quantity, so pi should not be advected!!!
         
         # Advect the perturbation and add the arrival-point tendencies
         th_v_prime_adv = cp_advect_cubic(th_v_prime_in, coords_m, self.use_limiter)
@@ -805,20 +816,19 @@ class SISLStepper3D:
         dth_bg_dz_m = self.physics.op.avg(dth_bg_dz_w, axis=2, from_loc='w', to_loc='m')
         w_m = self.physics.op.avg(state['w'], axis=2, from_loc='w', to_loc='m')
         
-        # Define the vertical map factor for the kinematic boundary condition
         m_w = jnp.expand_dims(self.physics.grid.m_factors['w'], axis=-1)
 
         # Initialize trackers for the iterative loop
-        w_m_next = w_m  # The first guess for w^{n+1} is just w^n
+        w_m_next = w_m
         state_prime_guess = state_prime_n
         
-        # u_gmres tracks the linear solver's previous output for the nonlinear PGF correction.
-        # Initializing it to rhs_u_adv ensures the nonlinear correction is 0.0 on the first pass.
+        # Track the solver's output AND the RHS used to generate it!
         u_gmres, v_gmres, w_gmres = rhs_u_adv, rhs_v_adv, rhs_w_adv 
+        rhs_u_k, rhs_v_k, rhs_w_k = rhs_u_adv, rhs_v_adv, rhs_w_adv
+        rhs_pi_k = rhs_pi_prime
 
-        # JAX cleanly unrolls this loop during XLA compilation
         for _ in range(2): 
-            # A) Update Thermodynamic Predictor with the latest w estimate
+            # A) Update Thermodynamic Predictor
             tends_np1_th_v = tends_n['th_v'] + (w_m - w_m_next) * dth_bg_dz_m
             th_v_next = th_v_prime_adv + alpha * self.dt * tends_np1_th_v + self.physics.theta_bg
             
@@ -830,37 +840,76 @@ class SISLStepper3D:
             # B) Compute Updated Buoyancy
             buoyancy = alpha * self.dt * (self.physics.c['g'] * (th_v_prime_w_next / bg_precomputed['th_v_w']))
             
-            # C) Isolate and apply the nonlinear PGF residual from the previous solver pass.
-            nl_pgf_u = - (rhs_u_adv - u_gmres) * (th_v_prime_u_next / bg_precomputed['th_v_u'])
-            nl_pgf_v = - (rhs_v_adv - v_gmres) * (th_v_prime_v_next / bg_precomputed['th_v_v'])
-            nl_pgf_w = - (rhs_w_adv - w_gmres) * (th_v_prime_w_next / bg_precomputed['th_v_w'])
+            # C) Evaluate the nonlinear pressure-gradient force directly.  The
+            # implicit velocity increment also contains Coriolis, so scaling
+            # that increment by theta'/theta would contaminate rotation.
+            pi_guess = state_prime_guess['pi']
+            grad_pi_x = self.physics.op.diff(pi_guess, axis=0, from_loc='m', to_loc='u')
+            grad_pi_y = self.physics.op.diff(pi_guess, axis=1, from_loc='m', to_loc='v')
+            grad_pi_z_w = self.physics.op.diff(
+                pi_guess, axis=2, from_loc='m', to_loc='w'
+            ) * (self.physics.grid.dz / bg_precomputed['dz_w_full'])
+            grad_pi_z_m = self.physics.op.avg(
+                grad_pi_z_w, axis=2, from_loc='w', to_loc='m'
+            )
+            grad_pi_z_u = self.physics.op.avg(
+                grad_pi_z_m, axis=0, from_loc='m', to_loc='u'
+            )
+            grad_pi_z_v = self.physics.op.avg(
+                grad_pi_z_m, axis=1, from_loc='m', to_loc='v'
+            )
+            z_xi_u = self.physics.op.diff(
+                self.physics.grid.Z_m, axis=0, from_loc='m', to_loc='u'
+            )
+            z_eta_v = self.physics.op.diff(
+                self.physics.grid.Z_m, axis=1, from_loc='m', to_loc='v'
+            )
+            cp_alpha_dt = self.physics.c['cp'] * alpha * self.dt
+            nl_pgf_u = -cp_alpha_dt * th_v_prime_u_next * (
+                grad_pi_x - z_xi_u * grad_pi_z_u
+            )
+            nl_pgf_v = -cp_alpha_dt * th_v_prime_v_next * (
+                grad_pi_y - z_eta_v * grad_pi_z_v
+            )
+            nl_pgf_w = -cp_alpha_dt * th_v_prime_w_next * grad_pi_z_w
 
-            # D) Assemble the modified RHS for this GMRES iteration
-            rhs_u_k = rhs_u_adv + nl_pgf_u
-            rhs_v_k = rhs_v_adv + nl_pgf_v
+            # D) Match the departure-time nonlinear continuity contribution
+            # using the latest coupled arrival-state estimate.
+            nl_div_pi = self._nonlinear_pi_tendency(
+                state_prime_guess, th_v_prime_next, bg_precomputed
+            )
+
+            # E) Add arrival-time nonlinear metric acceleration.  Its
+            # departure-time half is already present in rhs_[uv]_adv.
+            metric_u_next, metric_v_next = self.physics.metric_curvature_tendencies(
+                u_gmres, v_gmres
+            )
+            rhs_u_k = rhs_u_adv + nl_pgf_u + alpha * self.dt * metric_u_next
+            rhs_v_k = rhs_v_adv + nl_pgf_v + alpha * self.dt * metric_v_next
             rhs_w_k = rhs_w_adv + buoyancy + nl_pgf_w
+            rhs_pi_k = rhs_pi_prime + alpha * self.dt * nl_div_pi
 
-            # Enforce Kinematic Bottom Boundary on the updated RHS
-            u_m_rhs = self.physics.op.avg(rhs_u_k, axis=0, from_loc='u', to_loc='m')
-            u_w_rhs = self.physics.op.avg(u_m_rhs, axis=2, from_loc='m', to_loc='w')
-            v_m_rhs = self.physics.op.avg(rhs_v_k, axis=1, from_loc='v', to_loc='m')
-            v_w_rhs = self.physics.op.avg(v_m_rhs, axis=2, from_loc='m', to_loc='w')
+            # Enforce Kinematic Bottom Boundary using the solver's LATEST guess!
+            u_m_guess = self.physics.op.avg(u_gmres, axis=0, from_loc='u', to_loc='m')
+            u_w_guess = self.physics.op.avg(u_m_guess, axis=2, from_loc='m', to_loc='w')
+            v_m_guess = self.physics.op.avg(v_gmres, axis=1, from_loc='v', to_loc='m')
+            v_w_guess = self.physics.op.avg(v_m_guess, axis=2, from_loc='m', to_loc='w')
 
             rhs_kinematic_bottom = m_w[:, :, 0] * (
-                u_w_rhs[:, :, 0] * self.physics.grid.z_xi_w[:, :, 0] + 
-                v_w_rhs[:, :, 0] * self.physics.grid.z_eta_w[:, :, 0]
+                u_w_guess[:, :, 0] * self.physics.grid.z_xi_w[:, :, 0] +
+                v_w_guess[:, :, 0] * self.physics.grid.z_eta_w[:, :, 0]
             )
             rhs_w_k = rhs_w_k.at[:, :, 0].set(rhs_kinematic_bottom).at[:, :, -1].set(0.0)
 
-            # E) Execute the Implicit GMRES Solve
+            # F) Execute the Implicit GMRES Solve
             rhs_prime_k = {
                 'u': rhs_u_k, 'v': rhs_v_k, 'w': rhs_w_k, 
-                'pi': rhs_pi_prime, 'eta_dot': R_eta_dot_adv
+                'pi': rhs_pi_k, 'eta_dot': R_eta_dot_adv
             }
             
             state_prime_next = self.implicit_solver.solve(rhs_prime_k, bg_precomputed, x0=state_prime_guess)
             
-            # F) Update state trackers for the next loop
+            # G) Update state trackers for the next loop
             state_prime_guess = state_prime_next
             w_m_next = self.physics.op.avg(state_prime_next['w'], axis=2, from_loc='w', to_loc='m')
             u_gmres = state_prime_next['u']
@@ -914,10 +963,18 @@ class SISLStepper3D:
         # =====================================================================
         # 6. THERMODYNAMIC RECONCILIATION
         # =====================================================================
+        # Preserve each post-physics/post-boundary tracer mass while density is
+        # reconciled with the equation of state below.
+        tracer_mass_final = {
+            key: state_next['rho'] * state_next[key]
+            for key in self.tracer_keys if key in state_next
+        }
         # Because the sponge nudged th_v and pi, we MUST recalculate rho to satisfy the 
         # Equation of State, preventing a thermodynamic shock in the next step!
         cvd, Rd, p0 = self.physics.c['cvd'], self.physics.c['Rd'], self.physics.c['p0']
         state_next['rho'] = p0 / (Rd * state_next['th_v']) * (state_next['pi'] ** (cvd / Rd))
+        for key, rho_q in tracer_mass_final.items():
+            state_next[key] = rho_q / (state_next['rho'] + self.physics.c.get('eps', 1e-15))
 
         # Always save current state and tendencies for next step's history to enable 2nd-order trajectory calculations
         state_next['u_prev'] = state['u']
@@ -1112,8 +1169,17 @@ class SplitExplicitStepper3D:
         state_next['eta_dot'], state_next['w'] = self._diagnose_eta_dot(state_next)
 
         # Final thermodynamic reconciliation (Equation of State)
+        tracer_mass_final = {}
+        if self.physics.physics_suite is not None:
+            tracer_mass_final = {
+                key: state_next['rho'] * state_next[key]
+                for key in self.physics.physics_suite.tracer_keys
+                if key in state_next
+            }
         cvd, Rd, p0 = self.physics.c['cvd'], self.physics.c['Rd'], self.physics.c['p0']
         state_next['rho'] = p0 / (Rd * state_next['th_v']) * (state_next['pi'] ** (cvd / Rd))
+        for key, rho_q in tracer_mass_final.items():
+            state_next[key] = rho_q / (state_next['rho'] + self.physics.c.get('eps', 1e-15))
 
         return state_next
 
@@ -1237,6 +1303,9 @@ class SplitExplicitStepper3D:
         
         # Calculate dynamical core explicit tendencies (physics/diffusion are temporarily hidden)
         tends = self.physics.get_tendencies(state_prime, bg, is_explicit=True, ml_params=ml_params)
+        tends['pi'] += self.physics.nonlinear_pi_tendency(
+            state_prime, th_v_prime, bg
+        )
         
         # Add the cached stiff physics and diffusion tendencies computed at the start of the timestep
         for k in ['u', 'v', 'w', 'th_v']:
@@ -1313,14 +1382,17 @@ class SplitExplicitStepper3D:
 
     def _acoustic_loop(self, state_init, state_current, slow_forcings, bg, dtau, num_steps):
         r"""
-        Executes the explicit forward-backward horizontal and vertically implicit
-        acoustic time-split integration subloop.
+        Executes a second-order horizontal predictor-corrector and vertically
+        implicit acoustic time-split integration subloop.
 
         Advances the perturbation variables ($u'', v'', w'', \pi''$) over a time interval
-        using a smaller acoustic time step $\Delta \tau$. Horizontal momentum is advanced 
-        explicitly (forward step):
+        using a smaller acoustic time step $\Delta \tau$. Horizontal momentum is
+        predicted to the midpoint, pressure is advanced with the midpoint wind,
+        and momentum is corrected with the time-centered pressure gradient:
 
-        $$ u''^{n+1} = u''^n + \Delta \tau \left( \mathcal{S}_u - c_p \theta_v \frac{\partial \pi''^n}{\partial x} \right) $$
+        $$ u''^{n+1} = u''^n + \Delta \tau \left[ \mathcal{S}_u
+        - \frac{c_p \theta_v}{2}\left(\nabla\pi''^n +
+        \nabla\pi''^{n+1}\right) \right] $$
 
         Vertical momentum and pressure are solved implicitly (backward step) to bypass 
         restrictive vertical stability constraints.
@@ -1346,52 +1418,80 @@ class SplitExplicitStepper3D:
         m_v = jnp.expand_dims(self.physics.grid.m_factors['v'], axis=-1)
         m_m = jnp.expand_dims(self.physics.grid.m_factors['m'], axis=-1)
 
-        for step in range(num_steps):
-            # =================================================================
-            # PART 1: ADVANCE HORIZONTAL MOMENTUM (FORWARD STEP)
-            # =================================================================
-            
-            # Evaluate divergence damping inside the acoustic sub-step
-            u_curr_total = state_current['u'] + u_prime_prime
-            v_curr_total = state_current['v'] + v_prime_prime
-            
-            du_dx = self.physics.op.diff(u_curr_total, axis=0, from_loc='u', to_loc='m')
-            dv_dy = self.physics.op.diff(v_curr_total, axis=1, from_loc='v', to_loc='m')
-            div_h_kinematic = du_dx + dv_dy
-            
-            grad_div_x = self.physics.op.diff(div_h_kinematic, axis=0, from_loc='m', to_loc='u')
-            grad_div_y = self.physics.op.diff(div_h_kinematic, axis=1, from_loc='m', to_loc='v')
-            # ----------------------------------------------------------------------------
+        def horizontal_pi_gradient(pi_pp):
+            grad_x = self.physics.op.diff(pi_pp, axis=0, from_loc='m', to_loc='u')
+            grad_y = self.physics.op.diff(pi_pp, axis=1, from_loc='m', to_loc='v')
 
-            grad_pi_pp_x = self.physics.op.diff(pi_prime_prime, axis=0, from_loc='m', to_loc='u')
-            grad_pi_pp_y = self.physics.op.diff(pi_prime_prime, axis=1, from_loc='m', to_loc='v')
-            
-            grad_pi_pp_z_w = self.physics.op.diff(pi_prime_prime, axis=2, from_loc='m', to_loc='w') * (self.physics.grid.dz / bg['dz_w_full'])
-            grad_pi_pp_z_m = self.physics.op.avg(grad_pi_pp_z_w, axis=2, from_loc='w', to_loc='m')
-            
-            grad_pi_pp_z_u = self.physics.op.avg(grad_pi_pp_z_m, axis=0, from_loc='m', to_loc='u')
-            grad_pi_pp_z_v = self.physics.op.avg(grad_pi_pp_z_m, axis=1, from_loc='m', to_loc='v')
-            
-            z_xi_u = self.physics.op.diff(self.physics.grid.Z_m, axis=0, from_loc='m', to_loc='u')
-            z_eta_v = self.physics.op.diff(self.physics.grid.Z_m, axis=1, from_loc='m', to_loc='v')
-            
-            grad_pi_x_cart = grad_pi_pp_x - z_xi_u * grad_pi_pp_z_u
-            grad_pi_y_cart = grad_pi_pp_y - z_eta_v * grad_pi_pp_z_v
+            grad_z_w = self.physics.op.diff(
+                pi_pp, axis=2, from_loc='m', to_loc='w'
+            ) * (self.physics.grid.dz / bg['dz_w_full'])
+            grad_z_m = self.physics.op.avg(
+                grad_z_w, axis=2, from_loc='w', to_loc='m'
+            )
+            grad_z_u = self.physics.op.avg(
+                grad_z_m, axis=0, from_loc='m', to_loc='u'
+            )
+            grad_z_v = self.physics.op.avg(
+                grad_z_m, axis=1, from_loc='m', to_loc='v'
+            )
 
-            # Add the divergence damping to the explicit acoustic integration
-            u_prime_prime += dtau * (slow_forcings['u'] - cp * bg['th_v_u'] * grad_pi_x_cart + self.physics.nu_div * grad_div_x)
-            v_prime_prime += dtau * (slow_forcings['v'] - cp * bg['th_v_v'] * grad_pi_y_cart + self.physics.nu_div * grad_div_y)
+            z_xi_u = self.physics.op.diff(
+                self.physics.grid.Z_m, axis=0, from_loc='m', to_loc='u'
+            )
+            z_eta_v = self.physics.op.diff(
+                self.physics.grid.Z_m, axis=1, from_loc='m', to_loc='v'
+            )
+            return grad_x - z_xi_u * grad_z_u, grad_y - z_eta_v * grad_z_v
 
-            u_prime_prime = u_prime_prime.at[0, :, :].set(state_init['u'][0, :, :] - state_current['u'][0, :, :])
-            u_prime_prime = u_prime_prime.at[-1, :, :].set(state_init['u'][-1, :, :] - state_current['u'][-1, :, :])
-            v_prime_prime = v_prime_prime.at[:, 0, :].set(state_init['v'][:, 0, :] - state_current['v'][:, 0, :])
-            v_prime_prime = v_prime_prime.at[:, -1, :].set(state_init['v'][:, -1, :] - state_current['v'][:, -1, :])
+        def divergence_damping_gradients(u_pp, v_pp):
+            u_total = state_current['u'] + u_pp
+            v_total = state_current['v'] + v_pp
+            divergence = (
+                self.physics.op.diff(u_total, axis=0, from_loc='u', to_loc='m')
+                + self.physics.op.diff(v_total, axis=1, from_loc='v', to_loc='m')
+            )
+            return (
+                self.physics.op.diff(divergence, axis=0, from_loc='m', to_loc='u'),
+                self.physics.op.diff(divergence, axis=1, from_loc='m', to_loc='v'),
+            )
+
+        def enforce_horizontal_boundaries(u_pp, v_pp):
+            u_boundary = state_init['u'] - state_current['u']
+            v_boundary = state_init['v'] - state_current['v']
+            u_pp = u_pp.at[0, :, :].set(u_boundary[0, :, :])
+            u_pp = u_pp.at[-1, :, :].set(u_boundary[-1, :, :])
+            v_pp = v_pp.at[:, 0, :].set(v_boundary[:, 0, :])
+            v_pp = v_pp.at[:, -1, :].set(v_boundary[:, -1, :])
+            return u_pp, v_pp
+
+        for _ in range(num_steps):
+            # =================================================================
+            # PART 1: PREDICT HORIZONTAL MOMENTUM TO THE MIDPOINT
+            # =================================================================
+            u_old, v_old = u_prime_prime, v_prime_prime
+            pi_old = pi_prime_prime
+
+            grad_pi_old_x, grad_pi_old_y = horizontal_pi_gradient(pi_old)
+            grad_div_old_x, grad_div_old_y = divergence_damping_gradients(
+                u_old, v_old
+            )
+            rhs_u_old = (
+                slow_forcings['u'] - cp * bg['th_v_u'] * grad_pi_old_x
+                + self.physics.nu_div * grad_div_old_x
+            )
+            rhs_v_old = (
+                slow_forcings['v'] - cp * bg['th_v_v'] * grad_pi_old_y
+                + self.physics.nu_div * grad_div_old_y
+            )
+            u_half = u_old + 0.5 * dtau * rhs_u_old
+            v_half = v_old + 0.5 * dtau * rhs_v_old
+            u_half, v_half = enforce_horizontal_boundaries(u_half, v_half)
 
             # =================================================================
-            # PART 2: ADVANCE PRESSURE & VERTICAL VELOCITY (BACKWARD STEP)
+            # PART 2: ADVANCE PRESSURE WITH THE MIDPOINT WIND
             # =================================================================
-            flux_x_pp = (u_prime_prime * bg['rho_u'] * bg['th_v_u'] * bg['dz_u']) / m_u
-            flux_y_pp = (v_prime_prime * bg['rho_v'] * bg['th_v_v'] * bg['dz_v']) / m_v
+            flux_x_pp = (u_half * bg['rho_u'] * bg['th_v_u'] * bg['dz_u']) / m_u
+            flux_y_pp = (v_half * bg['rho_v'] * bg['th_v_v'] * bg['dz_v']) / m_v
             
             div_x_pp = self.physics.op.diff(flux_x_pp, axis=0, from_loc='u', to_loc='m') / bg['dz_m_full']
             div_y_pp = self.physics.op.diff(flux_y_pp, axis=1, from_loc='v', to_loc='m') / bg['dz_m_full']
@@ -1400,8 +1500,8 @@ class SplitExplicitStepper3D:
             pi_prime_prime, w_prime_prime = self._solve_vertical_acoustic_column(
                 pi_pp=pi_prime_prime, 
                 w_pp=w_prime_prime, 
-                u_pp=u_prime_prime,
-                v_pp=v_prime_prime,
+                u_pp=u_half,
+                v_pp=v_half,
                 div_h=div_h_pp, 
                 slow_f_pi=slow_forcings['pi'], 
                 slow_f_w=slow_forcings['w'], 
@@ -1411,6 +1511,27 @@ class SplitExplicitStepper3D:
                 dz_w=bg['dz_w_full'],
                 bg=bg,
                 dtau=dtau
+            )
+
+            # =================================================================
+            # PART 3: CORRECT MOMENTUM WITH THE CENTERED PRESSURE GRADIENT
+            # =================================================================
+            grad_pi_new_x, grad_pi_new_y = horizontal_pi_gradient(pi_prime_prime)
+            grad_div_half_x, grad_div_half_y = divergence_damping_gradients(
+                u_half, v_half
+            )
+            u_prime_prime = u_old + dtau * (
+                slow_forcings['u']
+                - 0.5 * cp * bg['th_v_u'] * (grad_pi_old_x + grad_pi_new_x)
+                + self.physics.nu_div * grad_div_half_x
+            )
+            v_prime_prime = v_old + dtau * (
+                slow_forcings['v']
+                - 0.5 * cp * bg['th_v_v'] * (grad_pi_old_y + grad_pi_new_y)
+                + self.physics.nu_div * grad_div_half_y
+            )
+            u_prime_prime, v_prime_prime = enforce_horizontal_boundaries(
+                u_prime_prime, v_prime_prime
             )
 
             # Reconstruct the total w field and damp it backward-implicitly 

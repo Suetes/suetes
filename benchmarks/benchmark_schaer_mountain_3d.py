@@ -16,7 +16,7 @@ os.makedirs(output_dir, exist_ok=True)
 # =====================================================================
 # CONFIGURATION SWITCHES
 # =====================================================================
-CORE_TYPE = "split-explicit"  # Toggle to "sisl" or "split-explicit"
+CORE_TYPE = "sisl"  # Toggle to "sisl" or "split-explicit"
 t_end = 7200.0 
 N_BV_STRATIFICATION = 0.01    # Crucial for gravity wave generation
 

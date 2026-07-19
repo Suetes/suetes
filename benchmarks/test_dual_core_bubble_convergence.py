@@ -1,6 +1,7 @@
 import os
 import gc
 os.environ["XLA_PYTHON_CLIENT_ALLOCATOR"] = "platform"
+os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -19,25 +20,53 @@ from suetes.shared.driver import Simulation
 output_dir = "output/plots/benchmarks"
 os.makedirs(output_dir, exist_ok=True)
 
-def block_average_2d(field_2d, factor):
-    nx, nz = field_2d.shape
-    return jnp.mean(field_2d.reshape(nx // factor, factor, nz // factor, factor), axis=(1, 3))
+T_END = 24.0
+RESOLUTIONS = [250.0, 125.0, 62.5, 31.25]
+DT_AT_250M = 1.0
+SPLIT_EXPLICIT_NS = 12
+NUM_PROGRESS_UPDATES = 6
 
-def get_cell_center_slices(res_3d):
-    u = res_3d['u'][:, 1, :]
-    v = res_3d['v'][:, 1, :]
-    w = res_3d['w'][:, 1, :]
-    pi = res_3d['pi'][:, 1, :]
-    th = res_3d['th_v'][:, 1, :]
-    
-    u_m = 0.5 * (u[:-1, :] + u[1:, :])
-    w_m = 0.5 * (w[:, :-1] + w[:, 1:])
+
+def release_jax_memory():
+    jax.clear_caches()
+    gc.collect()
+
+
+def block_average_2d(field, factor=2):
+    nx, nz = field.shape
+    return field.reshape(
+        nx // factor, factor, nz // factor, factor
+    ).mean(axis=(1, 3))
+
+
+def restrict_to_coarse(field, key, factor=2):
+    """Restrict a fine C-grid slice without destroying its native staggering."""
+    if key in ('pi', 'th_v'):
+        return block_average_2d(field, factor)
+    if key == 'u':
+        # Coarse x-faces coincide with every factor-th fine x-face; average only
+        # across the transverse (z) fine cells.
+        coincident_faces = field[::factor, :]
+        nz = coincident_faces.shape[1]
+        return coincident_faces.reshape(
+            coincident_faces.shape[0], nz // factor, factor
+        ).mean(axis=2)
+    if key == 'w':
+        # Coarse z-faces coincide vertically; average only across fine x cells.
+        coincident_faces = field[:, ::factor]
+        nx = coincident_faces.shape[0]
+        return coincident_faces.reshape(
+            nx // factor, factor, coincident_faces.shape[1]
+        ).mean(axis=1)
+    raise ValueError(f"Unsupported field for restriction: {key}")
+
+def get_native_slices(res_3d):
+    """Copy a pseudo-2D x-z slice to host while retaining C-grid staggering."""
     return {
-        'u': np.array(u_m),
-        'v': np.array(v),
-        'w': np.array(w_m),
-        'pi': np.array(pi),
-        'th_v': np.array(th)
+        'u': np.array(res_3d['u'][:, 1, :]),
+        'w': np.array(res_3d['w'][:, 1, :]),
+        'pi': np.array(res_3d['pi'][:, 1, :]),
+        'th_v': np.array(res_3d['th_v'][:, 1, :]),
     }
 
 def run_bubble_at_resolution(core_type, dx, alpha=0.55, dt_mode="constant"):
@@ -46,25 +75,30 @@ def run_bubble_at_resolution(core_type, dx, alpha=0.55, dt_mode="constant"):
     ny = 3
     
     if dt_mode == "scaling":
+        dt = DT_AT_250M * dx / 250.0
         if core_type == "sisl":
-            dt = (dx / 125.0) * 5.0
-            core_kwargs = {"dt": dt, "nu_div_factor": 0.0, "nu_h_factor": 0.0, "damp_height": 7500.0, "max_damp": 0.05, "alpha": alpha, "solver_tol": 1e-12, "solver_maxiter": 100, "solver_restart": 100}
+            core_kwargs = {"dt": dt, "nu_div_factor": 0.0, "nu_h_factor": 0.0, "damp_height": 7500.0, "max_damp": 0.0, "alpha": alpha, "solver_tol": 1e-12, "solver_maxiter": 100, "solver_restart": 100}
         elif core_type == "split-explicit":
-            dt = (dx / 125.0) * 2.5
-            core_kwargs = {"dt": dt, "ns": 24, "nu_div_factor": 0.0, "nu_h_factor": 0.0, "damp_height": 7500.0, "max_damp": 0.05, "alpha": alpha}
+            core_kwargs = {"dt": dt, "ns": SPLIT_EXPLICIT_NS, "nu_div_factor": 0.0, "nu_h_factor": 0.0, "damp_height": 7500.0, "max_damp": 0.0, "alpha": alpha}
         else:
             raise ValueError(f"Unknown core: {core_type}")
     elif dt_mode == "constant":
         # Constant reference timestep to isolate spatial second-order accuracy (Option A)
         dt = 0.5
         if core_type == "sisl":
-            core_kwargs = {"dt": dt, "nu_div_factor": 0.0, "nu_h_factor": 0.0, "damp_height": 7500.0, "max_damp": 0.05, "alpha": alpha, "solver_tol": 1e-12, "solver_maxiter": 100, "solver_restart": 100}
+            core_kwargs = {"dt": dt, "nu_div_factor": 0.0, "nu_h_factor": 0.0, "damp_height": 7500.0, "max_damp": 0.0, "alpha": alpha, "solver_tol": 1e-12, "solver_maxiter": 100, "solver_restart": 100}
         elif core_type == "split-explicit":
-            core_kwargs = {"dt": dt, "ns": 24, "nu_div_factor": 0.0, "nu_h_factor": 0.0, "damp_height": 7500.0, "max_damp": 0.05, "alpha": alpha}
+            core_kwargs = {"dt": dt, "ns": SPLIT_EXPLICIT_NS, "nu_div_factor": 0.0, "nu_h_factor": 0.0, "damp_height": 7500.0, "max_damp": 0.0, "alpha": alpha}
         else:
             raise ValueError(f"Unknown core: {core_type}")
     else:
         raise ValueError(f"Unknown dt_mode: {dt_mode}")
+
+    acoustic_info = (
+        f", ns={SPLIT_EXPLICIT_NS}, dt_acoustic={dt / SPLIT_EXPLICIT_NS:.5f}s"
+        if core_type == "split-explicit" else ""
+    )
+    print(f"  dx={dx:g}m, dt={dt:g}s{acoustic_info}")
 
     grid = RegionalGrid3D(nx, ny, nz, dx, dx, dx, lat_center=0.0, lon_center=0.0)
     # Force pure Cartesian geometry to eliminate pseudo-2D advection boundary artifacts
@@ -113,29 +147,34 @@ def run_bubble_at_resolution(core_type, dx, alpha=0.55, dt_mode="constant"):
     )
 
     sim = Simulation(step_fn=lambda s, i: (stepper.step(s, i*dt, None, lambda x, f: x), jnp.max(jnp.abs(s['w']))), dt=dt)
-    raw_res = sim.run(state, t_start=0.0, t_end=200.0, chunk_steps=min(int(200.0/dt), 40))
-    slices = get_cell_center_slices(raw_res)
-    del raw_res
-    del state
-    del tmp_phys
-    del stepper
-    del sim
-    jax.clear_caches()
-    gc.collect()
+    total_steps = int(round(T_END / dt))
+    if not np.isclose(total_steps * dt, T_END):
+        raise ValueError(f"dt={dt} does not land exactly on T_END={T_END}")
+    chunk_steps = max(1, total_steps // NUM_PROGRESS_UPDATES)
+    raw_res = sim.run(
+        state, t_start=0.0, t_end=T_END, chunk_steps=chunk_steps
+    )
+    slices = get_native_slices(raw_res)
+    del raw_res, state, tmp_phys, stepper, sim
+    del bg_ref, bubble, X, Y, Z, op, grid
+    release_jax_memory()
     return slices
 
 def run_study(core_type, alpha=0.55, dt_mode="constant"):
     print(f"\n========================================")
     print(f"Running self-convergence study for {core_type.upper()} (alpha={alpha}, dt_mode={dt_mode})...")
     print(f"========================================")
-    dxs = [1000.0, 500.0, 250.0, 125.0, 62.5]
+    dxs = RESOLUTIONS
     slices = []
     for dx in dxs:
-        s = run_bubble_at_resolution(core_type, dx, alpha, dt_mode=dt_mode)
-        slices.append(s)
+        release_jax_memory()
+        result = run_bubble_at_resolution(core_type, dx, alpha, dt_mode=dt_mode)
+        slices.append(result)
+        del result
+        release_jax_memory()
         print(f"Completed simulation at dx = {dx} m | VRAM caches cleared.")
 
-    keys = ['u', 'v', 'w', 'pi', 'th_v']
+    keys = ['u', 'w', 'pi', 'th_v']
     errors = {k: [] for k in keys}
     
     for i in range(len(dxs) - 1):
@@ -147,17 +186,17 @@ def run_study(core_type, alpha=0.55, dt_mode="constant"):
         crop_z = int(1500.0 / dxs[i])
         
         for k in keys:
-            fine_avg = block_average_2d(fine[k], 2)
+            fine_restricted = restrict_to_coarse(fine[k], k)
             
             # Crop to interior to avoid boundary clipping/sponge artifacts
             coarse_cropped = coarse[k][crop_x:-crop_x, crop_z:-crop_z]
-            fine_avg_cropped = fine_avg[crop_x:-crop_x, crop_z:-crop_z]
+            fine_cropped = fine_restricted[crop_x:-crop_x, crop_z:-crop_z]
             
-            err = float(jnp.sqrt(jnp.mean((fine_avg_cropped - coarse_cropped)**2)))
+            err = float(np.sqrt(np.mean((fine_cropped - coarse_cropped)**2)))
             errors[k].append(err)
             
         print(f"Res {dxs[i]:6.1f} -> {dxs[i+1]:6.1f}m | "
-              f"err_u: {errors['u'][-1]:.2e} | err_v: {errors['v'][-1]:.2e} | "
+              f"err_u: {errors['u'][-1]:.2e} | "
               f"err_w: {errors['w'][-1]:.2e} | err_pi: {errors['pi'][-1]:.2e} | "
               f"err_th: {errors['th_v'][-1]:.2e}")
 
@@ -165,7 +204,7 @@ def run_study(core_type, alpha=0.55, dt_mode="constant"):
     rates = {k: [] for k in keys}
     for i in range(len(dxs) - 2):
         print(f"Res {dxs[i]:6.1f} -> {dxs[i+1]:6.1f}m:")
-        for k in ['u', 'v', 'w', 'pi', 'th_v']:
+        for k in keys:
             if errors[k][i+1] == 0.0 or errors[k][i] == 0.0:
                 rate = np.nan
             else:
@@ -173,15 +212,48 @@ def run_study(core_type, alpha=0.55, dt_mode="constant"):
             rates[k].append(rate)
             print(f"  Rate {k:2s}: {rate:.2f}")
 
-    return errors
+    return errors, slices
+
+
+def report_cross_core_convergence(sisl_slices, split_slices):
+    """Check that both discretizations approach the same continuum solution."""
+    keys = ['u', 'w', 'pi', 'th_v']
+    differences = {key: [] for key in keys}
+
+    print("\n--- Cross-Core Differences and Convergence Rates ---")
+    for dx, sisl, split in zip(RESOLUTIONS, sisl_slices, split_slices):
+        crop = int(1500.0 / dx)
+        for key in keys:
+            sisl_interior = sisl[key][crop:-crop, crop:-crop]
+            split_interior = split[key][crop:-crop, crop:-crop]
+            differences[key].append(
+                float(np.sqrt(np.mean((sisl_interior - split_interior) ** 2)))
+            )
+        print(
+            f"dx={dx:6.2f}m | "
+            + " | ".join(
+                f"{key}={differences[key][-1]:.2e}" for key in keys
+            )
+        )
+
+    for i in range(len(RESOLUTIONS) - 1):
+        print(f"Cross-core rate {RESOLUTIONS[i]:g} -> {RESOLUTIONS[i+1]:g}m:")
+        for key in keys:
+            coarse = differences[key][i]
+            fine = differences[key][i + 1]
+            rate = np.log2(coarse / fine) if coarse > 0.0 and fine > 0.0 else np.nan
+            print(f"  Rate {key:4s}: {rate:.2f}")
+
+    return differences
 
 if __name__ == "__main__":
 
-    errors_sisl = run_study("sisl", alpha=0.5, dt_mode="scaling")
-    errors_se = run_study("split-explicit", alpha=0.5, dt_mode="scaling")
+    errors_sisl, slices_sisl = run_study("sisl", alpha=0.5, dt_mode="scaling")
+    errors_se, slices_se = run_study("split-explicit", alpha=0.5, dt_mode="scaling")
+    report_cross_core_convergence(slices_sisl, slices_se)
 
     # Plotting setup
-    dx_vals = np.array([1000.0, 500.0, 250.0, 125.0])
+    dx_vals = np.array(RESOLUTIONS[:-1])
 
     # --- Plot 1: Potential Temperature (theta_v) Convergence ---
     plt.figure(figsize=(10, 8))
@@ -194,7 +266,7 @@ if __name__ == "__main__":
 
     plt.xlabel('Grid Spacing dx (m)', fontsize=12)
     plt.ylabel('L2 Error in theta_v (K)', fontsize=12)
-    plt.title('Spatial convergence study: Rising bubble benchmark (theta_v potential temperature)', fontsize=14)
+    plt.title('Combined space-time convergence: Rising bubble (theta_v)', fontsize=14)
     plt.grid(True, which="both", ls="--", alpha=0.5)
     plt.legend(fontsize=10, loc='lower right')
 
@@ -217,7 +289,7 @@ if __name__ == "__main__":
 
     plt.xlabel('Grid Spacing dx (m)', fontsize=12)
     plt.ylabel('L2 Error in u (m/s)', fontsize=12)
-    plt.title('Spatial convergence study: Rising bubble benchmark (u momentum)', fontsize=14)
+    plt.title('Combined space-time convergence: Rising bubble (u momentum)', fontsize=14)
     plt.grid(True, which="both", ls="--", alpha=0.5)
     plt.legend(fontsize=10, loc='lower right')
 

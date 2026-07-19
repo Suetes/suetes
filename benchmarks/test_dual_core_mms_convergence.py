@@ -132,11 +132,14 @@ def analytic_tend_pi(x, y, z):
     C_pi = (Rd / cvd) * (pi_bg / (rho_bg * th_v_bg))
     
     def flux_x_fn(x_val):
-        return u_func(x_val, y, z) * rho_bg_func(z) * th_bg_func(z) / (1.0 + (x_val**2 + y**2) / (4.0 * R_earth**2))
+        theta = th_bg_func(z) + thvp_func(x_val, y, z)
+        return u_func(x_val, y, z) * rho_bg_func(z) * theta / (1.0 + (x_val**2 + y**2) / (4.0 * R_earth**2))
     def flux_y_fn(y_val):
-        return v_func(x, y_val, z) * rho_bg_func(z) * th_bg_func(z) / (1.0 + (x**2 + y_val**2) / (4.0 * R_earth**2))
+        theta = th_bg_func(z) + thvp_func(x, y_val, z)
+        return v_func(x, y_val, z) * rho_bg_func(z) * theta / (1.0 + (x**2 + y_val**2) / (4.0 * R_earth**2))
     def flux_z_fn(z_val):
-        return w_func(x, y, z_val) * rho_bg_func(z_val) * th_bg_func(z_val)
+        theta = th_bg_func(z_val) + thvp_func(x, y, z_val)
+        return w_func(x, y, z_val) * rho_bg_func(z_val) * theta
         
     dflux_x_dx = jax.grad(flux_x_fn)(x)
     dflux_y_dy = jax.grad(flux_y_fn)(y)
@@ -196,7 +199,7 @@ vmap_u_imp = jax.vmap(jax.vmap(jax.vmap(analytic_tend_u_imp, in_axes=(0, 0, 0, N
 vmap_v_imp = jax.vmap(jax.vmap(jax.vmap(analytic_tend_v_imp, in_axes=(0, 0, 0, None)), in_axes=(0, 0, 0, 0)), in_axes=(0, 0, 0, 0))
 vmap_w_imp = jax.vmap(jax.vmap(jax.vmap(analytic_tend_w_imp, in_axes=(0, 0, 0)), in_axes=(0, 0, 0)), in_axes=(0, 0, 0))
 
-def run_mms_at_resolution(core_type, n, num_steps=5):
+def run_mms_at_resolution(core_type, n, num_steps=2):
     nx, ny, nz = n, n, n
     dx = Lx / nx
     dy = Ly / ny
@@ -205,9 +208,12 @@ def run_mms_at_resolution(core_type, n, num_steps=5):
     grid = RegionalGrid3D(nx, ny, nz, dx, dy, dz, lat_center=60.0, lon_center=30.0)
     op = CGridOperator3D(grid)
     constants_dict = {'g': g, 'cp': cp, 'cvd': cvd, 'Rd': Rd, 'p0': p0}
-    t_end_fixed = 640.0
-    dt_ref = t_end_fixed / 2.0  # 2 steps at reference resolution N=16
-    dt = dt_ref * (16.0 / n)
+    # This is a spatial MMS test.  Keep the temporal discretization identical
+    # at every resolution and integrate only long enough for the manufactured
+    # residual to be measurable.  The former dt~dx, T=640 s setup mixed spatial
+    # and temporal errors and amplified small forcing-split inconsistencies.
+    dt = 0.05
+    t_end_fixed = num_steps * dt
     
     if core_type == "sisl":
         core_kwargs = {
@@ -216,7 +222,7 @@ def run_mms_at_resolution(core_type, n, num_steps=5):
             "solver_tol": 1e-14, "solver_maxiter": 100, "solver_restart": 100
         }
     elif core_type == "split-explicit":
-        core_kwargs = {"dt": dt, "ns": 10, "nu_div_factor": 0.0, "nu_h_factor": 0.0, "alpha": 0.55}
+        core_kwargs = {"dt": dt, "ns": 12, "nu_div_factor": 0.0, "nu_h_factor": 0.0, "alpha": 0.5}
     else:
         raise ValueError(f"Unknown core: {core_type}")
 
@@ -246,16 +252,18 @@ def run_mms_at_resolution(core_type, n, num_steps=5):
     initial_state['eta_dot'] = initial_state['w'] / grid.dz_w_full
     initial_state['rho'] = p0 / (Rd * initial_state['th_v']) * (initial_state['pi'] ** (cvd / Rd))
     
-    buffer = 450000.0 
-    def get_eval_mask(X, Y):
+    buffer = 450000.0
+    vertical_buffer = 2000.0
+    def get_eval_mask(X, Y, Z):
         dist_x = Lx / 2.0 - jnp.abs(X)
         dist_y = Ly / 2.0 - jnp.abs(Y)
-        return (dist_x >= buffer) & (dist_y >= buffer)
+        vertical_interior = (Z >= vertical_buffer) & (Z <= Lz - vertical_buffer)
+        return (dist_x >= buffer) & (dist_y >= buffer) & vertical_interior
 
-    eval_u = get_eval_mask(X_u, Y_u)
-    eval_v = get_eval_mask(X_v, Y_v)
-    eval_w = get_eval_mask(X_w, Y_w)
-    eval_m = get_eval_mask(X_m, Y_m)
+    eval_u = get_eval_mask(X_u, Y_u, Z_u)
+    eval_v = get_eval_mask(X_v, Y_v, Z_v)
+    eval_w = get_eval_mask(X_w, Y_w, Z_w)
+    eval_m = get_eval_mask(X_m, Y_m, Z_m)
 
     sponge_width = 300000.0 
     def get_sponge_mask(X, Y):

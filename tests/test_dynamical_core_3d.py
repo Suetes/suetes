@@ -75,6 +75,18 @@ class DummyPhysics:
         self.grid = grid
         self.op = CGridOperator3D(grid)
 
+
+def initialize_sisl_history(state):
+    """Give ``lax.scan`` the fixed carry structure produced by SISL steps."""
+    state = dict(state)
+    state['u_prev'] = state['u']
+    state['v_prev'] = state['v']
+    state['w_prev'] = state['w']
+    state['eta_dot_prev'] = state['eta_dot']
+    state['tend_th_v_prev'] = jnp.zeros_like(state['th_v'])
+    state['is_first_step'] = jnp.asarray(1.0, dtype=state['th_v'].dtype)
+    return state
+
 def test_1_geometry(grid):
     print("--- GEOMETRY TEST ---")
     print(f"Max Mountain Height: {jnp.max(grid.Z_w[:,:,0]):.2f} m") 
@@ -462,6 +474,7 @@ def test_12_resting_flat_integration(grid, physics, dt):
         'rho': physics.c['p0'] / (physics.c['Rd'] * physics.theta_bg) * \
                (physics.pi_bg ** (physics.c['cvd'] / physics.c['Rd']))
     }
+    initial_state = initialize_sisl_history(initial_state)
     
     def dummy_bc(state_next, forcing): return state_next
     def scan_fn(curr_state, step_idx):
@@ -493,6 +506,7 @@ def test_13_resting_mountain_integration(dt):
         'rho': constants['p0'] / (constants['Rd'] * physics.theta_bg) * \
                (physics.pi_bg ** (constants['cvd'] / constants['Rd']))
     }
+    initial_state = initialize_sisl_history(initial_state)
     
     def dummy_bc(state_next, forcing): return state_next
     def scan_fn(curr_state, step_idx):
@@ -535,6 +549,7 @@ def test_14_autodiff_gradients():
             'eta_dot': jnp.zeros((nx, ny, nz+1)),
             'rho': rho_bg
         }
+        state = initialize_sisl_history(state)
         
         def dummy_bc(state_next, forcing): return state_next
         

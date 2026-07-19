@@ -36,7 +36,14 @@ class Simulation:
 
         print("[SIMULATION] Compiling kernel...")
         t0 = time.time()
-        _ = run_chunk(initial_state, 0, 1)
+        warmup_steps = min(chunk_steps, total_steps)
+        warmup_state, warmup_metrics = run_chunk(
+            initial_state, int(t_start / self.dt), warmup_steps
+        )
+        warmup_leaves = jax.tree_util.tree_leaves(warmup_state)
+        if warmup_leaves:
+            warmup_leaves[0].block_until_ready()
+        del warmup_state, warmup_metrics, warmup_leaves
         print(f"[SIMULATION] Compilation finished in {time.time() - t0:.2f}s")
         print(f"[SIMULATION] JIT compiled, running simulation...")
 

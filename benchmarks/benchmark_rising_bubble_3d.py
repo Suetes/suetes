@@ -16,7 +16,7 @@ os.makedirs(output_dir, exist_ok=True)
 # =====================================================================
 # CONFIGURATION SWITCHES
 # =====================================================================
-CORE_TYPE = "sisl"  # Toggle to "sisl" or "split-explicit"
+CORE_TYPE = "split-explicit"  # Toggle to "sisl" or "split-explicit"
 t_end = 1000.0 
 
 dx, dy, dz = 50.0, 50.0, 50.0  # Resolution

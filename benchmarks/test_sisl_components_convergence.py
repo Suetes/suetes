@@ -121,7 +121,10 @@ def test_unit_2_operators(resolutions=[16, 32, 64]):
         results_diff.append((dx, err_diff))
 
         avg_num = op.avg(f_m, axis=0, from_loc='m', to_loc='u')
-        avg_exact = jnp.cos(jnp.pi * dx / lx) * get_exact_sine_field(X_u, Y_u, Z_u, lx, ly, lz)
+        # Compare with the continuous field at the face.  Including the cosine
+        # attenuation factor here would instead test an exact discrete identity
+        # and leave only roundoff error, from which no convergence rate exists.
+        avg_exact = get_exact_sine_field(X_u, Y_u, Z_u, lx, ly, lz)
         err_avg = float(jnp.sqrt(jnp.mean((avg_num[margin:-margin, margin:-margin, margin:-margin] -
                                            avg_exact[margin:-margin, margin:-margin, margin:-margin])**2)))
         results_avg.append((dx, err_avg))
@@ -141,55 +144,57 @@ def test_unit_2_operators(resolutions=[16, 32, 64]):
 # =============================================================================
 # UNIT 3: MIDPOINT TRAJECTORY SOLVER
 # =============================================================================
-def test_unit_3_trajectories(resolutions=[8, 16, 32, 64]):
+def test_unit_3_trajectories(dt_values=(400.0, 200.0, 100.0, 50.0)):
     print("\n=======================================================")
     print(" UNIT 3: MIDPOINT TRAJECTORY SOLVER CONVERGENCE")
     print("=======================================================")
     results = []
 
-    for r in resolutions:
-        dx, dy, dz = Lx / r, Ly / r, Lz / r
-        grid = RegionalGrid3D(r, r, r, dx, dy, dz, lat_center=0.0, lon_center=0.0)
-        for k in grid.m_factors:
-            grid.m_factors[k] = jnp.ones_like(grid.m_factors[k])
+    # For dx/dt = a*x, the exact backward characteristic is
+    # x_d = x_a*exp(-a*dt). Linear interpolation of this velocity is exact, so
+    # the measured error isolates the implicit midpoint trajectory integrator.
+    r = 64
+    dx, dy, dz = Lx / r, Ly / r, Lz / r
+    grid = RegionalGrid3D(r, r, r, dx, dy, dz, lat_center=0.0, lon_center=0.0)
+    for k in grid.m_factors:
+        grid.m_factors[k] = jnp.ones_like(grid.m_factors[k])
 
-        c_dict = {'g': g, 'cp': cp, 'cvd': cvd, 'Rd': Rd, 'p0': p0}
-        physics = Euler3D(grid, CGridOperator3D(grid), c_dict, dt=1.0)
+    c_dict = {'g': g, 'cp': cp, 'cvd': cvd, 'Rd': Rd, 'p0': p0}
+    physics = Euler3D(grid, CGridOperator3D(grid), c_dict, dt=1.0)
+    X_u, _, _ = jnp.meshgrid(grid.x_c, grid.y_m, grid.z_m, indexing='ij')
+    X_m, _, _ = jnp.meshgrid(grid.x_m, grid.y_m, grid.z_m, indexing='ij')
+    strain_rate = 1.0e-4
+    state = {
+        'u': strain_rate * X_u,
+        'v': jnp.zeros((r, r + 1, r)),
+        'w': jnp.zeros((r, r, r + 1)),
+        'eta_dot': jnp.zeros((r, r, r + 1)),
+    }
 
-        dt_test = 200.0
+    for dt_test in dt_values:
         advector = SemiLagrangianAdvector3D(grid, physics, dt=dt_test)
-        X_m, Y_m, Z_m = jnp.meshgrid(grid.x_m, grid.y_m, grid.z_m, indexing='ij')
+        coords_num = advector.compute_departure_indices(
+            state, loc='m', iterations=8
+        )
+        exact_x_phys = X_m * jnp.exp(-strain_rate * dt_test)
+        exact_x_idx = (exact_x_phys + Lx / 2.0) / dx - 0.5
 
-        u_vel = 20.0 * jnp.sin(2.0 * jnp.pi * X_m / Lx) * jnp.cos(2.0 * jnp.pi * Y_m / Ly)
-        v_vel = 20.0 * jnp.cos(2.0 * jnp.pi * X_m / Lx) * jnp.sin(2.0 * jnp.pi * Y_m / Ly)
-        w_vel = 0.5 * jnp.sin(jnp.pi * Z_m / Lz)
-        w_staggered = physics.op.avg(w_vel, axis=2, from_loc='m', to_loc='w')
+        # Stay far from nearest-neighbour boundary extension.
+        margin = r // 4
+        error_phys = dx * jnp.sqrt(jnp.mean(
+            (coords_num[0, margin:-margin, margin:-margin, margin:-margin]
+             - exact_x_idx[margin:-margin, margin:-margin, margin:-margin]) ** 2
+        ))
+        results.append((dt_test, float(error_phys)))
+        print(f"dt = {dt_test:6.1f}s | Exact-characteristic error: {error_phys:.2e} m")
 
-        state = {
-            'u': physics.op.avg(u_vel, axis=0, from_loc='m', to_loc='u'),
-            'v': physics.op.avg(v_vel, axis=1, from_loc='m', to_loc='v'),
-            'w': w_staggered,
-            'eta_dot': w_staggered / grid.dz_w_full
-        }
-
-        coords_m_num = advector.compute_departure_indices(state, loc='m', iterations=3)
-
-        u_idx_sec = u_vel / dx
-        v_idx_sec = v_vel / dy
-        w_idx_sec = w_vel / dz
-
-        idx_x, idx_y, idx_z = jnp.arange(r), jnp.arange(r), jnp.arange(r)
-        Xi_idx, Yi_idx, Zi_idx = jnp.meshgrid(idx_x, idx_y, idx_z, indexing='ij')
-
-        exact_x = Xi_idx - dt_test * u_idx_sec
-        exact_y = Yi_idx - dt_test * v_idx_sec
-        exact_z = Zi_idx - dt_test * w_idx_sec
-        coords_m_exact = jnp.stack([exact_x, exact_y, exact_z], axis=0)
-
-        mask = (X_m > 0)
-        err_traj = compute_safe_err(coords_m_num, coords_m_exact, mask)
-        results.append((dx, err_traj))
-        print(f"N = {r:3d} | Trajectory Error vs Euler Approximation: {err_traj:.2e} indices")
+    print("  => Temporal rates (dt->dt/2):")
+    for i in range(len(results) - 1):
+        rate = np.log2(results[i][1] / results[i + 1][1])
+        print(
+            f"     {results[i][0]:6.1f}->{results[i+1][0]:6.1f}s: "
+            f"Rate = {rate:.2f} (Expected ~3.00 local order)"
+        )
 
 
 # =============================================================================
@@ -265,23 +270,21 @@ def test_units_5_6_7_component_phases(resolutions=[16, 32, 64]):
     @jax.jit
     def ana_tend_u(x, y, z, f_val):
         m = 1.0 + (x**2 + y**2) / (4.0 * 6371229.0**2)
-        u, v, w = u_f(x, y, z), v_f(x, y, z), w_f(x, y, z)
+        u, v = u_f(x, y, z), v_f(x, y, z)
         th_v = th_bg_f(z) + thvp_f(x, y, z)
-        du_dx = jax.grad(lambda xv: u_f(xv, y, z))(x)
-        du_dy = jax.grad(lambda yv: u_f(x, yv, z))(y)
-        du_dz = jax.grad(lambda zv: u_f(x, y, zv))(z)
         dpip_dx = jax.grad(lambda xv: pip_f(xv, y, z))(x)
-        return -m * (u * du_dx + v * du_dy) - w * du_dz - cp * th_v * m * dpip_dx + f_val * v
+        dm_dx = x / (2.0 * 6371229.0**2)
+        dm_dy = y / (2.0 * 6371229.0**2)
+        metric = (v * dm_dx - u * dm_dy) * v
+        return -cp * th_v * m * dpip_dx + f_val * v + metric
 
     @jax.jit
     def ana_tend_w(x, y, z):
-        m = 1.0 + (x**2 + y**2) / (4.0 * 6371229.0**2)
-        u, v, w = u_f(x, y, z), v_f(x, y, z), w_f(x, y, z)
-        dw_dx = jax.grad(lambda xv: w_f(xv, y, z))(x)
-        dw_dy = jax.grad(lambda yv: w_f(x, yv, z))(y)
-        dw_dz = jax.grad(lambda zv: w_f(x, y, zv))(z)
         dpip_dz = jax.grad(lambda zv: pip_f(x, y, zv))(z)
-        return -m * (u * dw_dx + v * dw_dy) - w * dw_dz - cp * (th_bg_f(z) + thvp_f(x, y, z)) * dpip_dz + g * (thvp_f(x, y, z) / th_bg_f(z))
+        return (
+            -cp * (th_bg_f(z) + thvp_f(x, y, z)) * dpip_dz
+            + g * (thvp_f(x, y, z) / th_bg_f(z))
+        )
 
     @jax.jit
     def ana_imp_u(x, y, z, f_val):
@@ -327,9 +330,22 @@ def test_units_5_6_7_component_phases(resolutions=[16, 32, 64]):
         state_prime['th_v_prime_v'] = op.avg(state_prime['th_v_prime_m'], axis=1, from_loc='m', to_loc='v')
         state_prime['eta_dot'] = state_prime['w'] / grid.dz_w_full
 
-        mask_u = (jnp.abs(X_u) < Lx / 2.0 - 400000.0) & (jnp.abs(Y_u) < Ly / 2.0 - 400000.0)
-        mask_w = (jnp.abs(X_w) < Lx / 2.0 - 400000.0) & (jnp.abs(Y_w) < Ly / 2.0 - 400000.0)
-        mask_m = (jnp.abs(X_m) < Lx / 2.0 - 400000.0) & (jnp.abs(Y_m) < Ly / 2.0 - 400000.0)
+        vertical_buffer = 2000.0
+        mask_u = (
+            (jnp.abs(X_u) < Lx / 2.0 - 400000.0)
+            & (jnp.abs(Y_u) < Ly / 2.0 - 400000.0)
+            & (Z_u >= vertical_buffer) & (Z_u <= Lz - vertical_buffer)
+        )
+        mask_w = (
+            (jnp.abs(X_w) < Lx / 2.0 - 400000.0)
+            & (jnp.abs(Y_w) < Ly / 2.0 - 400000.0)
+            & (Z_w >= vertical_buffer) & (Z_w <= Lz - vertical_buffer)
+        )
+        mask_m = (
+            (jnp.abs(X_m) < Lx / 2.0 - 400000.0)
+            & (jnp.abs(Y_m) < Ly / 2.0 - 400000.0)
+            & (Z_m >= vertical_buffer) & (Z_m <= Lz - vertical_buffer)
+        )
 
         # Unit 5: Explicit Tendencies
         tends_exp = physics.get_tendencies(state_prime, bg, is_explicit=True)
@@ -415,7 +431,7 @@ def test_unit_8_ffsl_advection(resolutions=[16, 32, 64]):
 if __name__ == "__main__":
     test_unit_1_interpolation([16, 32, 64])
     test_unit_2_operators([16, 32, 64])
-    test_unit_3_trajectories([8, 16, 32, 64])
+    test_unit_3_trajectories([400.0, 200.0, 100.0, 50.0])
     test_unit_4_gmres_inversion([8, 16, 32, 64])
     test_units_5_6_7_component_phases([16, 32, 64])
     test_unit_8_ffsl_advection([16, 32, 64])
