@@ -38,6 +38,7 @@ def build_dynamical_core(core_type, grid, operators, constants, initial_state,
             "N_bv": 0.01,
             "alpha": 0.55,
             "use_limiter": False,
+            "use_checkpointing": False,
             "solver_tol": 1e-12,
             "solver_maxiter": 100,
             "solver_restart": 100,
@@ -69,6 +70,7 @@ def build_dynamical_core(core_type, grid, operators, constants, initial_state,
                     
         stepper = SISLStepper3D(
             physics, params["dt"], alpha=params["alpha"], use_limiter=params["use_limiter"],
+            use_checkpointing=params["use_checkpointing"],
             solver_tol=params["solver_tol"], solver_maxiter=params["solver_maxiter"],
             solver_restart=params["solver_restart"]
         )

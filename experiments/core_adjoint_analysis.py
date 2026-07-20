@@ -4,12 +4,10 @@ core_adjoint_analysis.py
 Comprehensive qualitative and quantitative diagnostics for reverse-mode adjoint gradients
 in the dual dynamical core (SISL vs. Split-Explicit).
 
-Generates publication-ready figures for the paper/appendix:
-  1. Adjoint Gradient Field Comparison (2D cross-sections & horizontal profiles):
-     Showcases how SISL produces smooth, physically well-conditioned sensitivity fields
-     compared to explicit acoustic ripples in Split-Explicit.
-  2. SISL Adjoint Gradient Error vs. GMRES Iterations:
-     Demonstrates reverse-mode linear solver convergence and validates iteration tolerances.
+Generates figures for the paper/appendix:
+  - Adjoint Gradient Field Comparison (2D cross-sections & horizontal profiles):
+    Showcases how SISL produces smooth, physically well-conditioned sensitivity fields
+    compared to explicit acoustic ripples in Split-Explicit.
 """
 
 import os
@@ -102,7 +100,7 @@ def compute_adjoint_gradient(core_type, grid, op, constants, initial_state, T_va
 
 def run_gradient_field_comparison():
     print("\n==========================================================================")
-    print("Experiment 1: Adjoint gradient field comparison (SISL vs. Split-Explicit)")
+    print("Experiment: Adjoint gradient field comparison (SISL vs. Split-Explicit)")
     print("==========================================================================")
 
     grid, op, constants, state = build_experiment_case(nx=96, ny=3, nz=32, dx=100.0)

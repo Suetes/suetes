@@ -1,131 +1,191 @@
 #!/usr/bin/env python3
-"""
-Plots scaling performance metrics for the Suêtes GMD manuscript.
-Ingests benchmark CSV files and outputs a publication-quality figure.
-"""
-import os
-import glob
-import pandas as pd
-import numpy as np
+"""Plot dynamical-core performance results from one or more device CSVs."""
+
+from __future__ import annotations
+
+import argparse
+from pathlib import Path
+
 import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
 
-output_dir = "output/plots/benchmarks"
-os.makedirs(output_dir, exist_ok=True)
 
-def load_benchmark_data():
-    """Finds and combines all massive benchmark CSVs in the directory."""
-    csv_files = glob.glob("output/benchmark_bubble_scaling_*.csv") + glob.glob("benchmark_results_massive_*.csv")
-    if not csv_files:
-        raise FileNotFoundError("No benchmark CSV files found. Please run the benchmark script first.")
-    
-    # Take the most recent or combine if multiple GPUs exist
-    print(f"Found benchmark data: {csv_files}")
-    dfs = []
-    for f in csv_files:
-        df_temp = pd.read_csv(f)
-        # Ensure dt_multiplier exists for backward compatibility
-        if 'dt_multiplier' not in df_temp.columns:
-            if 'dt' in df_temp.columns:
-                df_temp['dt_multiplier'] = (df_temp['dt'] / 2.5).round()
-            else:
-                df_temp['dt_multiplier'] = np.where(df_temp['core'] == 'sisl', 10.0, 1.0)
-        dfs.append(df_temp)
-        
-    return pd.concat(dfs).drop_duplicates(subset=['core', 'N', 'dt_multiplier'])
+REPO_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_PLOT_DIR = REPO_ROOT / "output" / "plots" / "benchmarks"
+
+
+def select_inputs(requested: list[Path] | None) -> list[Path]:
+    if requested:
+        return [path.resolve() for path in requested]
+    candidates = sorted(
+        (REPO_ROOT / "output").glob("benchmark_bubble_scaling_*.csv"),
+        key=lambda path: path.stat().st_mtime,
+    )
+    if not candidates:
+        raise FileNotFoundError(
+            "No scaling CSV found; run rising_bubble_3d_scaling.py first"
+        )
+    return candidates
+
+
+def load_data(path: Path) -> pd.DataFrame:
+    data = pd.read_csv(path)
+    required = {
+        "core", "N", "dt_multiplier", "dt", "ms_per_step",
+    }
+    missing = required - set(data.columns)
+    if missing:
+        raise ValueError(f"Missing required CSV columns: {sorted(missing)}")
+    if "kernel_sypd" not in data:
+        if "sypd" not in data:
+            raise ValueError("CSV contains neither kernel_sypd nor sypd")
+        data["kernel_sypd"] = data["sypd"]
+    if "vram_peak_increment_mib" not in data:
+        if "vram_mb" not in data:
+            raise ValueError("CSV contains no usable VRAM column")
+        print("Warning: legacy CSV; vram_mb is not a true isolated peak metric")
+        data["vram_peak_increment_mib"] = data["vram_mb"]
+    if "wall_time_iqr_s" not in data:
+        data["wall_time_iqr_s"] = 0.0
+    if "num_steps" not in data:
+        data["num_steps"] = 1
+    data["ms_per_step_iqr"] = (
+        data["wall_time_iqr_s"] / data["num_steps"] * 1000.0
+    )
+    if "device" not in data:
+        data["device"] = path.stem.removeprefix("benchmark_bubble_scaling_")
+    data["_source_mtime"] = path.stat().st_mtime
+    return data.sort_values(["core", "dt_multiplier", "N"])
+
 
 def main():
-    try:
-        df = load_benchmark_data()
-    except Exception as e:
-        print(f"[ERROR] {e}")
-        return
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--input", type=Path, nargs="+",
+        help="One or more device-specific CSVs (default: all device CSVs)",
+    )
+    parser.add_argument("--output-dir", type=Path, default=DEFAULT_PLOT_DIR)
+    args = parser.parse_args()
 
-    # Separate by dynamical core type and timestep configuration
-    se_data = df[(df['core'] == 'split-explicit') & (df['dt_multiplier'] == 1.0)].sort_values('N')
-    sisl_1x_data = df[(df['core'] == 'sisl') & (df['dt_multiplier'] == 1.0)].sort_values('N')
-    # Determine large dt multiplier (10.0 or 6.0)
-    large_dt_mult = 10.0 if (df['dt_multiplier'] == 10.0).any() else 6.0
-    sisl_large_data = df[(df['core'] == 'sisl') & (df['dt_multiplier'] == large_dt_mult)].sort_values('N')
-    label_a_large = r'SISL ($\Delta t = 25.0$s)' if large_dt_mult == 10.0 else r'SISL ($\Delta t = 15.0$s)'
-    label_bc_large = r'SISL ($10\times$ dt)' if large_dt_mult == 10.0 else r'SISL ($6\times$ dt)'
+    input_paths = select_inputs(args.input)
+    frames = []
+    for input_path in input_paths:
+        frames.append(load_data(input_path))
+        print(f"Loaded benchmark data from {input_path}")
+    data = pd.concat(frames, ignore_index=True)
 
-    has_sisl_1x = not sisl_1x_data.empty
+    # If the output directory contains repeated runs for the same device,
+    # retain the newest measurement for each plotted configuration.
+    identity = ["device", "core", "dt_multiplier", "N"]
+    duplicate_count = int(data.duplicated(identity, keep=False).sum())
+    if duplicate_count:
+        data = (
+            data.sort_values("_source_mtime")
+            .drop_duplicates(identity, keep="last")
+        )
+        print(
+            "Warning: repeated device/configuration measurements found; "
+            "using the newest values"
+        )
 
-    # Setup the plot layout (1 row, 3 columns for GMD formatting)
+    curves = [
+        (
+            "split-explicit", 1.0, "Split-explicit (CFL-scaled $\\Delta t$)",
+            "o", "#e41a1c",
+        ),
+        ("sisl", 1.0, "SISL (same $\\Delta t$)", "d", "#4daf4a"),
+        ("sisl", 10.0, "SISL ($10\\times\\Delta t$)", "s", "#377eb8"),
+    ]
+
     fig, axes = plt.subplots(1, 3, figsize=(18, 5.5), constrained_layout=True)
-    
-    # Common styling configurations
     marker_size = 8
     line_width = 2.2
-    grid_style = dict(ls='--', alpha=0.5, which='both')
+    grid_style = {"ls": "--", "alpha": 0.5, "which": "both"}
+    devices = list(dict.fromkeys(data["device"].astype(str)))
+    line_styles = ["-", "--", "-.", ":"]
 
-    # ---------------------------------------------------------
-    # PANEL A: Simulated Years Per Day (SYPD) - Throughput
-    # ---------------------------------------------------------
-    ax = axes[0]
-    ax.semilogy(se_data['N'], se_data['sypd'], 'o-', color='#e41a1c', 
-            lw=line_width, ms=marker_size, label=r'Split-explicit ($\Delta t = 2.5$s)')
-    if has_sisl_1x:
-        ax.semilogy(sisl_1x_data['N'], sisl_1x_data['sypd'], 'd-', color='#4daf4a', 
-                lw=line_width, ms=marker_size, label=r'SISL ($\Delta t = 2.5$s)')
-    ax.semilogy(sisl_large_data['N'], sisl_large_data['sypd'], 's-', color='#377eb8', 
-            lw=line_width, ms=marker_size, label=label_a_large)
-    
-    ax.set_title('(a) Simulation throughput', fontsize=14, pad=10)
-    ax.set_xlabel('Grid dimension ($N \\times N \\times N$)', fontsize=12)
-    ax.set_ylabel('Throughput (SYPD)', fontsize=12)
-    ax.set_xticks(df['N'].unique())
-    ax.grid(True, **grid_style)
-    ax.legend(fontsize=10, loc='upper right')
+    for device_index, device in enumerate(devices):
+        line_style = line_styles[device_index % len(line_styles)]
+        for core, multiplier, label, marker, color in curves:
+            subset = data[
+                (data["device"].astype(str) == device)
+                & (data["core"] == core)
+                & np.isclose(data["dt_multiplier"], multiplier)
+            ].sort_values("N")
+            if subset.empty:
+                continue
+            plot_label = label if len(devices) == 1 else f"{label} — {device}"
+            axes[0].semilogy(
+                subset["N"], subset["kernel_sypd"],
+                marker=marker, linestyle=line_style,
+                color=color, lw=line_width, ms=marker_size, label=plot_label,
+            )
+            axes[1].errorbar(
+                subset["N"], subset["ms_per_step"],
+                yerr=0.5 * subset["ms_per_step_iqr"], marker=marker,
+                linestyle=line_style, color=color, lw=line_width,
+                ms=marker_size, capsize=3, label=plot_label,
+            )
+            axes[2].loglog(
+                subset["N"], subset["vram_peak_increment_mib"],
+                marker=marker, linestyle=line_style,
+                color=color, lw=line_width, ms=marker_size, label=plot_label,
+            )
 
-    # ---------------------------------------------------------
-    # PANEL B: Step Latency (Compute Scaling)
-    # ---------------------------------------------------------
-    ax = axes[1]
-    ax.loglog(se_data['N'], se_data['ms_per_step'], 'o-', color='#e41a1c', lw=line_width, ms=marker_size, label='Split-explicit')
-    if has_sisl_1x:
-        ax.loglog(sisl_1x_data['N'], sisl_1x_data['ms_per_step'], 'd-', color='#4daf4a', lw=line_width, ms=marker_size, label=r'SISL ($1\times$ dt)')
-    ax.loglog(sisl_large_data['N'], sisl_large_data['ms_per_step'], 's-', color='#377eb8', lw=line_width, ms=marker_size, label=label_bc_large)
-    
-    # Add an ideal O(N^3) line to show where compute saturation happens
-    n_vals = np.array(se_data['N'])
-    if len(n_vals) > 1:
-        # Reference line aligned to the final compute-bound point of Split-Explicit
-        ref_line = se_data['ms_per_step'].iloc[-1] * (n_vals / n_vals[-1])**3
-        ax.loglog(n_vals, ref_line, 'k--', alpha=0.7, label=r'Ideal $\mathcal{O}(N^3)$ compute')
-    
-    ax.set_title('(b) Compute scaling', fontsize=14, pad=10)
-    ax.set_xlabel('Grid dimension ($N \\times N \\times N$)', fontsize=12)
-    ax.set_ylabel('Execution latency (ms/step)', fontsize=12)
-    ax.set_xticks(df['N'].unique())
-    ax.get_xaxis().set_major_formatter(plt.ScalarFormatter())
-    ax.minorticks_off()
-    ax.grid(True, **grid_style)
-    ax.legend(fontsize=10, loc='upper left')
+    # With fixed ns, an outer split-explicit step represents the same
+    # algorithmic workload at every resolution. Since the domain contains N^3
+    # cells, this is a meaningful ideal compute-scaling guide again. Anchor it
+    # at the largest split-explicit measurement to emphasize the scaling slope
+    # rather than an absolute performance prediction.
+    split_reference = data[
+        (data["device"].astype(str) == devices[0])
+        & (data["core"] == "split-explicit")
+        & np.isclose(data["dt_multiplier"], 1.0)
+    ].sort_values("N")
+    if len(split_reference) > 1:
+        n_reference = split_reference["N"].to_numpy(dtype=float)
+        latency_reference = (
+            float(split_reference["ms_per_step"].iloc[-1])
+            * (n_reference / n_reference[-1]) ** 3
+        )
+        axes[1].plot(
+            n_reference,
+            latency_reference,
+            "k--",
+            lw=1.6,
+            alpha=0.75,
+            label=r"Ideal $\mathcal{O}(N^3)$",
+        )
 
-    # ---------------------------------------------------------
-    # PANEL C: Peak VRAM Allocation
-    # ---------------------------------------------------------
-    ax = axes[2]
-    ax.loglog(se_data['N'], se_data['vram_mb'], 'o-', color='#e41a1c', lw=line_width, ms=marker_size, label='Split-explicit')
-    if has_sisl_1x:
-        ax.loglog(sisl_1x_data['N'], sisl_1x_data['vram_mb'], 'd-', color='#4daf4a', lw=line_width, ms=marker_size, label=r'SISL ($1\times$ dt)')
-    ax.loglog(sisl_large_data['N'], sisl_large_data['vram_mb'], 's-', color='#377eb8', lw=line_width, ms=marker_size, label=label_bc_large)
-    
-    ax.set_title('(c) Peak VRAM allocation', fontsize=14, pad=10)
-    ax.set_xlabel('Grid dimension ($N \\times N \\times N$)', fontsize=12)
-    ax.set_ylabel('GPU memory used (MiB)', fontsize=12)
-    ax.set_xticks(df['N'].unique())
-    ax.get_xaxis().set_major_formatter(plt.ScalarFormatter())
-    ax.minorticks_off()
-    ax.grid(True, **grid_style)
-    ax.legend(fontsize=10, loc='upper left')
+    axes[0].set_title("(a) Dynamical-core kernel throughput", fontsize=14)
+    axes[0].set_ylabel("Kernel throughput (SYPD)", fontsize=12)
+    axes[1].set_title("(b) Operational step latency", fontsize=14)
+    axes[1].set_ylabel("Median execution time (ms/step)", fontsize=12)
+    axes[1].set_xscale("log")
+    axes[1].set_yscale("log")
+    axes[2].set_title("(c) Isolated peak VRAM allocation", fontsize=14)
+    axes[2].set_ylabel("Peak allocation above baseline (MiB)", fontsize=12)
 
-    # Save final high-res figure for GMD submission to centralized output
-    out_path = f"{output_dir}/suetes_scaling_metrics.png"
-    plt.savefig(out_path, dpi=300, bbox_inches='tight')
-    plt.close()
-    print(f"[SUCCESS] Figure saved to: {out_path}")
+    ticks = sorted(data["N"].unique())
+    for axis in axes:
+        axis.set_xlabel(r"Grid dimension ($N\times N\times N$)", fontsize=12)
+        axis.set_xticks(ticks)
+        axis.get_xaxis().set_major_formatter(plt.ScalarFormatter())
+        axis.minorticks_off()
+        axis.grid(True, **grid_style)
+        axis.legend(fontsize=9)
+
+    precisions = data["precision"].astype(str).unique() if "precision" in data else []
+    precision_suffix = f" ({precisions[0]})" if len(precisions) == 1 else ""
+    fig.suptitle(f"Rising-bubble kernel scaling{precision_suffix}", fontsize=14)
+
+    args.output_dir.mkdir(parents=True, exist_ok=True)
+    output_path = args.output_dir / "suetes_scaling_metrics.png"
+    fig.savefig(output_path, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Figure saved to {output_path}")
+
 
 if __name__ == "__main__":
     main()

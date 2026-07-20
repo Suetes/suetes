@@ -16,10 +16,10 @@ os.makedirs(output_dir, exist_ok=True)
 # =====================================================================
 # CONFIGURATION SWITCHES
 # =====================================================================
-CORE_TYPE = "split-explicit"  # Toggle to "sisl" or "split-explicit"
+CORE_TYPE = "sisl"  # Toggle to "sisl" or "split-explicit"
 t_end = 1000.0 
 
-dx, dy, dz = 50.0, 50.0, 50.0  # Resolution
+dx, dy, dz = 10.0, 10.0, 10.0  # Resolution
 
 # Dynamically calculate grid cells to preserve a 10 km x 10 km physical domain
 domain_width = 10000.0
