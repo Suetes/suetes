@@ -73,3 +73,11 @@ Optimize a 3D terrain profile to maximize the generation of gravity waves downst
 ```bash
 python experiments/gravity_wave_optimal_topography_3d.py
 ```
+
+## Repository organization
+
+- `runs/`: operational ERA5 coupling, simulation, and rendering workflows.
+- `experiments/`: paper-specific science, inverse problems, and sensitivities.
+- `benchmarks/`: reusable physical cases and performance measurements.
+- `verification/`: numerical consistency and convergence programs.
+- `tests/`: automated pytest regression tests.

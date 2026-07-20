@@ -1,5 +1,5 @@
 """
-benchmark_core_adjoint_analysis.py
+core_adjoint_analysis.py
 
 Comprehensive qualitative and quantitative diagnostics for reverse-mode adjoint gradients
 in the dual dynamical core (SISL vs. Split-Explicit).

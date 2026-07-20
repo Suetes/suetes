@@ -11,9 +11,8 @@ Quick gate (``--profile quick``):
   3. Combined space-time and cross-core rising-bubble convergence.
 
 Full gate (``--profile full``) additionally runs:
-  4. Forced dual-core MMS integration.
-  5. SISL component/operator tests.
-  6. Conservation, balance, terrain, solver, and autodiff diagnostics.
+  4. SISL component/operator convergence.
+  5. Conservation, balance, terrain, solver, and autodiff diagnostics.
 
 The convergence programs remain quantitative diagnostics: inspect their rates
 in the logs.  A zero process exit status means execution/assertions succeeded;
@@ -36,31 +35,25 @@ DEFAULT_LOG_DIR = REPO_ROOT / "output" / "verification"
 STAGES = {
     "equations": {
         "title": "Equation-level manufactured tendency audit",
-        "script": "benchmarks/test_equation_correctness_mms.py",
+        "script": "verification/equation_tendency_convergence.py",
         "purpose": "Checks the discrete Euler RHS and its spatial order.",
         "profiles": {"quick", "full"},
     },
     "temporal": {
         "title": "Pure temporal convergence",
-        "script": "benchmarks/test_temporal_convergence_sisl.py",
+        "script": "verification/temporal_core_convergence.py",
         "purpose": "Checks SISL and split-explicit time integration at fixed dx.",
         "profiles": {"quick", "full"},
     },
     "bubble": {
         "title": "Combined rising-bubble convergence",
-        "script": "benchmarks/test_dual_core_bubble_convergence.py",
+        "script": "verification/rising_bubble_core_convergence.py",
         "purpose": "Checks nonlinear combined space-time convergence of both cores.",
         "profiles": {"quick", "full"},
     },
-    "dual_mms": {
-        "title": "Forced dual-core MMS integration",
-        "script": "benchmarks/test_dual_core_mms_convergence.py",
-        "purpose": "Checks integrated spatial convergence under manufactured forcing.",
-        "profiles": {"full"},
-    },
     "components": {
         "title": "SISL component and operator convergence",
-        "script": "benchmarks/test_sisl_components_convergence.py",
+        "script": "verification/sisl_component_convergence.py",
         "purpose": "Checks interpolation, trajectories, GMRES, operators, and FFSL.",
         "profiles": {"full"},
     },
