@@ -4,6 +4,7 @@ os.environ["XLA_PYTHON_CLIENT_ALLOCATOR"] = "platform"
 os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
 
 import matplotlib.pyplot as plt
+from convergence_plotting import save_four_panel_convergence
 import numpy as np
 import jax
 import jax.numpy as jnp
@@ -31,6 +32,10 @@ NUM_PROGRESS_UPDATES = 8
 
 def release_jax_memory():
     """Release cached executables and collect arrays between independent runs."""
+    # Destroy cyclic references to steppers/JIT closures before clearing the
+    # associated JAX executables.  Clearing first can leave a live local JIT
+    # wrapper in an invalid state on some JAX/Python versions.
+    gc.collect()
     jax.clear_caches()
     gc.collect()
 
@@ -155,13 +160,9 @@ def run_temporal_study(core_type, alpha=0.55):
     slices = []
     
     for dt in dt_vals:
-        # Cleanup here is essential: at this point the previous invocation's
-        # local frame (including its solver and compiled closures) is gone.
-        release_jax_memory()
         result = run_bubble_temporal(core_type, dt, dx, alpha)
         slices.append(result)
         del result
-        release_jax_memory()
         acoustic_info = (
             f" | ns={SPLIT_EXPLICIT_NS}, "
             f"dt_acoustic={dt / SPLIT_EXPLICIT_NS:.5f} s"
@@ -220,10 +221,7 @@ if __name__ == "__main__":
     plt.loglog(dt_plot, errors_se['u'], 's-', label='Split-explicit', linewidth=2, markersize=8)
 
     ref_start = max(errors_sisl['u'][0], errors_se['u'][0]) * 1.5
-    ref_line_1st = ref_start * (dt_plot / dt_plot[0])**1
     ref_line_2nd = ref_start * (dt_plot / dt_plot[0])**2
-    
-    plt.loglog(dt_plot, ref_line_1st, 'k-.', label='Theoretical 1st Order', alpha=0.7)
     plt.loglog(dt_plot, ref_line_2nd, 'k--', label='Theoretical 2nd Order', alpha=0.7)
 
     plt.xlabel('Timestep dt (s)', fontsize=12)
@@ -239,3 +237,19 @@ if __name__ == "__main__":
     plt.savefig(out_path_u, dpi=300, bbox_inches='tight')
     plt.close()
     print(f"\nSaved pure temporal convergence plot to {out_path_u}")
+
+    out_path_all = f'{output_dir}/temporal_convergence_study.png'
+    save_four_panel_convergence(
+        dt_plot,
+        [('SISL', errors_sisl), ('Split-explicit', errors_se)],
+        {
+            'u': r'$L_2$ difference (m s$^{-1}$)',
+            'w': r'$L_2$ difference (m s$^{-1}$)',
+            'pi': r'$L_2$ difference',
+            'th_v': r'$L_2$ difference (K)',
+        },
+        r'Time step $\Delta t$ (s)',
+        'Temporal self-convergence: rising thermal bubble',
+        out_path_all,
+    )
+    print(f"Saved all-variable temporal convergence plot to {out_path_all}")

@@ -4,6 +4,7 @@ os.environ["XLA_PYTHON_CLIENT_ALLOCATOR"] = "platform"
 os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
 
 import matplotlib.pyplot as plt
+from convergence_plotting import save_four_panel_convergence
 import numpy as np
 import jax
 import jax.numpy as jnp
@@ -250,7 +251,7 @@ if __name__ == "__main__":
 
     errors_sisl, slices_sisl = run_study("sisl", alpha=0.5, dt_mode="scaling")
     errors_se, slices_se = run_study("split-explicit", alpha=0.5, dt_mode="scaling")
-    report_cross_core_convergence(slices_sisl, slices_se)
+    cross_differences = report_cross_core_convergence(slices_sisl, slices_se)
 
     # Plotting setup
     dx_vals = np.array(RESOLUTIONS[:-1])
@@ -297,3 +298,38 @@ if __name__ == "__main__":
     plt.savefig(out_path_u, dpi=300, bbox_inches='tight')
     plt.close()
     print(f"Saved bubble u-convergence plot to {out_path_u}")
+
+    # --- Plot 3: All-variable bubble self-convergence ---
+    out_path_all = f'{output_dir}/dual_core_bubble_convergence_study_all.png'
+    save_four_panel_convergence(
+        dx_vals,
+        [('SISL', errors_sisl), ('Split-explicit', errors_se)],
+        {
+            'u': r'$L_2$ difference (m s$^{-1}$)',
+            'w': r'$L_2$ difference (m s$^{-1}$)',
+            'pi': r'$L_2$ difference',
+            'th_v': r'$L_2$ difference (K)',
+        },
+        r'Grid spacing $\Delta x$ (m)',
+        'Combined space--time self-convergence: rising thermal bubble',
+        out_path_all,
+    )
+    print(f"Saved all-variable bubble convergence plot to {out_path_all}")
+
+    # --- Plot 4: Cross-core convergence for all prognostic variables ---
+    cross_dx = np.array(RESOLUTIONS)
+    out_path_cross = f'{output_dir}/cross_core_bubble_convergence_study.png'
+    save_four_panel_convergence(
+        cross_dx,
+        [('SISL minus Split-explicit', cross_differences)],
+        {
+            'u': r'$L_2$ difference (m s$^{-1}$)',
+            'w': r'$L_2$ difference (m s$^{-1}$)',
+            'pi': r'$L_2$ difference',
+            'th_v': r'$L_2$ difference (K)',
+        },
+        r'Grid spacing $\Delta x$ (m)',
+        'Cross-core convergence: rising thermal bubble',
+        out_path_cross,
+    )
+    print(f"Saved cross-core convergence plot to {out_path_cross}")

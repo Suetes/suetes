@@ -309,13 +309,13 @@ for col_idx, step_idx in enumerate(snapshot_indices):
     sensor_y_np = [loc[1] for loc in sensor_locs]
     ax_top.scatter(sensor_x_np, sensor_y_np, color='red', marker='^', s=80, label='Sensor towers', edgecolor='black', zorder=3)
     
-    ax_top.set_title(f"t = {t_min:.1f} mins", fontsize=12, fontweight='semibold')
+    ax_top.set_title(f"t = {t_min:.1f} mins", fontsize=12)
     ax_top.set_xlim([-12.5, 12.5])
     ax_top.set_ylim([-12.5, 12.5])
     ax_top.set_aspect('equal')
     
     if col_idx == 0:
-        ax_top.set_ylabel("y (km)", fontsize=11, fontweight='semibold')
+        ax_top.set_ylabel("y (km)", fontsize=11)
         ax_top.legend(loc='lower right', framealpha=0.9, fontsize=9)
     else:
         ax_top.set_yticklabels([])
@@ -337,10 +337,10 @@ for col_idx, step_idx in enumerate(snapshot_indices):
     
     ax_bottom.set_xlim([-12.5, 12.5])
     ax_bottom.set_ylim([0, 5.0])
-    ax_bottom.set_xlabel("x (km)", fontsize=11, fontweight='semibold')
+    ax_bottom.set_xlabel("x (km)", fontsize=11)
     
     if col_idx == 0:
-        ax_bottom.set_ylabel("Altitude z (km)", fontsize=11, fontweight='semibold')
+        ax_bottom.set_ylabel("Altitude z (km)", fontsize=11)
         ax_bottom.legend(loc='lower right', framealpha=0.9, fontsize=9)
     else:
         ax_bottom.set_yticklabels([])
