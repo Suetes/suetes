@@ -167,10 +167,7 @@ def main():
 
         # Discard intra-step physics activations
         @jax.checkpoint
-        def diff_step_fn(curr_state, step_idx, forcing=None, bc_fn=None):
-            # Explicitly calculate time in seconds
-            t_curr = step_idx * dt
-            
+        def diff_step_fn(curr_state, t_curr, forcing=None, bc_fn=None):
             # Fetch and freeze the boundary forcing for this timestep
             bc_state_t = jax.tree_util.tree_map(
                 jax.lax.stop_gradient, 

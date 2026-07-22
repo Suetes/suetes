@@ -181,12 +181,12 @@ def plot_ablation_spectrum(grid, states_dict, variable='w', z_idx=5, sponge_dept
     plt.close()
 
 
-def plot_worst_case_dashboard(grid, time_axis_mins, ts_era5, ts_baseline, ts_worst_case, 
+def plot_worst_case_dashboard(grid, time_axis_mins, ts_era5, ts_baseline, ts_worst_case,
                               pert_th_v_2d, state_baseline, state_worst_case, 
                               loc_idx, sponge_depth=30, save_path=None):
     """
-    Generates a 4-panel dashboard showcasing the Adjoint worst-case impact.
-    Includes Time Series (ERA5, Baseline, Worst-Case), optimal perturbation map, 
+    Generates a 4-panel dashboard for an adjoint-directed adverse perturbation.
+    Includes the time series, normalized thermal control,
     and cross-sections of the baseline flow vs. the wind anomaly.
     """
     import matplotlib.gridspec as gridspec
@@ -203,7 +203,7 @@ def plot_worst_case_dashboard(grid, time_axis_mins, ts_era5, ts_baseline, ts_wor
     ax_ts = fig.add_subplot(gs[0, 0])
     ax_ts.plot(time_axis_hours, ts_era5, 'r--', linewidth=2, label='ERA5 driver')
     ax_ts.plot(time_axis_hours, ts_baseline, 'b-', linewidth=2, alpha=0.7, label='Baseline suetes')
-    ax_ts.plot(time_axis_hours, ts_worst_case, 'k-', linewidth=2, label='Worst-case (Adjoint)')
+    ax_ts.plot(time_axis_hours, ts_worst_case, 'k-', linewidth=2, label='Adjoint-directed adverse run')
     
     # Cleaned up title and updated x-axis label
     ax_ts.set_title("Surface wind speed evolution at target", fontsize=14)
@@ -212,7 +212,7 @@ def plot_worst_case_dashboard(grid, time_axis_mins, ts_era5, ts_baseline, ts_wor
     ax_ts.grid(True, linestyle='--', alpha=0.6)
     ax_ts.legend(fontsize=11)
     
-    # --- Panel B: Optimal Perturbation Map ---
+    # --- Panel B: Normalized adverse perturbation map ---
     native_proj, native_extent = _get_projection_and_extent(grid)
     ax_map = fig.add_subplot(gs[0, 1], projection=native_proj)
     vmax_pert = float(np.max(np.abs(pert_th_v_2d)))
@@ -222,7 +222,7 @@ def plot_worst_case_dashboard(grid, time_axis_mins, ts_era5, ts_baseline, ts_wor
     dummy_state = {'th_v': np.zeros((grid.nx, grid.ny, grid.nz))} 
     im_pert = plot_2d_field(grid, dummy_state, 'th_v', z_idx=0, sponge_depth=sponge_depth, 
                             cmap='RdBu_r', vmin=-vmax_pert, vmax=vmax_pert, scale='sym',
-                            title=r"Optimal upstream thermal perturbation ($\Delta \theta_v$)", 
+                            title=r"Adjoint-directed thermal perturbation ($\Delta \theta_v$)",
                             ax=ax_map, plot_data=pert_th_v_2d)
     
     # Overlay Target Star
@@ -262,8 +262,11 @@ def plot_worst_case_dashboard(grid, time_axis_mins, ts_era5, ts_baseline, ts_wor
     ax_diff.set_ylim([0, 4.0])
     fig.colorbar(c_diff, ax=ax_diff, orientation='horizontal', pad=0.15, label='Wind difference [km/h]')
     
-    plt.suptitle("Suetes downscaling: Adjoint optimal perturbation impact", fontsize=18, y=0.98)
-    plt.tight_layout()
+    fig.suptitle("Suêtes downscaling: adjoint-directed adverse perturbation", fontsize=18, y=0.98)
+    # ``tight_layout`` is incompatible with the projected map axis and the
+    # colorbar axes attached to individual panels.  GridSpec already controls
+    # panel spacing; reserve explicit room for the common title instead.
+    fig.subplots_adjust(top=0.90, bottom=0.08)
     if save_path: plt.savefig(save_path, dpi=300, bbox_inches='tight')
     else: plt.show()
     plt.close()

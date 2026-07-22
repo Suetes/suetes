@@ -1,10 +1,10 @@
 """
 Wreckhouse Worst-Case Scenario Experiment.
 
-1. Spins up the atmosphere from t=0 to t=5h.
-2. Uses the Adjoint model to find optimal perturbations at t=5h that 
-   maximize Wreckhouse wind speeds at t=7h.
-3. Runs the perturbed state forward to simulate the "worst-case" storm.
+1. Spins up the atmosphere from t=0 to t=6h.
+2. Computes a differentiable control-model gradient of the 7h Wreckhouse
+   target wind with respect to a pressure-balanced thermal perturbation.
+3. Transfers that perturbation to the full-physics forecast and runs to 9h.
 """
 
 import os
@@ -35,18 +35,16 @@ from suetes.physics.gravity_waves import McFarlaneGWD
 
 from suetes.vis.visualizer import Visualizer
 
-DATA_DIR = "output/data"
+DATA_DIR = "inputs"
 
 
-def create_wind_tracker(target_i, target_j):
-        ts = []
-        def callback(u, v):
-            # Calculate magnitude at target point
-            u_p = 0.5 * (u[target_i, target_j, 0] + u[target_i+1, target_j, 0])
-            v_p = 0.5 * (v[target_i, target_j, 0] + v[target_i, target_j+1, 0])
-            speed = float(np.sqrt(u_p**2 + v_p**2)) * 3.6
-            ts.append(speed)
-        return ts, callback
+def create_wind_tracker():
+    values = []
+
+    def callback(speed_kmh):
+        values.append(float(speed_kmh))
+
+    return values, callback
 
 def main():
     # =====================================================================
@@ -133,12 +131,11 @@ def main():
     i_w, j_w = np.unravel_index(int(jnp.argmin(dist2)), (grid.nx, grid.ny))
 
     # =====================================================================
-    # 2. DUAL DYNAMICAL CORES (Forward vs. Adjoint)
+    # 2. FULL FORECAST AND DIFFERENTIABLE CONTROL MODELS
     # =====================================================================
     operators = CGridOperator3D(grid)
     sponge = DaviesSponge(grid, operators, sponge_depth=sponge_depth, dt=dt, tau_bndy_factor=10.0)
     
-    # FORWARD STEPPER (High Fidelity Physics)
     physics_forward = PhysicsSuite()
     physics_forward.add_tendency_scheme(SmagorinskyLillySGS(grid, operators, constants, dt=dt, Cs=0.15, Pr_t=1.0, critical_Ri=0.25))
     physics_forward.add_tendency_scheme(McFarlaneGWD(grid, operators, constants, h_variance=jnp.where(land_fraction > 0.5, 2500.0, 0.0), F_c=0.7, mu=1.5e-5))
@@ -150,22 +147,21 @@ def main():
         dt=dt, ns=4, nu_div_factor=0.05, nu_h_factor=0.05, damp_height=9000.0, max_damp=3.0
     )
 
-    # ADJOINT STEPPER (High Diffusion, Smooth Physics)
-    # We drop the chaotic SGS and GWD schemes to prevent sqrt(0) AD traps
-    # and multiply diffusion by 4x to absorb grid-scale adjoint noise.
-    physics_adjoint = PhysicsSuite()
-
-    stepper_adjoint, _ = build_dynamical_core(
-        core_type="split-explicit", grid=grid, operators=operators, 
-        constants=constants, initial_state=initial_state, 
-        physics_suite=physics_adjoint, interior_mask=sponge.get_interior_mask(), 
-        dt=dt, ns=4, nu_div_factor=0.20, nu_h_factor=0.20, damp_height=9000.0, max_damp=3.0
+    # SGS stability switches and GWD saturation/critical-level switches do not
+    # define a robust one-hour reverse trajectory.  The control model retains
+    # the same resolved dynamics and boundary forcing, but omits those schemes
+    # and damps grid-scale adjoint noise.  Its perturbation is subsequently
+    # evaluated in the independent full-physics model above.
+    physics_control = PhysicsSuite()
+    stepper_control, _ = build_dynamical_core(
+        core_type="split-explicit", grid=grid, operators=operators,
+        constants=constants, initial_state=initial_state,
+        physics_suite=physics_control, interior_mask=sponge.get_interior_mask(),
+        dt=dt, ns=4, nu_div_factor=0.20, nu_h_factor=0.20,
+        damp_height=9000.0, max_damp=3.0,
     )
 
-    # Core physics steps
-    @jax.checkpoint
-    def forward_step_fn(curr_state, step_idx, forcing=None, bc_fn=None):
-        t_curr = step_idx * dt
+    def advance_state(curr_state, t_curr, stepper):
         bc_state_t = jax.tree_util.tree_map(jax.lax.stop_gradient, time_manager.get_forcing(t_curr))
         
         updated_curr_state = dict(curr_state)
@@ -174,169 +170,188 @@ def main():
         
         def dynamic_bc_fn(state_next, _): return sponge.blend(state_next, bc_state_t)
         
-        # Executes using the high-fidelity forward engine
-        next_state = stepper_forward.step(updated_curr_state, t_curr, forcing=None, bc_fn=dynamic_bc_fn)
-        next_state['theta_surf'] = updated_curr_state['theta_surf']
-        next_state['target_th_v'] = updated_curr_state['target_th_v']
-        
-        max_w = jnp.max(jnp.abs(next_state['w']))
-        return next_state, max_w
-
-    @jax.checkpoint
-    def adjoint_step_fn(curr_state, step_idx, forcing=None, bc_fn=None):
-        t_curr = step_idx * dt
-        bc_state_t = jax.tree_util.tree_map(jax.lax.stop_gradient, time_manager.get_forcing(t_curr))
-        
-        updated_curr_state = dict(curr_state)
-        updated_curr_state['theta_surf'] = bc_state_t['theta_skt']
-        updated_curr_state['target_th_v'] = bc_state_t['th_v']
-        
-        def dynamic_bc_fn(state_next, _): return sponge.blend(state_next, bc_state_t)
-        
-        # Executes using the highly-diffused, smooth adjoint engine
-        next_state = stepper_adjoint.step(updated_curr_state, t_curr, forcing=None, bc_fn=dynamic_bc_fn)
+        next_state = stepper.step(updated_curr_state, t_curr, forcing=None, bc_fn=dynamic_bc_fn)
         next_state['theta_surf'] = updated_curr_state['theta_surf']
         next_state['target_th_v'] = updated_curr_state['target_th_v']
         
         return next_state
 
-    # Initialize two separate simulation drivers
-    sim_forward = Simulation(step_fn=forward_step_fn, dt=dt)
-    sim_adjoint = Simulation(step_fn=adjoint_step_fn, dt=dt)
+    @jax.checkpoint
+    def differentiable_step_fn(curr_state, t_curr, forcing=None, bc_fn=None):
+        del forcing, bc_fn
+        return advance_state(curr_state, t_curr, stepper_control)
+
+    def forward_step_fn(curr_state, step_idx, forcing=None, bc_fn=None):
+        del forcing, bc_fn
+        next_state = advance_state(curr_state, step_idx * dt, stepper_forward)
+        return next_state, jnp.max(jnp.abs(next_state['w']))
+
+    sim_adjoint = Simulation(step_fn=differentiable_step_fn, dt=dt)
 
     # =====================================================================
-    # PHASE 1: FORWARD SPIN-UP (t=0 to t=5h)
+    # PHASE 1: FORWARD SPIN-UP (t=0 to t=6h)
     # =====================================================================
     print("-" * 60)
     print(f"[PHASE 1] Spinning up forward model from t=0 to t={t_spinup_hours}h...")
     
-    ts_baseline, track_baseline = create_wind_tracker(i_w, j_w)
+    def point_wind_kmh(state):
+        u_point = 0.5 * (state['u'][i_w, j_w, 0] + state['u'][i_w + 1, j_w, 0])
+        v_point = 0.5 * (state['v'][i_w, j_w, 0] + state['v'][i_w, j_w + 1, 0])
+        return 3.6 * jnp.sqrt(u_point**2 + v_point**2 + 1.0e-12)
+
+    def target_wind_ms(state):
+        """Smooth 3x3 near-surface wind diagnostic at Wreckhouse."""
+        u_point = 0.5 * (
+            state['u'][i_w-1:i_w+2, j_w-1:j_w+2, 0]
+            + state['u'][i_w:i_w+3, j_w-1:j_w+2, 0]
+        )
+        v_point = 0.5 * (
+            state['v'][i_w-1:i_w+2, j_w-1:j_w+2, 0]
+            + state['v'][i_w-1:i_w+2, j_w:j_w+3, 0]
+        )
+        return jnp.mean(jnp.sqrt(u_point**2 + v_point**2 + 1.0e-8))
+
+    ts_baseline, track_baseline = create_wind_tracker()
     
     @jax.checkpoint
     def forward_step_fn_baseline(curr_state, step_idx, forcing=None, bc_fn=None):
         next_state, max_w = forward_step_fn(curr_state, step_idx, forcing, bc_fn)
-        # Extract and save just the single float value on the fly
-        jax.debug.callback(track_baseline, next_state['u'], next_state['v'], ordered=True)
+        jax.debug.callback(track_baseline, point_wind_kmh(next_state), ordered=True)
         return next_state, max_w
 
     sim_baseline = Simulation(step_fn=forward_step_fn_baseline, dt=dt)
     
     # Capture the t=0 initial point
-    track_baseline(initial_state['u'], initial_state['v'])
+    track_baseline(point_wind_kmh(initial_state))
     
     start_time = time.time()
-    state_t5 = sim_baseline.run(
+    state_t6 = sim_baseline.run(
         initial_state, t_start=0.0, t_end=t_spinup_end, chunk_steps=int(3600.0 / dt)
     )
     print(f"  -> Spin-up complete in {time.time() - start_time:.1f}s")
 
     # =====================================================================
-    # PHASE 2: SHORT-WINDOW ADJOINT (t=5 to t=6h)
+    # PHASE 2: SHORT-WINDOW ADJOINT (t=6 to t=7h)
     # =====================================================================
     print("-" * 60)
-    print(f"[PHASE 2] Running Adjoint from t={t_peak_hours}h back to t={t_spinup_hours}h...")
+    print(f"[PHASE 2] Running control-model adjoint from t={t_peak_hours}h back to t={t_spinup_hours}h...")
 
-    def peak_wind_objective(init_u, init_v, init_th_v):
-        state = dict(state_t5)
-        state['u'] = init_u
-        state['v'] = init_v
-        state['th_v'] = init_th_v
+    def apply_thermal_control(delta_th_v):
+        """Apply a pressure-balanced theta control and enforce the EOS."""
+        state = dict(state_t6)
+        state['th_v'] = state_t6['th_v'] + delta_th_v
+        state['rho'] = (
+            constants['p0'] / (constants['Rd'] * state['th_v'])
+            * state['pi'] ** (constants['cvd'] / constants['Rd'])
+        )
+        return state
+
+    def target_wind_objective(delta_th_v):
+        state = apply_thermal_control(delta_th_v)
 
         final_state = sim_adjoint.run_differentiable(
             state, t_start=t_spinup_end, t_end=t_peak, chunk_steps=CHUNK_STEPS
         )
-        
-        # 3x3 footprint objective at Wreckhouse, mapped to mass points
-        u_p = 0.5 * (final_state['u'][i_w-1:i_w+2, j_w-1:j_w+2, 0] + final_state['u'][i_w:i_w+3, j_w-1:j_w+2, 0])
-        v_p = 0.5 * (final_state['v'][i_w-1:i_w+2, j_w-1:j_w+2, 0] + final_state['v'][i_w-1:i_w+2, j_w:j_w+3, 0])
-        
-        wind_patch = jnp.sqrt(u_p**2 + v_p**2 + 1e-8)
-        return jnp.mean(wind_patch)
+        return target_wind_ms(final_state)
 
     print("  -> Compiling adjoint graph (this may take a while)...")
-    grad_fn = jax.jit(jax.value_and_grad(peak_wind_objective, argnums=(0, 1, 2)))
+    grad_fn = jax.jit(jax.value_and_grad(target_wind_objective))
     
     start_time = time.time()
-    baseline_peak_wind, (grad_u, grad_v, grad_th_v) = grad_fn(state_t5['u'], state_t5['v'], state_t5['th_v'])
-    baseline_peak_wind.block_until_ready()
-    print(f"  -> Baseline peak wind over Wreckhouse (T={t_peak_hours}h): {float(baseline_peak_wind) * 3.6:.1f} km/h")
+    zero_control = jnp.zeros_like(state_t6['th_v'])
+    control_baseline_wind, grad_th_v = grad_fn(zero_control)
+    control_baseline_wind.block_until_ready()
+    grad_th_v.block_until_ready()
+    print(f"  -> Control-model target wind (T={t_peak_hours}h): {float(control_baseline_wind) * 3.6:.1f} km/h")
     print(f"  -> Adjoint completed in {time.time() - start_time:.1f}s")
 
     # =====================================================================
     # PHASE 3: CONSTRUCT OPTIMAL PERTURBATION
     # =====================================================================
     print("-" * 60)
-    print(f"[PHASE 3] Normalizing and applying the worst-case perturbations...")
+    print(f"[PHASE 3] Constructing the norm-constrained adverse perturbation...")
 
-    grad_u_safe = jnp.nan_to_num(grad_u, nan=0.0, posinf=0.0, neginf=0.0)
-    grad_v_safe = jnp.nan_to_num(grad_v, nan=0.0, posinf=0.0, neginf=0.0)
-    grad_th_safe = jnp.nan_to_num(grad_th_v, nan=0.0, posinf=0.0, neginf=0.0)
+    if not bool(jnp.all(jnp.isfinite(grad_th_v))):
+        raise FloatingPointError(
+            "The differentiable control-model thermal gradient contains "
+            "non-finite values."
+        )
 
     interior = sponge.get_interior_mask()
     
-    # Apply a basic spatial smoother to prevent 2dx grid-scale acoustic shocks
-    # Using a simple 3x3 uniform convolution footprint via JAX
+    # Apply a compact 3-D correlation operator to suppress grid-scale controls.
+    # At this resolution the footprint spans 6 km x 6 km x 1.05 km.
     def smooth_field(field):
-        kernel = jnp.ones((3, 3, 1)) / 9.0
+        kernel = jnp.ones((3, 3, 3)) / 27.0
         return jax.scipy.signal.convolve(field, kernel, mode='same')
         
-    grad_u_smooth = smooth_field(grad_u_safe) * interior['u']
-    grad_v_smooth = smooth_field(grad_v_safe) * interior['v']
-    grad_th_smooth = smooth_field(grad_th_safe) * interior['th_v']
+    grad_th_smooth = smooth_field(grad_th_v) * interior['th_v']
 
     # Safely compute scaling caps
-    max_u_grad = jnp.max(jnp.abs(grad_u_smooth))
-    print(f"  -> Max Smoothed Adjoint Zonal Gradient: {max_u_grad:.3e}")
-    if max_u_grad == 0.0:
-        print("  [WARNING] Adjoint returned pure NaNs/Zeros.")
+    max_th_grad = jnp.max(jnp.abs(grad_th_smooth))
+    print(f"  -> Max smoothed thermal gradient: {max_th_grad:.3e}")
+    if float(max_th_grad) == 0.0:
+        raise FloatingPointError("The thermal gradient is identically zero")
 
     # To make this more extreme, we could tune this (but then the core might blow up)
-    MAX_WIND_PERT = 2.0  
-    MAX_TEMP_PERT = 1.0  
+    MAX_TEMP_PERT = 1.0
+    control_direction = grad_th_smooth / max_th_grad
+    pert_th_v = MAX_TEMP_PERT * control_direction
 
-    scale_u = MAX_WIND_PERT / (max_u_grad + 1e-12)
-    scale_v = MAX_WIND_PERT / (jnp.max(jnp.abs(grad_v_smooth)) + 1e-12)
-    scale_th = MAX_TEMP_PERT / (jnp.max(jnp.abs(grad_th_smooth)) + 1e-12)
-
-    pert_u = grad_u_smooth * scale_u
-    pert_v = grad_v_smooth * scale_v
-    pert_th_v = grad_th_smooth * scale_th
+    # One-sided Taylor test of the exact differentiated objective.  The small
+    # amplitude is in kelvin because max|control_direction| = 1.
+    taylor_epsilon = 1.0e-2
+    directional_derivative = jnp.vdot(grad_th_v, control_direction)
+    objective_epsilon = jax.jit(target_wind_objective)(
+        taylor_epsilon * control_direction
+    )
+    objective_epsilon.block_until_ready()
+    actual_increment = objective_epsilon - control_baseline_wind
+    linear_increment = taylor_epsilon * directional_derivative
+    taylor_relative_error = jnp.abs(actual_increment - linear_increment) / jnp.maximum(
+        jnp.abs(linear_increment), 1.0e-14
+    )
+    print(
+        "  -> Control-model Taylor check at 0.01 K: "
+        f"actual={float(actual_increment):.6e} m/s, "
+        f"linear={float(linear_increment):.6e} m/s, "
+        f"relative error={float(taylor_relative_error):.3e}"
+    )
+    if float(taylor_relative_error) > 5.0e-2:
+        raise AssertionError("Thermal-control gradient failed the Taylor check")
 
     # Apply perturbations
-    worst_case_state_t5 = dict(state_t5)
-    worst_case_state_t5['u'] = state_t5['u'] + pert_u
-    worst_case_state_t5['v'] = state_t5['v'] + pert_v
-    worst_case_state_t5['th_v'] = state_t5['th_v'] + pert_th_v
+    adverse_state_t6 = apply_thermal_control(pert_th_v)
 
     # =====================================================================
     # PHASE 4: THE WORST CASE SIMULATION (9-HOUR RUN)
     # =====================================================================
     print("-" * 60)
-    print(f"[PHASE 4] Running baseline and worst-case simulations to T={t_total_hours}h...")
+    print(f"[PHASE 4] Running baseline and adverse-perturbation simulations to T={t_total_hours}h...")
     
     from suetes.vis.comparisons import plot_worst_case_dashboard
 
     # Initialize worst-case tracker and pad with the Phase 1 spin-up history
-    ts_worst_case, track_worst_case = create_wind_tracker(i_w, j_w)
+    ts_worst_case, track_worst_case = create_wind_tracker()
     ts_worst_case.extend(ts_baseline) 
     
     @jax.checkpoint
     def forward_step_fn_worst_case(curr_state, step_idx, forcing=None, bc_fn=None):
         next_state, max_w = forward_step_fn(curr_state, step_idx, forcing, bc_fn)
-        jax.debug.callback(track_worst_case, next_state['u'], next_state['v'], ordered=True)
+        jax.debug.callback(track_worst_case, point_wind_kmh(next_state), ordered=True)
         return next_state, max_w
 
     sim_worst_case = Simulation(step_fn=forward_step_fn_worst_case, dt=dt)
 
-    # --- PART A: Run to the peak (T=5h to T=7h) ---
+    # --- PART A: Run from the control time to the target time (T=6h to T=7h) ---
     print(f"  -> Advancing to peak target (T={t_peak_hours}h)...")
     
     state_baseline_t7 = sim_baseline.run(
-        state_t5, t_start=t_spinup_end, t_end=t_peak, chunk_steps=int(3600.0 / dt)
+        state_t6, t_start=t_spinup_end, t_end=t_peak, chunk_steps=int(3600.0 / dt)
     )
     
     state_worst_case_t7 = sim_worst_case.run(
-        worst_case_state_t5, t_start=t_spinup_end, t_end=t_peak, chunk_steps=int(3600.0 / dt)
+        adverse_state_t6, t_start=t_spinup_end, t_end=t_peak, chunk_steps=int(3600.0 / dt)
     )
 
     # --- PART B: Run the rest of the way (T=7h to T=9h) ---
@@ -352,7 +367,14 @@ def main():
 
     # Extract ERA5 driver time series up to T=9h
     ts_era5 = []
-    time_axis_mins = np.linspace(0, t_total_hours * 60, len(ts_baseline))
+    expected_samples = int(t_total_end / dt) + 1
+    if len(ts_baseline) != expected_samples or len(ts_worst_case) != expected_samples:
+        raise RuntimeError(
+            "Wind tracker length mismatch: "
+            f"baseline={len(ts_baseline)}, adverse={len(ts_worst_case)}, "
+            f"expected={expected_samples}"
+        )
+    time_axis_mins = np.arange(expected_samples) * dt / 60.0
     
     for mins in time_axis_mins:
         t_sec = mins * 60.0
@@ -367,9 +389,34 @@ def main():
     print("-" * 60)
     print("=== FINAL IMPACT RESULTS ===")
     print(f" ERA5 coarse wind (T={t_peak_hours}h):      {ts_era5[peak_idx]:.1f} km/h")
-    print(f" Baseline wind speed (T={t_peak_hours}h):   {ts_baseline[peak_idx]:.1f} km/h")
-    print(f" Worst-case wind speed (T={t_peak_hours}h): {ts_worst_case[peak_idx]:.1f} km/h")
-    print(f" Net amplification at peak:       +{ts_worst_case[peak_idx] - ts_baseline[peak_idx]:.1f} km/h")
+    baseline_target = float(target_wind_ms(state_baseline_t7)) * 3.6
+    adverse_target = float(target_wind_ms(state_worst_case_t7)) * 3.6
+    print(f" Baseline point wind (T={t_peak_hours}h):   {ts_baseline[peak_idx]:.1f} km/h")
+    print(f" Adverse point wind (T={t_peak_hours}h):    {ts_worst_case[peak_idx]:.1f} km/h")
+    print(f" Baseline 3x3 target wind:                  {baseline_target:.1f} km/h")
+    print(f" Adverse 3x3 target wind:                   {adverse_target:.1f} km/h")
+    print(f" Net target amplification:                 +{adverse_target - baseline_target:.1f} km/h")
+
+    result_path = os.path.join(output_dir, f"{RUN_NAME}_diagnostics.npz")
+    np.savez_compressed(
+        result_path,
+        time_minutes=time_axis_mins,
+        era5_wind_kmh=np.asarray(ts_era5),
+        baseline_wind_kmh=np.asarray(ts_baseline),
+        adverse_wind_kmh=np.asarray(ts_worst_case),
+        delta_th_v=np.asarray(pert_th_v),
+        baseline_target_wind_kmh=baseline_target,
+        adverse_target_wind_kmh=adverse_target,
+        control_model_baseline_objective_kmh=float(control_baseline_wind) * 3.6,
+        control_model="dry resolved dynamics; nu_h=nu_div=0.20",
+        taylor_relative_error=float(taylor_relative_error),
+        control_time_seconds=t_spinup_end,
+        target_time_seconds=t_peak,
+        end_time_seconds=t_total_end,
+        dt_seconds=dt,
+        maximum_temperature_perturbation_K=MAX_TEMP_PERT,
+    )
+    print(f"[OUTPUT] Saved numerical diagnostics to {result_path}")
 
     # Generate dashboard using the T=7h states for the cross-sections
     print("[PLOT] Generating adjoint impact dashboard...")
