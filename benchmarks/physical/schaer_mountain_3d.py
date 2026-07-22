@@ -3,6 +3,16 @@
 
 from __future__ import annotations
 
+import jax
+
+jax.config.update("jax_enable_x64", True)
+import jax.numpy as jnp
+
+from suetes.regional3d.euler import Euler3D
+from suetes.regional3d.geometry import RegionalGrid3D
+from suetes.regional3d.operators import CGridOperator3D
+from suetes.regional3d.steppers import build_dynamical_core
+
 import argparse
 import math
 import os
@@ -43,15 +53,6 @@ def result_path(data_dir, core, dx, dz, dt, t_end, stabilization, snapshot_inter
 
 
 def run_core(core, dx, dz, dt, t_end, stabilization, snapshot_interval, output):
-    import jax
-
-    jax.config.update("jax_enable_x64", True)
-    import jax.numpy as jnp
-
-    from suetes.regional3d.euler import Euler3D
-    from suetes.regional3d.geometry import RegionalGrid3D
-    from suetes.regional3d.operators import CGridOperator3D
-    from suetes.regional3d.steppers import build_dynamical_core
 
     nx = round(DOMAIN_X / dx)
     nz = round(DOMAIN_Z / dz)

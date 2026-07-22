@@ -59,15 +59,7 @@ def result_path(
     )
 
 
-def run_core(
-    core: str,
-    dx: float,
-    dt: float,
-    t_end: float,
-    stabilization: float,
-    snapshot_interval: float,
-    output: Path,
-) -> None:
+def run_core(core: str, dx: float, dt: float, t_end: float, stabilization: float, snapshot_interval: float, output: Path,) -> None:
 
     nx = round(DOMAIN_WIDTH / dx)
     nz = round(DOMAIN_HEIGHT / dx)
@@ -117,54 +109,23 @@ def run_core(
         0.0,
     )
     state["th_v"] = theta_bg + theta_prime
-    state["rho"] = (
-        CONSTANTS["p0"] / (CONSTANTS["Rd"] * state["th_v"])
-        * pi_bg ** (CONSTANTS["cvd"] / CONSTANTS["Rd"])
-    )
+    state["rho"] = CONSTANTS["p0"] / (CONSTANTS["Rd"] * state["th_v"]) * pi_bg ** (CONSTANTS["cvd"] / CONSTANTS["Rd"])
 
-    common_kwargs = {
-        "dt": dt,
-        "alpha": 0.5,
-        "nu_div_factor": stabilization,
-        "nu_h_factor": stabilization,
-        "damp_height": 7500.0,
-        "max_damp": 0.05,
-        "N_bv": 0.0,
-    }
+    common_kwargs = {"dt": dt, "alpha": 0.5, "nu_div_factor": stabilization, "nu_h_factor": stabilization, "damp_height": 7500.0, "max_damp": 0.05, "N_bv": 0.0,}
     if core == "sisl":
-        core_kwargs = {
-            **common_kwargs,
-            "solver_tol": 1.0e-8,
-            "solver_maxiter": 30,
-            "solver_restart": 30,
-        }
+        core_kwargs = {**common_kwargs, "solver_tol": 1.0e-8, "solver_maxiter": 30, "solver_restart": 30,}
     elif core == "split-explicit":
         core_kwargs = {**common_kwargs, "ns": 12}
     else:
         raise ValueError(f"Unknown core: {core}")
 
-    stepper, actual_dt = build_dynamical_core(
-        core_type=core,
-        grid=grid,
-        operators=operators,
-        constants=CONSTANTS,
-        initial_state=state,
-        **core_kwargs,
-    )
+    stepper, actual_dt = build_dynamical_core(core_type=core, grid=grid, operators=operators, constants=CONSTANTS, initial_state=state, **core_kwargs,)
 
     def step_fn(current_state, step_index):
-        next_state = stepper.step(
-            current_state,
-            step_index * actual_dt,
-            forcing=None,
-            bc_fn=lambda value, field: value,
-        )
+        next_state = stepper.step(current_state, step_index * actual_dt, forcing=None, bc_fn=lambda value, field: value,)
         return next_state, jnp.max(jnp.abs(next_state["w"]))
 
-    print(
-        f"\n[BENCHMARK] {core.upper()}: {nx}x{ny}x{nz}, "
-        f"dx={dx:g} m, dt={actual_dt:g} s, steps={num_steps}"
-    )
+    print(f"\n[BENCHMARK] {core.upper()}: {nx}x{ny}x{nz}, dx={dx:g} m, dt={actual_dt:g} s, steps={num_steps}")
     y_mid = ny // 2
 
     # Keep the compiled scan modest even when snapshots are far apart. A
@@ -249,12 +210,7 @@ def run_core(
     print(f"[BENCHMARK] Saved {core} result to {output}")
 
 
-def plot_comparison(
-    sisl_path: Path,
-    split_path: Path,
-    output_dir: Path,
-    comparison_time: float,
-) -> Path:
+def plot_comparison(sisl_path: Path, split_path: Path, output_dir: Path, comparison_time: float) -> Path:
     from matplotlib.ticker import ScalarFormatter
 
     def latex_scientific(value: float, precision: int = 2) -> str:
