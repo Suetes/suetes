@@ -99,7 +99,7 @@ def write_timeseries_zarr(store_path, era5_proc, bridge, num_states, times_sec,
             for k in keys:
                 a = bc_state[k]
                 # chunk=(1, *spatial): one time-slice == one chunk read.
-                arrays[k] = root.create_dataset(
+                arrays[k] = root.create_array(
                     k, shape=(num_states, *a.shape),
                     chunks=(1, *a.shape), dtype=a.dtype)
         for k in keys:
@@ -111,7 +111,7 @@ def write_timeseries_zarr(store_path, era5_proc, bridge, num_states, times_sec,
     if static:
         for k, v in static.items():
             a = np.asarray(v)
-            root.create_dataset(f"static_{k}", shape=a.shape, chunks=a.shape, dtype=a.dtype)[:] = a
+            root.create_array(f"static_{k}", shape=a.shape, chunks=a.shape, dtype=a.dtype)[:] = a
             static_keys.append(k)
 
     root.attrs["times_sec"] = [float(t) for t in times_sec]

@@ -11,8 +11,13 @@ options and the rationale behind each.
 
 import os
 import math
+import threading
 import cdsapi
 import xarray as xr
+
+# Global lock for thread-unsafe netCDF4 C-library operations
+netcdf_lock = threading.Lock()
+
 
 # ---------------------------------------------------------------------------
 # Pressure-level presets.
@@ -71,7 +76,7 @@ class ERA5Manager:
         appropriate for a NAM-22 run with a ~100 hPa model lid.
     """
 
-    def __init__(self, data_dir="suetes/data",
+    def __init__(self, data_dir="inputs",
                  pressure_levels="buffered"):
         self.data_dir = data_dir
         self.client = cdsapi.Client()
@@ -112,14 +117,30 @@ class ERA5Manager:
         half_Ly = (ny * dy) / 2.0
 
         delta_lat = math.degrees(half_Ly / R)
-        max_abs_lat = min(89.0, abs(lat_c) + delta_lat)
-        delta_lon = math.degrees(half_Lx / (R * math.cos(math.radians(max_abs_lat))))
+        north = min(90.0, lat_c + delta_lat + buffer_deg)
+        south = max(-90.0, lat_c - delta_lat - buffer_deg)
+
+        if north >= 89.0 or south <= -89.0:
+            # Polar domain: download full global longitude to handle wrapping around the pole
+            west = -180.0
+            east = 180.0
+        else:
+            max_abs_lat = max(abs(north), abs(south))
+            cos_lat = math.cos(math.radians(min(89.0, max_abs_lat)))
+            delta_lon = math.degrees(half_Lx / (R * cos_lat))
+            
+            if delta_lon >= 180.0 - buffer_deg:
+                west = -180.0
+                east = 180.0
+            else:
+                west = lon_c - delta_lon - buffer_deg
+                east = lon_c + delta_lon + buffer_deg
 
         return [
-            round(lat_c + delta_lat + buffer_deg, 2),
-            round(lon_c - delta_lon - buffer_deg, 2),
-            round(lat_c - delta_lat - buffer_deg, 2),
-            round(lon_c + delta_lon + buffer_deg, 2),
+            round(north, 2),
+            round(west, 2),
+            round(south, 2),
+            round(east, 2),
         ]
 
     def download_regional_subset(self, year, month, days, area,
@@ -147,10 +168,11 @@ class ERA5Manager:
                 return False
             try:
                 import netCDF4
-                with netCDF4.Dataset(path, "r") as _d:
-                    for _t in ("valid_time", "time"):
-                        if _t in _d.dimensions:
-                            return _d.dimensions[_t].size == n_expected
+                with netcdf_lock:
+                    with netCDF4.Dataset(path, "r") as _d:
+                        for _t in ("valid_time", "time"):
+                            if _t in _d.dimensions:
+                                return _d.dimensions[_t].size == n_expected
             except Exception:
                 return False
             return False

@@ -4,25 +4,30 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "suetes"
-version = "0.8.1"
+version = "0.9.0"
 description = "Suetes is a Differentiable Regional Weather Model (JAX)"
+requires-python = ">=3.10"
 dependencies = [
     "numpy",
     "matplotlib",
     "scipy",
-    "jax",
-    "jaxlib",
+    "jax>=0.10.0",
+    "jaxlib>=0.10.0",
     "xarray",
     "cartopy",
     "pandas",
     "optax",
     "netcdf4",
-    "cdsapi"
+    "cdsapi",
+    "zarr>=3.0.0",
+    "flax",
+    "dinosaur",
+    "pyyaml",
 ]
 
 [tool.setuptools]
 packages = ["suetes"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests", "benchmarks"]
+testpaths = ["tests"]
 pythonpath = ["."]

@@ -43,14 +43,14 @@ from suetes.vis.comparisons import (
         plot_ablation_spectrum
     )
 
-DATA_DIR = "suetes/data"
+DATA_DIR = "inputs"
 
 def main():
     ACTIVE_DOMAIN = "nam22"
     RUN_NAME = f"{ACTIVE_DOMAIN}_NAM22_july2025"
 
     lat_c, lon_c = 47.5, -97.0
-    output_dir = "suetes/plots"
+    output_dir = "output/plots"
     os.makedirs(output_dir, exist_ok=True)
 
     nx, ny, nz = 310, 260, 32

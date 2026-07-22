@@ -211,7 +211,7 @@ class DailyNetcdfSnapshots:
         parts = []
         for grp in (prog, phys):
             if grp:
-                parts.append(xr.open_mfdataset(grp, combine="by_coords"))
+                parts.append(xr.open_mfdataset(grp, combine="by_coords", data_vars="minimal"))
         if not parts:
             raise FileNotFoundError(f"no daily prog/phys files for {run_name} in {rundir}")
         self._ds = xr.merge(parts)

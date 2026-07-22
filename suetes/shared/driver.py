@@ -25,8 +25,7 @@ class Simulation:
         print(f"[SIMULATION] Total Steps: {total_steps}")
         print(f"[SIMULATION] Chunk Size:  {chunk_steps} steps")
         
-        @jax.jit(static_argnames=['n_steps'])
-        def run_chunk(curr_state, start_step, n_steps):
+        def run_chunk_impl(curr_state, start_step, n_steps):
             def scan_fn(state, step_offset):
                 step_idx = start_step + step_offset
                 next_state, metrics = self.step_fn(state, step_idx)
@@ -34,9 +33,22 @@ class Simulation:
             
             return jax.lax.scan(scan_fn, curr_state, jnp.arange(n_steps))
 
+        # Construct the wrapper explicitly.  This remains stable when benchmark
+        # processes clear JAX compilation caches between independent runs.
+        run_chunk = jax.jit(
+            run_chunk_impl, static_argnames=('n_steps',)
+        )
+
         print("[SIMULATION] Compiling kernel...")
         t0 = time.time()
-        _ = run_chunk(initial_state, 0, 1)
+        warmup_steps = min(chunk_steps, total_steps)
+        warmup_state, warmup_metrics = run_chunk(
+            initial_state, int(t_start / self.dt), warmup_steps
+        )
+        warmup_leaves = jax.tree_util.tree_leaves(warmup_state)
+        if warmup_leaves:
+            warmup_leaves[0].block_until_ready()
+        del warmup_state, warmup_metrics, warmup_leaves
         print(f"[SIMULATION] Compilation finished in {time.time() - t0:.2f}s")
         print(f"[SIMULATION] JIT compiled, running simulation...")
 

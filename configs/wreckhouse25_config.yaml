@@ -1,0 +1,103 @@
+# wreckhouse25_config.yaml -- single source of truth for the Wreckhouse windstorm case.
+# Consumed by suetes.shared.config.load_config (preprocessing CLI + runner).
+
+domain:
+  name: "wreckhouse"
+  lat_c: 47.71
+  lon_c: -59.31
+  nx: 200
+  ny: 200
+  nz: 40
+  dx: 2000.0         # 2 km high-resolution downscaling
+  dy: 2000.0
+  dz: 350.0
+
+time:
+  year: "2025"
+  month: "02"
+  days: ["14", "15", "16"]
+  sim_hours: 12
+
+vertical:
+  kappa: 1.0
+  scale_s: 10000.0
+  n: 1.0
+
+core:
+  type: "split-explicit"
+  dt: 5.0
+  nu_h: 0.05
+  alpha: 0.7
+  ns: 4
+
+physics:
+  radiation: false
+  nudge: true
+  microphysics: false
+  convection: false
+  drag: false
+  diffusion: false
+  sgs: true
+  gwd: true
+
+constants:
+  g: 9.81
+  Rd: 287.0
+  cp: 1004.0
+  cvd: 717.0
+  p0: 100000.0
+  epsilon: 0.622
+
+io:
+  data_dir: "inputs"
+  fig_dir: "output/plots/wreckhouse"
+  store_format: "zarr"
+  coarsen_window: 1   # No coarsening to preserve high-res wind gradients
+  sponge_depth: 15
+  smooth_sigma: 0.1   # Less smoothing for steep Long Range Mountains
+  pressure_levels: "buffered"
+  buffer_deg: 2.0
+
+render:
+  levels_z: [2]
+  levels_m: []
+  energy_levels: []
+  quiver_stride: 6
+  zoom_extent: [-60.06, -58.56, 46.96, 48.46]
+  target_hours: [6, 8, 10, 12]
+  dashboard_hours: [6, 8, 10, 12]
+  compare_hours: [6, 7, 8, 9, 10, 11, 12]
+  energy_hours: [12]
+  strip_hours: [6, 8, 10, 12]
+  hovmoller_hours: [12]
+  slices:
+    - name: "zoomed_slices_w"
+      map_var: "th_v"
+      slice_var: "w"
+      map_z: 2
+      x_indices: [96, 100, 104]
+      y_indices: [96, 100, 104]
+      xlim: [-50.0, 50.0]
+      ylim: [0, 5000]
+  points:
+    - name: "Wreckhouse"
+      lat: 47.71
+      lon: -59.31
+      variable: "wind"
+      units: "km/h"
+    - name: "Port aux Basques"
+      lat: 47.57
+      lon: -59.13
+      variable: "wind"
+      units: "km/h"
+    - name: "Cape Ray"
+      lat: 47.62
+      lon: -59.30
+      variable: "wind"
+      units: "km/h"
+    - name: "Stephenville"
+      lat: 48.55
+      lon: -58.57
+      variable: "wind"
+      units: "km/h"
+

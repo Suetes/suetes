@@ -8,17 +8,18 @@ class UpperRayleighDamping:
     Applies a sine-squared relaxation profile above a specified activation height:
     $$ \frac{\partial \phi}{\partial t} = -\nu(z) (\phi - \phi_{bg}) $$
     """
-    def __init__(self, grid, operators, damp_height=9000.0, tau_max_secs=300.0):
+    def __init__(self, grid, operators, damp_height=9000.0, tau_max_secs=300.0, constants=None):
         self.grid = grid
         self.op = operators
         self.z_damp = damp_height
         self.nu_max = 1.0 / tau_max_secs
+        self.c = constants or {}
 
     def _get_profile(self, z_array):
         # Branchless sine-squared profile bounded between 0 and nu_max
         depth = jnp.maximum(z_array - self.z_damp, 0.0)
         max_depth = jnp.max(self.grid.Z_w) - self.z_damp
-        phase = (jnp.pi / 2.0) * (depth / (max_depth + 1e-8))
+        phase = (jnp.pi / 2.0) * (depth / (max_depth + self.c.get('eps_s', 1e-8)))
         return self.nu_max * jnp.sin(phase)**2
 
     def get_tendencies(self, state, bg):
@@ -131,7 +132,7 @@ class McFarlaneGWD:
         # Reference (surface) direction
         u0 = u_m[:, :, 0]
         v0 = v_m[:, :, 0]
-        speed0 = jnp.sqrt(u0 ** 2 + v0 ** 2 + 1e-8)
+        speed0 = jnp.sqrt(u0 ** 2 + v0 ** 2 + self.c.get('eps_s', 1e-8))
         n_x = u0 / speed0
         n_y = v0 / speed0
 

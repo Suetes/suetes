@@ -27,7 +27,7 @@ vertical:
 core:
   type: "split-explicit"
   dt: 40.0
-  nu_h: 0.03
+  nu_h: 0.05
   ns: 3
   alpha: 0.7
 
@@ -50,11 +50,52 @@ constants:
   epsilon: 0.622
 
 io:
-  data_dir: "suetes/data"
-  fig_dir: "suetes/plots/radiation"
+  data_dir: "inputs"
+  fig_dir: "output/plots/radiation"
   store_format: "zarr"   # chunked, lazily-streamed (scales to long windows)
   coarsen_window: 3
   sponge_depth: 15
   smooth_sigma: 2.0
   pressure_levels: "buffered"
   buffer_deg: 3.0
+
+render:
+  levels_z: [0, 5, 15, 30]
+  levels_m: [500.0, 3000.0, 5000.0, 10000.0]
+  energy_levels: [5]
+  dashboard_hours: []
+  compare_hours: []
+  energy_hours: []
+  strip_hours: []
+  hovmoller_hours: []
+  points:
+    - name: "Denver"
+      lat: 39.74
+      lon: -104.99
+      units: "deg C"
+      variable: "temperature"
+    - name: "Kansas City"
+      lat: 39.10
+      lon: -94.58
+      units: "deg C"
+      variable: "temperature"
+    - name: "Minneapolis"
+      lat: 44.98
+      lon: -93.27
+      units: "deg C"
+      variable: "temperature"
+    - name: "Winnipeg"
+      lat: 49.90
+      lon: -97.14
+      units: "deg C"
+      variable: "temperature"
+    - name: "Atlanta"
+      lat: 33.75
+      lon: -84.39
+      units: "deg C"
+      variable: "temperature"
+  slices:
+    - name: "slices_w"
+      map_var: "th_v"
+      slice_var: "w"
+      map_z: 5

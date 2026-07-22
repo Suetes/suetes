@@ -159,6 +159,52 @@ class Euler3D:
             'th_v': th_v_bg
         }
 
+    def nonlinear_pi_tendency(self, state_prime, th_v_prime, bg):
+        """Return the theta-prime contribution to Exner continuity."""
+        th_prime_u = self.op.avg(th_v_prime, axis=0, from_loc='m', to_loc='u')
+        th_prime_v = self.op.avg(th_v_prime, axis=1, from_loc='m', to_loc='v')
+        th_prime_w = self.op.avg(th_v_prime, axis=2, from_loc='m', to_loc='w')
+
+        m_u = self.grid.m_factors['u'][..., None]
+        m_v = self.grid.m_factors['v'][..., None]
+        m_m = self.grid.m_factors['m'][..., None]
+
+        flux_x = state_prime['u'] * bg['rho_u'] * th_prime_u * bg['dz_u'] / m_u
+        flux_y = state_prime['v'] * bg['rho_v'] * th_prime_v * bg['dz_v'] / m_v
+        flux_z = (
+            state_prime['eta_dot'] * bg['dz_w_full']
+            * bg['rho_w'] * th_prime_w
+        )
+        flux_z = flux_z.at[:, :, 0].set(0.0).at[:, :, -1].set(0.0)
+
+        div_x = self.op.diff(flux_x, axis=0, from_loc='u', to_loc='m') / bg['dz_m_full']
+        div_y = self.op.diff(flux_y, axis=1, from_loc='v', to_loc='m') / bg['dz_m_full']
+        div_z = (
+            self.op.diff(flux_z, axis=2, from_loc='w', to_loc='m')
+            * self.grid.dz / bg['dz_m_full']
+        )
+        return -bg['C_pi'] * (m_m * (div_x + div_y) + div_z)
+
+    def metric_curvature_tendencies(self, u, v):
+        """Return the nonlinear horizontal map-curvature accelerations."""
+        u_m = self.op.avg(u, axis=0, from_loc='u', to_loc='m')
+        v_m = self.op.avg(v, axis=1, from_loc='v', to_loc='m')
+        v_at_u = self.op.avg(
+            self.op.avg(v, axis=1, from_loc='v', to_loc='m'),
+            axis=0, from_loc='m', to_loc='u'
+        )
+        u_at_v = self.op.avg(
+            self.op.avg(u, axis=0, from_loc='u', to_loc='m'),
+            axis=1, from_loc='m', to_loc='v'
+        )
+        metric_m = (
+            v_m * self.grid.dm_dx_m[..., None]
+            - u_m * self.grid.dm_dy_m[..., None]
+        )
+        metric_u = self.op.avg(metric_m, axis=0, from_loc='m', to_loc='u')
+        metric_v = self.op.avg(metric_m, axis=1, from_loc='m', to_loc='v')
+        return metric_u * v_at_u, -metric_v * u_at_v
+
     def get_tendencies(self, state_prime, bg, is_explicit=False, ml_params=None):
         r"""
         Evaluates the spatial right-hand side (RHS) tendencies for the system.
@@ -191,9 +237,14 @@ class Euler3D:
         """
         u, v, w, pi_prime, eta_dot = state_prime['u'], state_prime['v'], state_prime['w'], state_prime['pi'], state_prime['eta_dot']
         
-        th_v_u = bg['th_v_u'] + state_prime.get('th_v_prime_u', 0.0)
-        th_v_v = bg['th_v_v'] + state_prime.get('th_v_prime_v', 0.0)
-        th_v_w = bg['th_v_w'] + state_prime.get('th_v_prime_w', 0.0)
+        if is_explicit:
+            th_v_u = bg['th_v_u'] + state_prime.get('th_v_prime_u', 0.0)
+            th_v_v = bg['th_v_v'] + state_prime.get('th_v_prime_v', 0.0)
+            th_v_w = bg['th_v_w'] + state_prime.get('th_v_prime_w', 0.0)
+        else:
+            th_v_u = bg['th_v_u']
+            th_v_v = bg['th_v_v']
+            th_v_w = bg['th_v_w']
 
         # Horizontal pressure gradients (use pi_prime)
         grad_pi_prime_x = self.op.diff(pi_prime, axis=0, from_loc='m', to_loc='u')
@@ -214,9 +265,9 @@ class Euler3D:
         m_u = jnp.expand_dims(self.grid.m_factors['u'], axis=-1)
         m_v = jnp.expand_dims(self.grid.m_factors['v'], axis=-1)
 
-        # Apply map factors to the physical gradient
-        tend_u = -self.c['cp'] * th_v_u * grad_pi_x_cart * m_u
-        tend_v = -self.c['cp'] * th_v_v * grad_pi_y_cart * m_v
+        # Apply map factors to the physical gradient (already applied inside op.diff)
+        tend_u = -self.c['cp'] * th_v_u * grad_pi_x_cart
+        tend_v = -self.c['cp'] * th_v_v * grad_pi_y_cart
 
         # Vertical pressure gradient
         grad_pi_prime_z_w = self.op.diff(pi_prime, axis=2, from_loc='m', to_loc='w') * (self.grid.dz / bg['dz_w_full'])
@@ -225,19 +276,24 @@ class Euler3D:
             # Perturbation form cancels discrete gravity at rest
             th_v_prime_w = state_prime.get('th_v_prime_w', 0.0)
             buoyancy = self.c['g'] * (th_v_prime_w / bg['th_v_w'])
-            
             tend_w = -self.c['cp'] * th_v_w * grad_pi_prime_z_w + buoyancy
         else:
             # The implicit solver matrix requires strict linearity
-            tend_w = -self.c['cp'] * bg['th_v_w'] * grad_pi_prime_z_w
+            tend_w = -self.c['cp'] * th_v_w * grad_pi_prime_z_w
 
-        # Coriolis
+        # Coriolis (Linear part is implicit)
         v_at_u = self.op.avg(self.op.avg(v, axis=1, from_loc='v', to_loc='m'), axis=0, from_loc='m', to_loc='u')
         u_at_v = self.op.avg(self.op.avg(u, axis=0, from_loc='u', to_loc='m'), axis=1, from_loc='m', to_loc='v')
         
         f_u_3d, f_v_3d = jnp.expand_dims(self.grid.f_u, axis=-1), jnp.expand_dims(self.grid.f_v, axis=-1)
         tend_u += f_u_3d * v_at_u
         tend_v -= f_v_3d * u_at_v
+
+        # Map Curvature Metric terms (Strictly non-linear, so explicit only)
+        if is_explicit:
+            metric_tend_u, metric_tend_v = self.metric_curvature_tendencies(u, v)
+            tend_u += metric_tend_u
+            tend_v += metric_tend_v
 
         # Divergence
         m_u, m_v, m_m = self.grid.m_factors['u'][..., None], self.grid.m_factors['v'][..., None], self.grid.m_factors['m'][..., None]
@@ -272,12 +328,22 @@ class Euler3D:
         # Diffusion and physics are only done in the explicit part
         if is_explicit:
 
+            phys_diff_u = 0.0
+            phys_diff_v = 0.0
+            phys_diff_w = 0.0
+            phys_diff_th_v = 0.0
+
             # Diffusion
             if self.nu_h > 0.0 or self.nu_div > 0.0:
                 diff_tends = self.diffusion.get_tendencies(state_prime, bg_precomputed=bg)
-                tend_u += diff_tends['u']
-                tend_v += diff_tends['v']
-                tend_w += diff_tends['w']
+                tend_u += diff_tends.get('u', 0.0)
+                tend_v += diff_tends.get('v', 0.0)
+                tend_w += diff_tends.get('w', 0.0)
+                tend_th_v += diff_tends.get('th_v', 0.0)
+                phys_diff_u += diff_tends.get('u', 0.0)
+                phys_diff_v += diff_tends.get('v', 0.0)
+                phys_diff_w += diff_tends.get('w', 0.0)
+                phys_diff_th_v += diff_tends.get('th_v', 0.0)
 
             # Call physics suite
             if self.physics_suite is not None:
@@ -287,14 +353,25 @@ class Euler3D:
 
                 # Add them to the dynamical core's right-hand side
                 for k in phys_tends:
-                    if k == 'u': tend_u += phys_tends['u']
-                    if k == 'v': tend_v += phys_tends['v']
-                    if k == 'w': tend_w += phys_tends['w']
-                    if k == 'th_v': tend_th_v += phys_tends['th_v']
+                    if k == 'u': 
+                        tend_u += phys_tends['u']
+                        phys_diff_u += phys_tends['u']
+                    if k == 'v': 
+                        tend_v += phys_tends['v']
+                        phys_diff_v += phys_tends['v']
+                    if k == 'w': 
+                        tend_w += phys_tends['w']
+                        phys_diff_w += phys_tends['w']
+                    if k == 'th_v': 
+                        tend_th_v += phys_tends['th_v']
+                        phys_diff_th_v += phys_tends['th_v']
+
+            return {'u': tend_u, 'v': tend_v, 'w': tend_w, 'pi': tend_pi, 'th_v': tend_th_v, 
+                    'phys_diff_u': phys_diff_u, 'phys_diff_v': phys_diff_v, 'phys_diff_w': phys_diff_w, 'phys_diff_th_v': phys_diff_th_v}
 
         return {'u': tend_u, 'v': tend_v, 'w': tend_w, 'pi': tend_pi, 'th_v': tend_th_v}
 
-    def linear_operator(self, state_prime, bg, dt):
+    def linear_operator(self, state_prime, bg, dt, alpha=0.55):
         r"""
         Evaluates the discrete linear operator matrix-vector product $\mathcal{L}(\mathbf{x})$.
 
@@ -311,14 +388,13 @@ class Euler3D:
             state_prime (dict): Current implicit state vector guess $\mathbf{x}$.
             bg (dict): Precomputed background state metrics.
             dt (float): Integration time step $\Delta t$ [s].
+            alpha (float, optional): Semi-implicit off-centering parameter. Defaults to 0.55.
 
         Returns:
             dict: The evaluated residual vector fields matching the state dictionary layout.
         """
         tends = self.get_tendencies(state_prime, bg, is_explicit=False)
         
-        alpha = 0.55 
-
         L_u = state_prime['u'] - alpha * dt * tends['u']
         L_v = state_prime['v'] - alpha * dt * tends['v']
         L_w = (1.0 + dt * self.tau_damp) * state_prime['w'] - alpha * dt * tends['w']

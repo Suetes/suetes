@@ -47,8 +47,8 @@ from suetes.physics.microphysics import KesslerWarmRain, SimplifiedBettsMiller
 from suetes.physics.radiation import SundqvistCloud, RRTMGPRadiation, CachedRadiation
 from suetes.physics.afgl import AFGLColumnExtension
 
-DATA_DIR = "suetes/data"          # default; overridden per-run by the config's data_dir
-OUTDIR = os.environ.get("SUETES_OUT_DIR", "suetes/output")   # NetCDF output dir (redirectable to another disk)
+DATA_DIR = "inputs"          # default; overridden per-run by the config's data_dir
+OUTDIR = os.environ.get("SUETES_OUT_DIR", "output/simulations")   # NetCDF output dir (redirectable to another disk)
 
 
 def main():
@@ -119,7 +119,7 @@ def main():
             f"It predates the decoupled preprocessing -- rebuild it:\n"
             f"    python runs/preprocess_NAM22.py --config {cli_args.config}")
     grid = build_grid_from_static(p, static['h'])
-    land_fraction = jnp.asarray(static['land_fraction'], dtype=jnp.float64)
+    land_fraction = jnp.asarray(static['land_fraction'], dtype=float)
     _dzc = np.asarray(grid.dz_m_full[nx // 2, ny // 2, :])
     print(f"[GRID] kappa={kappa} | layer thickness bottom {_dzc[0]:.0f} m -> top {_dzc[-1]:.0f} m | "
           f"min in domain {float(jnp.min(grid.dz_m_full)):.0f} m")
@@ -143,7 +143,7 @@ def main():
     initial_state.pop('theta_skt', None)
     for _k in ('cc', 'clwc', 'ciwc', 'tcc', 'land_fraction'):  # ERA5 cloud is diagnostic-only (read from BC), not prognostic
         initial_state.pop(_k, None)
-    initial_state = jax.tree.map(lambda x: jnp.asarray(x, dtype=jnp.float64), initial_state)
+    initial_state = jax.tree.map(lambda x: jnp.asarray(x, dtype=float), initial_state)
 
     z0 = land_fraction * 0.1 + (1.0 - land_fraction) * 1e-4
     eps = land_fraction * 0.0 + (1.0 - land_fraction) * 0.3
@@ -354,9 +354,9 @@ def main():
     def step_fn(curr_state, step_idx):
         t_curr = step_idx * dt
         bc = time_manager.get_forcing(t_curr)
-        dyn_theta_surf = land_fraction * jnp.asarray(bc['theta_skt'], jnp.float64) + (1.0 - land_fraction) * jnp.asarray(bc['th_v'][:, :, 0], jnp.float64)
+        dyn_theta_surf = land_fraction * jnp.asarray(bc['theta_skt'], float) + (1.0 - land_fraction) * jnp.asarray(bc['th_v'][:, :, 0], float)
         curr_state['theta_surf'] = dyn_theta_surf
-        curr_state['target_th_v'] = jnp.asarray(bc['th_v'], jnp.float64)
+        curr_state['target_th_v'] = jnp.asarray(bc['th_v'], float)
 
         def bc_fn(s_next, _):
             return sponge.blend(s_next, bc)
@@ -374,7 +374,7 @@ def main():
 
         next_state = stepper.step(curr_state, t_curr, forcing=None, bc_fn=bc_fn, ml_params={'t_curr': t_curr})
         next_state['theta_surf'] = dyn_theta_surf
-        next_state['target_th_v'] = jnp.asarray(bc['th_v'], jnp.float64)
+        next_state['target_th_v'] = jnp.asarray(bc['th_v'], float)
         if use_rad:
             next_state['rad_th_tend'] = curr_state['rad_th_tend']   # carry cached heating forward
             next_state['sw_sfc'] = curr_state['sw_sfc']             # carry hourly surface SW

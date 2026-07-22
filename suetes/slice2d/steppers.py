@@ -75,7 +75,7 @@ class VerticalPreconditioner2D:
     Solving this proxy system provides an excellent initial guess for the full 2D GMRES solver, 
     massively accelerating convergence by resolving the vertically propagating sound waves analytically.
     """
-    def __init__(self, physics, dt, bg_precomputed, beta=0.65):
+    def __init__(self, physics, dt, bg_precomputed, beta=0.65, pi_scale=1000.0):
         r"""
         Initializes the preconditioner and pre-assembles the tridiagonal matrix coefficients.
         
@@ -84,11 +84,12 @@ class VerticalPreconditioner2D:
             dt (float): Time step $\Delta t$ in seconds.
             bg_precomputed (dict): Precomputed reference states and metrics.
             beta (float): Semi-implicit off-centering parameter ($0.5 \leq \beta \leq 1.0$).
+            pi_scale (float, optional): Scaling factor for Exner pressure. Defaults to 1000.0.
         """
         self.physics = physics
         self.dt = dt
         self.alpha = beta * dt
-        self.pi_scale = 100000.0
+        self.pi_scale = pi_scale
         
         # Extract background fields
         self.th_v_w = bg_precomputed['th_v_at_w']
@@ -353,21 +354,24 @@ class SemiImplicitSolver:
     Wraps the JAX GMRES solver to resolve the implicit acoustic and gravity wave equations.
     
     Solves the linear system:
-    $$ \\mathbf{L}(\\mathbf{x}^{n+1}) = \\mathbf{R}_{adv}^n $$
-    where $\\mathbf{L}$ is the linear operator defining the fast wave dynamics, and $\\mathbf{R}$ 
+    $$ \mathbf{L}(\mathbf{x}^{n+1}) = \mathbf{R}_{adv}^n $$
+    where $\mathbf{L}$ is the linear operator defining the fast wave dynamics, and $\mathbf{R}$ 
     is the explicit right-hand side advected to the arrival points.
     """
-    def __init__(self, grid, physics, dt):
+    def __init__(self, grid, physics, dt, solver_tol=1e-4, solver_maxiter=10, solver_restart=10):
         """
         Parameters:
             grid (StaggeredGrid): The 2D grid object.
             physics (VerticalSlice): The spatial physics operator.
-            dt (float): Time step $\\Delta t$ in seconds.
+            dt (float): Time step $\Delta t$ in seconds.
         """
         self.grid = grid
         self.physics = physics
         self.dt = dt
-        self.pi_scale = 100000.0
+        self.pi_scale = 1000.0
+        self.solver_tol = solver_tol
+        self.solver_maxiter = solver_maxiter
+        self.solver_restart = solver_restart
 
     def precompute_bg(self, bg_state):
         """
@@ -393,23 +397,31 @@ class SemiImplicitSolver:
         bg['dz_u'] = self.physics.op.avg_m_to_u(bg['dz_m_full'])
         return bg
 
-    def solve(self, rhs_prime, bg_precomputed, beta=0.65, preconditioner=None):
+    def solve(self, rhs_prime, bg_precomputed, beta=0.65, preconditioner=None, x0=None):
         """
         Executes the GMRES solve. State variables are scaled to an $O(1)$ magnitude 
         to ensure stable and well-conditioned matrix operations inside the Krylov subspace.
         
         Parameters:
-            rhs_prime (dict): Advected right-hand side forcing $\\mathbf{R}$.
+            rhs_prime (dict): Advected right-hand side forcing $\mathbf{R}$.
             bg_precomputed (dict): Precomputed stationary variables.
-            beta (float): Implicit off-centering parameter $\\beta$.
-            preconditioner (Callable): Preconditioner $\\mathbf{M}^{-1}$ function to accelerate GMRES.
+            beta (float): Implicit off-centering parameter $\beta$.
+            preconditioner (Callable): Preconditioner $\mathbf{M}^{-1}$ function to accelerate GMRES.
+            x0 (dict, optional): Initial guess for the solution variables.
             
         Returns:
-            dict: The implicitly solved dynamic updates $\\mathbf{x}^{n+1}$.
+            dict: The implicitly solved dynamic updates $\mathbf{x}^{n+1}$.
         """
         rhs_scaled = {
             'u': rhs_prime['u'], 'w': rhs_prime['w'], 'pi': rhs_prime['pi'] * self.pi_scale, 'eta_dot': rhs_prime['eta_dot']
         }
+
+        if x0 is not None:
+            x0_scaled = {
+                'u': x0['u'], 'w': x0['w'], 'pi': x0['pi'] * self.pi_scale, 'eta_dot': x0['eta_dot']
+            }
+        else:
+            x0_scaled = rhs_scaled
 
         def A_fn(state_scaled):
             state_prime = {
@@ -422,7 +434,36 @@ class SemiImplicitSolver:
         
         M_fn = preconditioner if preconditioner is not None else None
 
-        x_sol_scaled, _ = gmres(A_fn, rhs_scaled, x0=rhs_scaled, tol=1e-4, maxiter=10, restart=10, M=M_fn)
+        def fwd_solve(matvec, b):
+            x_sol, _ = gmres(
+                matvec, b, x0=x0_scaled,
+                tol=self.solver_tol, maxiter=self.solver_maxiter, restart=self.solver_restart,
+                M=M_fn
+            )
+            return x_sol
+
+        if M_fn is not None:
+            def bwd_solve(matvec_T, b):
+                M_T_raw = jax.linear_transpose(M_fn, rhs_scaled)
+                M_T_fn = lambda y: M_T_raw(y)[0]
+                y_sol, _ = gmres(
+                    matvec_T, b, x0=None,
+                    tol=self.solver_tol, maxiter=self.solver_maxiter, restart=self.solver_restart,
+                    M=M_T_fn
+                )
+                return y_sol
+        else:
+            def bwd_solve(matvec_T, b):
+                y_sol, _ = gmres(
+                    matvec_T, b, x0=None,
+                    tol=self.solver_tol, maxiter=self.solver_maxiter, restart=self.solver_restart,
+                    M=None
+                )
+                return y_sol
+
+        x_sol_scaled = jax.lax.custom_linear_solve(
+            A_fn, rhs_scaled, solve=fwd_solve, transpose_solve=bwd_solve
+        )
         
         return {
             'u': x_sol_scaled['u'], 'w': x_sol_scaled['w'], 'pi': x_sol_scaled['pi'] / self.pi_scale, 'eta_dot': x_sol_scaled['eta_dot']
@@ -433,19 +474,19 @@ class SISLStepper:
     The orchestrator for the 2-time-level Semi-Implicit Semi-Lagrangian (SISL) scheme.
     
     Evaluates the continuous governing equations:
-    $$ \\frac{D \\mathbf{x}}{Dt} = \\mathbf{N}(\\mathbf{x}) + \\mathbf{L}(\\mathbf{x}) $$
+    $$ \frac{D \mathbf{x}}{Dt} = \mathbf{N}(\mathbf{x}) + \mathbf{L}(\mathbf{x}) $$
     
     Using the time discretization:
-    $$ \\frac{\\mathbf{x}^{n+1}_a - \\mathbf{x}^n_d}{\\Delta t} = (1-\\beta) \\left[ \\mathbf{N}(\\mathbf{x}^n_d) + \\mathbf{L}(\\mathbf{x}^n_d) \\right] + \\beta \\mathbf{L}(\\mathbf{x}^{n+1}_a) $$
+    $$ \frac{\mathbf{x}^{n+1}_a - \mathbf{x}^n_d}{\Delta t} = (1-\beta) \left[ \mathbf{N}(\mathbf{x}^n_d) + \mathbf{L}(\mathbf{x}^n_d) \right] + \beta \mathbf{L}(\mathbf{x}^{n+1}_a) $$
     
-    Where $\\mathbf{N}$ contains slow nonlinear modes, $\\mathbf{L}$ contains fast linear modes, 
+    Where $\mathbf{N}$ contains slow nonlinear modes, $\mathbf{L}$ contains fast linear modes, 
     and subscripts $(a, d)$ denote the arrival and departure points respectively.
     """
-    def __init__(self, physics, dt, nu_ratio=0.0, use_mass_fixer=False, tracer_keys=None): 
+    def __init__(self, physics, dt, nu_ratio=0.0, use_mass_fixer=False, tracer_keys=None, solver_tol=1e-4, solver_maxiter=10, solver_restart=10): 
         """
         Parameters:
             physics (VerticalSlice): Spatial operators and constants.
-            dt (float): Time step $\\Delta t$ in seconds.
+            dt (float): Time step $\Delta t$ in seconds.
             nu_ratio (float): Non-dimensional hyper-diffusion strength.
             use_mass_fixer (bool): Whether to enforce global mass conservation on tracers.
             tracer_keys (list): List of state dictionary keys denoting passive tracers.
@@ -457,7 +498,9 @@ class SISLStepper:
         self.tracer_keys = tracer_keys if tracer_keys is not None else []
         
         self.advector = SemiLagrangianAdvector(physics.grid, physics, dt)
-        self.implicit_solver = SemiImplicitSolver(physics.grid, physics, dt)
+        self.implicit_solver = SemiImplicitSolver(
+            physics.grid, physics, dt, solver_tol=solver_tol, solver_maxiter=solver_maxiter, solver_restart=solver_restart
+        )
 
     def _apply_mass_fixer(self, state_before, state_after):
         """
@@ -573,8 +616,8 @@ class SISLStepper:
         rhs_prime = {'u': rhs_u, 'w': rhs_w, 'pi': rhs_pi_prime, 'eta_dot': R_eta_dot}
 
         # Instantiate preconditioner and solve
-        precond = VerticalPreconditioner2D(self.physics, self.dt, bg_precomputed, beta)
-        state_prime_next = self.implicit_solver.solve(rhs_prime, bg_precomputed, beta=beta, preconditioner=precond)
+        precond = VerticalPreconditioner2D(self.physics, self.dt, bg_precomputed, beta, pi_scale=self.implicit_solver.pi_scale)
+        state_prime_next = self.implicit_solver.solve(rhs_prime, bg_precomputed, beta=beta, preconditioner=precond, x0=state_prime_n)
 
         # Final state assembly
         pi_next = state_prime_next['pi'] + self.physics.pi_bg

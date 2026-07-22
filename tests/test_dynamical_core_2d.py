@@ -13,7 +13,7 @@ from suetes.shared.driver import Simulation
 
 CONSTANTS = {'g': 9.81, 'cp': 1004.0, 'cvd': 717.0, 'Rd': 287.0, 'p0': 100000.0}
 
-output_dir = "suetes/plots/benchmarks"
+output_dir = "output/plots/benchmarks"
 os.makedirs(output_dir, exist_ok=True)
 
 # ====================================================================

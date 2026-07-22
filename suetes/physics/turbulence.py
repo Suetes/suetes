@@ -67,7 +67,7 @@ class SmagorinskyLillySGS:
                 self.op.avg(self.op.diff(w_m, axis=1, from_loc='m', to_loc='v'), axis=1, from_loc='v', to_loc='m')
 
         # Magnitude of the Strain Rate Tensor |S|
-        S_mag = jnp.sqrt(2.0 * (D11_m**2 + D22_m**2 + D33_m**2) + D12_m**2 + D13_m**2 + D23_m**2 + 1e-12)
+        S_mag = jnp.sqrt(2.0 * (D11_m**2 + D22_m**2 + D33_m**2) + D12_m**2 + D13_m**2 + D23_m**2 + self.c.get('eps_l', 1e-12))
 
         # Buoyancy Frequency (N^2) and Richardson Number (Ri)
         dth_dz_w = self.op.diff(th_v, axis=2, from_loc='m', to_loc='w') * (self.grid.dz / bg['dz_w_full'])
@@ -75,7 +75,7 @@ class SmagorinskyLillySGS:
 
         Ri = N2_m / (S_mag**2)
         val = 1.0 - Ri / self.Ri_c
-        safe_val = jnp.maximum(val, 1e-5) # Prevents exactly 0.0 inside the sqrt
+        safe_val = jnp.maximum(val, self.c.get('eps_l', 1e-5)) # Prevents exactly 0.0 inside the sqrt
         f_Ri = jnp.where(val > 0.0, jnp.sqrt(safe_val), 0.0)
 
         # Calculate Unbounded Eddy Viscosity (nu_t)
@@ -217,13 +217,13 @@ class McFarlaneVerticalDiffusion:
         """
         abs_Ri = jnp.abs(Ri)
         # Unstable branch (Ri < 0): f > 1, enhanced mixing
-        safe_abs_Ri = jnp.maximum(abs_Ri, 1e-5) # Protect the sqrt
+        safe_abs_Ri = jnp.maximum(abs_Ri, self.c.get('eps_l', 1e-5)) # Protect the sqrt
         f_unstable = 1.0 + 10.0 * abs_Ri / (1.0 + 10.0 * jnp.sqrt(safe_abs_Ri / 87.0))
 
         # Stable branch (0 <= Ri <= 1/(5*eps)): f < 1, reduced mixing
         f_stable = (1.0 - 5.0 * self.epsilon * Ri) ** 2 \
                    / (1.0 + 10.0 * (1.0 - self.epsilon) * Ri)
-        Ri_cutoff = 1.0 / (5.0 * self.epsilon + 1e-5)
+        Ri_cutoff = 1.0 / (5.0 * self.epsilon + self.c.get('eps_l', 1e-5))
         f = jnp.where(Ri < 0.0, f_unstable, f_stable)
         f = jnp.where(Ri > Ri_cutoff, 0.0, f)
         return f
@@ -246,7 +246,7 @@ class McFarlaneVerticalDiffusion:
         dv_dz_w = self.op.diff(v_m, axis=2, from_loc='m', to_loc='w') \
                   * (self.grid.dz / bg['dz_w_full'])
         shear_sq_w = du_dz_w ** 2 + dv_dz_w ** 2
-        shear_w = jnp.sqrt(shear_sq_w + 1e-12)
+        shear_w = jnp.sqrt(shear_sq_w + self.c.get('eps_l', 1e-12))
 
         # Buoyancy at w-points
         dth_dz_w = self.op.diff(th_v, axis=2, from_loc='m', to_loc='w') \
@@ -254,7 +254,7 @@ class McFarlaneVerticalDiffusion:
         N2_w = (self.c['g'] / bg['th_v_w']) * dth_dz_w
 
         # Gradient Richardson number
-        Ri_w = N2_w / (shear_sq_w + 1e-12)
+        Ri_w = N2_w / (shear_sq_w + self.c.get('eps_l', 1e-12))
         f_w = self._stability_function(Ri_w)
 
         # Eddy diffusivity at w-points
@@ -318,7 +318,7 @@ class TKE15Closure:
 
         # Average TKE to w-points to compute Eddy Viscosity (Km)
         e_w = self.op.avg(e, axis=2, from_loc='m', to_loc='w')
-        K_m_w = self.c_k * self.l_mix * jnp.sqrt(jnp.maximum(e_w, 1e-6))
+        K_m_w = self.c_k * self.l_mix * jnp.sqrt(jnp.maximum(e_w, self.c.get('eps_l', 1e-6)))
         
         # Assume Pr_t = 1 for simplicity, so K_h = K_m
         K_h_w = K_m_w
@@ -326,7 +326,7 @@ class TKE15Closure:
         # TKE Tendency terms (Production - Dissipation)
         prod_shear = K_m_w * shear_sq
         prod_buoy = -K_h_w * N2
-        dissipation = (jnp.maximum(e_w, 1e-6)**1.5) / self.l_mix
+        dissipation = (jnp.maximum(e_w, self.c.get('eps_l', 1e-6))**1.5) / self.l_mix
         
         tend_e_w = prod_shear + prod_buoy - dissipation
         tend_e_m = self.op.avg(tend_e_w, axis=2, from_loc='w', to_loc='m')

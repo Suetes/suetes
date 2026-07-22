@@ -47,7 +47,7 @@ class TopographyProcessor:
         url = "https://dap.ceda.ac.uk/bodc/gebco/global/gebco_2026/ice_surface_elevation/netcdf/GEBCO_2026.zip?download=1"
         zip_path = gebco_path.replace(".nc", ".zip")
         
-        # Ensure the target directory exists (e.g., suetes/data/)
+        # Ensure the target directory exists (e.g., inputs/)
         os.makedirs(os.path.dirname(gebco_path), exist_ok=True)
         
         try:
@@ -182,8 +182,10 @@ class TopographyProcessor:
         target_lon = (target_lon + 180.0) % 360.0 - 180.0
 
         print("[GEOMETRY] Interpolating GEBCO topography...")
-        min_lat, max_lat = float(target_lat.min()) - 2.0, float(target_lat.max()) + 2.0
-        min_lon, max_lon = float(target_lon.min()) - 2.0, float(target_lon.max()) + 2.0
+        min_lat = max(-90.0, float(target_lat.min()) - 2.0)
+        max_lat = min(90.0, float(target_lat.max()) + 2.0)
+        min_lon = max(-180.0, float(target_lon.min()) - 2.0)
+        max_lon = min(180.0, float(target_lon.max()) + 2.0)
 
         gebco_lat, gebco_lon, gebco_z = self._get_gebco_topo(min_lat, max_lat, min_lon, max_lon)
         interp_gebco = RegularGridInterpolator((gebco_lat, gebco_lon), gebco_z, bounds_error=False, fill_value=None)

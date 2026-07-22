@@ -49,10 +49,10 @@ class McFarlaneSurfaceDrag:
         sign conventions, implemented here as an explicit + sign.
         """
         abs_Ri = jnp.abs(Ri_B)
-        safe_abs_Ri = jnp.maximum(abs_Ri, 1e-5) 
+        safe_abs_Ri = jnp.maximum(abs_Ri, self.c.get('eps_l', 1e-5)) 
         
         F_unstable = 1.0 + 10.0 * abs_Ri \
-                     / (1.0 + 10.0 * jnp.sqrt(safe_abs_Ri / (87.0 * A_sq + 1e-5)))
+                     / (1.0 + 10.0 * jnp.sqrt(safe_abs_Ri / (87.0 * A_sq + self.c.get('eps_l', 1e-5))))
         F_unstable = jnp.minimum(F_unstable, 5.0)
         
         # 2. Stable Branch (Protect against the -0.1 division-by-zero trap!)
@@ -63,7 +63,7 @@ class McFarlaneSurfaceDrag:
                    / (1.0 + 10.0 * (1.0 - self.epsilon) * safe_Ri_B_stable)
                    
         # 3. Cutoff and Masking (Update 1e-12 to 1e-5 for FP32 safety)
-        Ri_cutoff = 1.0 / (5.0 * self.epsilon + 1e-5)
+        Ri_cutoff = 1.0 / (5.0 * self.epsilon + self.c.get('eps_l', 1e-5))
         
         F = jnp.where(Ri_B < 0.0, F_unstable, F_stable)
         F = jnp.where(Ri_B > Ri_cutoff, 0.0, F)
@@ -76,7 +76,7 @@ class McFarlaneSurfaceDrag:
         # Mass-point wind speed throughout the column, with a soft floor
         u_m = self.op.avg(u, axis=0, from_loc='u', to_loc='m')
         v_m = self.op.avg(v, axis=1, from_loc='v', to_loc='m')
-        speed_m = jnp.sqrt(u_m ** 2 + v_m ** 2 + 1e-8)
+        speed_m = jnp.sqrt(u_m ** 2 + v_m ** 2 + self.c.get('eps_s', 1e-8))
         speed_u = self.op.avg(speed_m, axis=0, from_loc='m', to_loc='u')
         speed_v = self.op.avg(speed_m, axis=1, from_loc='m', to_loc='v')
 
@@ -92,7 +92,7 @@ class McFarlaneSurfaceDrag:
         C_DN = (self.k_vk / log_ratio) ** 2
 
         # A^2 from eq. (2.5), used in the unstable branch denominator
-        A_sq = (self.z_0 / z_L) * (self.k_vk ** 4) / (C_DN ** 2 + 1e-30)
+        A_sq = (self.z_0 / z_L) * (self.k_vk ** 4) / (C_DN ** 2 + self.c.get('eps', 1e-30))
 
         # Surface temperature (Dirichlet from outside)
         theta_surf = state.get('theta_surf', self.theta_surf)
@@ -141,12 +141,13 @@ class BulkAerodynamicPBL:
 
     Applies a bulk aerodynamic drag formula exclusively to the lowest model layer.
     """
-    def __init__(self, grid, operators, theta_surf=None, Cd_ocean=0.001, Ch_ocean=0.001):
+    def __init__(self, grid, operators, theta_surf=None, Cd_ocean=0.001, Ch_ocean=0.001, constants=None):
         self.grid = grid
         self.op = operators
         self.Cd = Cd_ocean  
         self.Ch = Ch_ocean
         self.theta_surf = theta_surf # Static surface skin temperature boundary condition
+        self.c = constants or {}
 
     def get_tendencies(self, state, bg):
         u, v = state['u'], state['v']
@@ -156,7 +157,7 @@ class BulkAerodynamicPBL:
         v_m = self.op.avg(v, axis=1, from_loc='v', to_loc='m')
         
         # Calculate full 3D wind speed magnitude 
-        speed_m_3d = jnp.sqrt(u_m**2 + v_m**2 + 1e-8) 
+        speed_m_3d = jnp.sqrt(u_m**2 + v_m**2 + self.c.get('eps_s', 1e-8)) 
         
         # Map the 3D wind speed back to the staggered faces
         speed_u_3d = self.op.avg(speed_m_3d, axis=0, from_loc='m', to_loc='u')
@@ -220,7 +221,7 @@ class BucketLSM:
         # Calculate full 3D mass-point wind speed first
         u_m = self.op.avg(u, axis=0, from_loc='u', to_loc='m')
         v_m = self.op.avg(v, axis=1, from_loc='v', to_loc='m')
-        speed_m_3d = jnp.sqrt(u_m**2 + v_m**2 + 1e-8)
+        speed_m_3d = jnp.sqrt(u_m**2 + v_m**2 + self.c.get('eps_s', 1e-8))
         
         # Average the 3D speed back to the staggered faces
         speed_u_3d = self.op.avg(speed_m_3d, axis=0, from_loc='m', to_loc='u')
