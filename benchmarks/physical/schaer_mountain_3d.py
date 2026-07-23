@@ -21,6 +21,8 @@ import subprocess
 import sys
 
 import numpy as np
+import xarray as xr
+from suetes.shared.artifacts import save_plot_dataset
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -476,6 +478,48 @@ def main():
     comparison_time = args.t_end if args.comparison_time is None else args.comparison_time
     plot_comparison(paths["sisl"], paths["split-explicit"], args.output_dir, comparison_time)
     plot_evolution(paths["sisl"], paths["split-explicit"], args.output_dir)
+    sisl, split = load_pair(paths["sisl"], paths["split-explicit"])
+    dataset = xr.Dataset(
+        data_vars={
+            "vertical_velocity": (
+                ("core", "time", "x", "z_interface"),
+                np.stack([sisl["w_snapshots"], split["w_snapshots"]]),
+            ),
+            "momentum_flux": (
+                ("core", "time", "z_level"),
+                np.stack([
+                    sisl["momentum_flux_snapshots"],
+                    split["momentum_flux_snapshots"],
+                ]),
+            ),
+            "physical_height_interface": (
+                ("x", "z_interface"), sisl["z_w"]
+            ),
+            "physical_height_level": (("x", "z_level"), sisl["z_m"]),
+            "terrain_height": ("x", sisl["terrain"]),
+        },
+        coords={
+            "core": ["sisl", "split-explicit"],
+            "time": sisl["snapshot_times"],
+            "x": sisl["x"],
+            "z_interface": np.arange(sisl["z_w"].shape[-1]),
+            "z_level": np.arange(sisl["z_m"].shape[-1]),
+        },
+        attrs={
+            "dx_m": args.dx, "dz_m": args.dz, "dt_s": args.dt,
+            "t_end_s": args.t_end, "stabilization": args.stabilization,
+            "snapshot_interval_s": args.snapshot_interval,
+        },
+    )
+    artifact = save_plot_dataset(
+        dataset,
+        args.data_dir / (
+            f"schaer_mountain_dual_core_dx{args.dx:g}_dz{args.dz:g}_"
+            f"dt{args.dt:g}_t{args.t_end:g}.nc"
+        ),
+        experiment="schaer_mountain_dual_core_3d",
+    )
+    print(f"Saved plot-ready dual-core artifact to {artifact}")
 
 
 if __name__ == "__main__":

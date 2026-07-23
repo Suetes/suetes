@@ -9,6 +9,7 @@ import optax
 
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
+import xarray as xr
 
 from suetes.regional3d.geometry import RegionalGrid3D
 from suetes.regional3d.euler import Euler3D
@@ -17,6 +18,7 @@ from suetes.regional3d.steppers import build_dynamical_core
 from suetes.regional3d.boundaries import BenchmarkSponge
 from suetes.shared.driver import Simulation
 from suetes.shared.optimization import OptaxSolver
+from suetes.shared.artifacts import save_plot_dataset
 
 output_dir = "output/plots/inversion"
 os.makedirs(output_dir, exist_ok=True)
@@ -35,6 +37,14 @@ t_end = 1800.0
 num_steps = int(t_end / dt)
 u_bg = 10.0
 constants = {'g': 9.81, 'cp': 1004.0, 'Rd': 287.0, 'cvd': 717.0, 'p0': 100000.0}
+
+# Pin the settings used by this experiment.  In particular, do not inherit the
+# much stricter production SISL defaults (100 GMRES vectors at 1e-12): tracing
+# those through the full optimization window creates an unnecessarily enormous
+# reverse-mode graph.  These are the original, verified experiment settings.
+SISL_SOLVER_TOL = 1.0e-4
+SISL_SOLVER_MAXITER = 20
+SISL_SOLVER_RESTART = 20
 
 num_rbfs = 8
 mu_rbf = jnp.linspace(-15000.0, 10000.0, num_rbfs) 
@@ -80,7 +90,11 @@ def objective_fn(z_params):
     if CORE_TYPE.lower() == "sisl":
         core_kwargs = {
             "dt": dt, "nu_div_factor": 0.0, "nu_h_factor": 0.0, 
-            "damp_height": 12000.0, "max_damp": 0.5, "N_bv": 0.01
+            "damp_height": 12000.0, "max_damp": 0.5, "N_bv": 0.01,
+            "solver_tol": SISL_SOLVER_TOL,
+            "solver_maxiter": SISL_SOLVER_MAXITER,
+            "solver_restart": SISL_SOLVER_RESTART,
+            "use_checkpointing": True,
         }
     elif CORE_TYPE.lower() == "split-explicit":
         core_kwargs = {
@@ -93,10 +107,6 @@ def objective_fn(z_params):
         initial_state=state, **core_kwargs
     )
     
-    # Inject checkpointing for reverse-mode autodiff memory savings
-    if CORE_TYPE.lower() == "sisl":
-        stepper.use_checkpointing = True
-
     def bc_fn(state_in, forcing=None):
         ext_state = {
             'u': jnp.ones_like(state_in['u']) * u_bg,
@@ -130,6 +140,12 @@ optimizer = optax.chain(
 )
 
 print(f"\n[OPTIMIZATION] Launching {CORE_TYPE.upper()} inverse topography optimization...")
+if CORE_TYPE.lower() == "sisl":
+    print(
+        "[OPTIMIZATION] SISL GMRES settings: "
+        f"tol={SISL_SOLVER_TOL:g}, maxiter={SISL_SOLVER_MAXITER}, "
+        f"restart={SISL_SOLVER_RESTART}"
+    )
 solver = OptaxSolver(objective_fn, optimizer, has_aux=True)
 optimal_z, history = solver.fit(
     z_params, 
@@ -228,7 +244,11 @@ def evaluate_topography(A_params):
     if CORE_TYPE.lower() == "sisl":
         core_kwargs = {
             "dt": dt, "nu_div_factor": 0.0, "nu_h_factor": 0.0, 
-            "damp_height": 12000.0, "max_damp": 0.5, "N_bv": 0.01
+            "damp_height": 12000.0, "max_damp": 0.5, "N_bv": 0.01,
+            "solver_tol": SISL_SOLVER_TOL,
+            "solver_maxiter": SISL_SOLVER_MAXITER,
+            "solver_restart": SISL_SOLVER_RESTART,
+            "use_checkpointing": False,
         }
     elif CORE_TYPE.lower() == "split-explicit":
         core_kwargs = {
@@ -241,9 +261,6 @@ def evaluate_topography(A_params):
         initial_state=state, **core_kwargs
     )
     
-    if CORE_TYPE.lower() == "sisl":
-        stepper.use_checkpointing = False
-
     def bc_fn(state_in, forcing=None):
         ext_state = {
             'u': jnp.ones_like(state_in['u']) * u_bg,
@@ -273,6 +290,7 @@ axs = axs.flatten()
 
 x_plot_1d = jnp.linspace(-nx*dx/2, nx*dx/2, nx) / 1000.0
 
+validation_energy, validation_w, validation_z, validation_terrain = [], [], [], []
 for idx, (title, A_params) in enumerate(configs_to_test):
     print(f"Evaluating {title}...")
     J_val, w_field, eval_grid = evaluate_topography(A_params)
@@ -282,6 +300,10 @@ for idx, (title, A_params) in enumerate(configs_to_test):
     for j in range(num_rbfs):
         h_terrain += A_params[j] * jnp.exp(-((x_plot_1d*1000.0 - mu_rbf[j])**2) / (2 * sigma_rbf**2))
     h_terrain = jnp.maximum(h_terrain, 0.0)
+    validation_energy.append(J_val)
+    validation_w.append(np.asarray(w_field[:, 1, :]))
+    validation_z.append(np.asarray(eval_grid.Z_w[:, 1, :]))
+    validation_terrain.append(np.asarray(h_terrain))
 
     # Plotting logic
     ax = axs[idx]
@@ -314,3 +336,52 @@ for idx, (title, A_params) in enumerate(configs_to_test):
 plt.tight_layout()
 plt.savefig(f'{output_dir}/inverse_topography_validation_{CORE_TYPE.lower()}.png', dpi=150, bbox_inches='tight')
 print(f"Validation complete. Saved to {output_dir}/inverse_topography_validation_{CORE_TYPE.lower()}.png")
+
+artifact = xr.Dataset(
+    data_vars={
+        "optimization_energy": ("optimization_step", np.asarray(energies)),
+        "coefficient_history": (
+            ("optimization_step", "rbf"), np.asarray(history_A)
+        ),
+        "validation_coefficients": (
+            ("configuration", "rbf"),
+            np.asarray([values for _, values in configs_to_test]),
+        ),
+        "validation_energy": ("configuration", np.asarray(validation_energy)),
+        "vertical_velocity": (
+            ("configuration", "x", "z_interface"),
+            np.asarray(validation_w),
+        ),
+        "physical_height": (
+            ("configuration", "x", "z_interface"),
+            np.asarray(validation_z),
+        ),
+        "terrain_height": (
+            ("configuration", "x"), np.asarray(validation_terrain)
+        ),
+    },
+    coords={
+        "optimization_step": np.arange(1, len(energies) + 1),
+        "configuration": [title for title, _ in configs_to_test],
+        "rbf": np.arange(num_rbfs),
+        "rbf_center": ("rbf", np.asarray(mu_rbf)),
+        "x": np.asarray(x_plot_1d) * 1000.0,
+        "z_interface": np.arange(nz + 1),
+    },
+    attrs={
+        "core": CORE_TYPE,
+        "best_optimization_index": int(best_idx),
+        "rbf_sigma_m": sigma_rbf,
+        "terrain_budget_m": total_dirt_budget,
+        "dt_s": dt,
+        "t_end_s": t_end,
+        "nx": nx, "ny": ny, "nz": nz,
+        "dx_m": dx, "dy_m": dy, "dz_m": dz,
+    },
+)
+artifact_path = save_plot_dataset(
+    artifact,
+    os.path.join(output_dir, f"gravity_wave_optimal_topography_{CORE_TYPE.lower()}.nc"),
+    experiment="gravity_wave_optimal_topography_3d",
+)
+print(f"Saved plot-ready artifact to {artifact_path}")

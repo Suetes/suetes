@@ -3,6 +3,10 @@
 import jax.numpy as jnp
 
 from suetes.shared.transforms import IntegralNeuralTransform, NEUVECoordinate
+from suetes.shared.transforms import GalChenSigma
+from experiments.neuve_coordinate_common import (
+    build_transport_case, random_3d_terrain, transport_reversibility,
+)
 
 
 def test_integral_neural_transform_has_exact_endpoints_and_positive_layers():
@@ -65,3 +69,25 @@ def test_global_decay_profile_is_shared_between_terrain_columns():
         atol=2.0e-6,
     )
     assert float(jnp.min(jnp.diff(physical_z, axis=-1))) > 0.0
+
+
+def test_reversible_transport_target_is_finite_and_mass_conservative():
+    error, history, _, diagnostics = transport_reversibility(
+        GalChenSigma(), random_3d_terrain(17), steps=2
+    )
+
+    assert history.shape == (2,)
+    assert jnp.isfinite(error)
+    assert float(error) > 0.0
+    # The unit test may run with JAX's default float32 configuration.
+    assert float(diagnostics[3]) < 1.0e-6
+
+
+def test_reversible_transport_has_closed_lateral_boundaries():
+    terrain = random_3d_terrain(17)
+    _, _, flow, _, _, _, _ = build_transport_case(
+        GalChenSigma(), terrain
+    )
+
+    assert float(jnp.max(jnp.abs(flow["u"][0]))) < 1.0e-6
+    assert float(jnp.max(jnp.abs(flow["u"][-1]))) < 1.0e-6
