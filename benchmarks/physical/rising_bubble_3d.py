@@ -19,6 +19,7 @@ import sys
 
 import numpy as np
 import matplotlib.pyplot as plt
+import xarray as xr
 
 import jax
 jax.config.update("jax_enable_x64", True)
@@ -28,6 +29,7 @@ from suetes.regional3d.euler import Euler3D
 from suetes.regional3d.geometry import RegionalGrid3D
 from suetes.regional3d.operators import CGridOperator3D
 from suetes.regional3d.steppers import build_dynamical_core
+from suetes.shared.artifacts import save_plot_dataset
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_DATA_DIR = REPO_ROOT / "output" / "benchmark_data"
@@ -589,6 +591,50 @@ def main() -> None:
         args.output_dir, comparison_time,
     )
     plot_evolution(paths["sisl"], paths["split-explicit"], args.output_dir)
+    with np.load(paths["sisl"]) as source:
+        sisl = {key: source[key] for key in source.files}
+    with np.load(paths["split-explicit"]) as source:
+        split = {key: source[key] for key in source.files}
+    dataset = xr.Dataset(
+        data_vars={
+            "theta_perturbation": (
+                ("core", "time", "x", "z"),
+                np.stack([
+                    sisl["theta_prime_snapshots"],
+                    split["theta_prime_snapshots"],
+                ]),
+            ),
+            "mass_drift": (
+                "core", [float(sisl["mass_error"]), float(split["mass_error"])]
+            ),
+            "symmetry_error": (
+                "core", [
+                    float(sisl["theta_symmetry_error"]),
+                    float(split["theta_symmetry_error"]),
+                ],
+            ),
+        },
+        coords={
+            "core": ["sisl", "split-explicit"],
+            "time": sisl["snapshot_times"],
+            "x": sisl["x"],
+            "z": sisl["z"],
+        },
+        attrs={
+            "dx_m": args.dx, "dt_s": dt, "t_end_s": args.t_end,
+            "stabilization": args.stabilization,
+            "snapshot_interval_s": args.snapshot_interval,
+        },
+    )
+    artifact = save_plot_dataset(
+        dataset,
+        args.data_dir / (
+            f"rising_bubble_dual_core_dx{args.dx:g}_dt{dt:g}_"
+            f"t{args.t_end:g}.nc"
+        ),
+        experiment="rising_bubble_dual_core_3d",
+    )
+    print(f"Saved plot-ready dual-core artifact to {artifact}")
 
 
 if __name__ == "__main__":

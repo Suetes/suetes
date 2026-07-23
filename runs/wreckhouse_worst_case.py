@@ -15,6 +15,7 @@ import math
 import jax
 import jax.numpy as jnp
 import numpy as np
+import xarray as xr
 
 from suetes.preprocessing.era5downloader import ERA5Manager
 from suetes.preprocessing.processor import ERA5Processor
@@ -23,6 +24,7 @@ from suetes.preprocessing.era2suetes import BoundaryProcessor, TimeManager
 
 from suetes.shared.transforms import SleveSimple
 from suetes.shared.driver import Simulation
+from suetes.shared.artifacts import save_plot_dataset
 
 from suetes.regional3d.geometry import RegionalGrid3D
 from suetes.regional3d.operators import CGridOperator3D
@@ -417,6 +419,68 @@ def main():
         maximum_temperature_perturbation_K=MAX_TEMP_PERT,
     )
     print(f"[OUTPUT] Saved numerical diagnostics to {result_path}")
+
+    # Store every field consumed by the publication dashboard.  This artifact
+    # is deliberately independent of live model/grid objects so the figure can
+    # be regenerated without ERA5 access or another nine-hour integration.
+    u_baseline_m = 0.5 * (
+        state_baseline_t7["u"][:-1] + state_baseline_t7["u"][1:]
+    )
+    u_adverse_m = 0.5 * (
+        state_worst_case_t7["u"][:-1] + state_worst_case_t7["u"][1:]
+    )
+    x_mesh, y_mesh = np.meshgrid(grid.x_m, grid.y_m, indexing="ij")
+    latitude, longitude = grid.proj.get_lat_lon(x_mesh, y_mesh)
+    artifact = xr.Dataset(
+        data_vars={
+            "era5_wind": ("time", np.asarray(ts_era5)),
+            "baseline_wind": ("time", np.asarray(ts_baseline)),
+            "adverse_wind": ("time", np.asarray(ts_worst_case)),
+            "thermal_perturbation_surface": (
+                ("x", "y"), np.asarray(pert_th_v[:, :, 0])
+            ),
+            "latitude": (("x", "y"), np.asarray(latitude)),
+            "longitude": (("x", "y"), np.asarray(longitude)),
+            "physical_height": (
+                ("x", "z"), np.asarray(grid.Z_m[:, j_w, :])
+            ),
+            "terrain_height": ("x", np.asarray(grid.Z_w[:, j_w, 0])),
+            "baseline_zonal_wind": (
+                ("x", "z"), np.asarray(u_baseline_m[:, j_w, :]) * 3.6
+            ),
+            "zonal_wind_anomaly": (
+                ("x", "z"),
+                np.asarray(u_adverse_m[:, j_w, :] - u_baseline_m[:, j_w, :])
+                * 3.6,
+            ),
+            "baseline_virtual_potential_temperature": (
+                ("x", "z"), np.asarray(state_baseline_t7["th_v"][:, j_w, :])
+            ),
+        },
+        coords={
+            "time": time_axis_mins * 60.0,
+            "x": np.asarray(grid.x_m),
+            "y": np.asarray(grid.y_m),
+            "z": np.arange(grid.nz),
+        },
+        attrs={
+            "target_i": i_w, "target_j": j_w,
+            "sponge_depth": sponge_depth,
+            "control_time_seconds": t_spinup_end,
+            "target_time_seconds": t_peak,
+            "end_time_seconds": t_total_end,
+            "dt_seconds": dt,
+            "baseline_target_wind_kmh": baseline_target,
+            "adverse_target_wind_kmh": adverse_target,
+            "taylor_relative_error": float(taylor_relative_error),
+        },
+    )
+    artifact_path = save_plot_dataset(
+        artifact, os.path.join(output_dir, f"{RUN_NAME}_plot_data.nc"),
+        experiment="wreckhouse_worst_case",
+        metadata={"control_model": "dry resolved dynamics; nu_h=nu_div=0.20"},
+    )
+    print(f"[OUTPUT] Saved plot-ready dashboard artifact to {artifact_path}")
 
     # Generate dashboard using the T=7h states for the cross-sections
     print("[PLOT] Generating adjoint impact dashboard...")

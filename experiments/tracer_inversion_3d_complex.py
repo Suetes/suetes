@@ -1,5 +1,6 @@
 import os
 import argparse
+import sys
 import time
 
 import jax
@@ -7,6 +8,7 @@ import jax.numpy as jnp
 import numpy as np
 import optax
 import matplotlib.pyplot as plt
+import xarray as xr
 
 from suetes.regional3d.geometry import RegionalGrid3D
 from suetes.regional3d.euler import Euler3D
@@ -15,6 +17,7 @@ from suetes.regional3d.boundaries import BenchmarkSponge
 from suetes.regional3d.steppers import build_dynamical_core
 from suetes.physics.base import PhysicsSuite
 from suetes.shared.optimization import OptaxSolver
+from suetes.shared.artifacts import save_plot_dataset
 
 # =====================================================================
 # CONFIGURATION & COMMAND-LINE ARGUMENTS
@@ -24,12 +27,20 @@ ap.add_argument('--core', type=str, default='split-explicit', choices=['sisl', '
                 help="Dynamical core type to run ('sisl' or 'split-explicit')")
 ap.add_argument('--steps', type=int, default=100,
                 help="Number of optimization steps")
+ap.add_argument(
+    "--output-dir", default="output/tracer_inversion_3d_complex",
+    help="Directory for the NetCDF artifact and optional figures",
+)
+ap.add_argument(
+    "--plot-inline", action="store_true",
+    help="Also run the legacy in-process plotting block",
+)
 args = ap.parse_args()
 
 CORE_TYPE = args.core
 total_opt_steps = args.steps
 
-output_dir = "output/plots/tracer_inversion"
+output_dir = args.output_dir
 os.makedirs(output_dir, exist_ok=True)
 
 print(f"=====================================================================")
@@ -52,6 +63,9 @@ t_end = 1200.0  # 20 minutes of advection
 num_steps = int(t_end / dt)
 
 constants = {'g': 9.81, 'cp': 1004.0, 'Rd': 287.0, 'cvd': 717.0, 'p0': 100000.0}
+SISL_SOLVER_TOL = 1.0e-4
+SISL_SOLVER_MAXITER = 20
+SISL_SOLVER_RESTART = 20
 
 # --- 2. DYNAMIC 3D TOPOGRAPHY (TWO PEAKS) ---
 def terrain_profile(x, y):
@@ -170,7 +184,10 @@ true_initial_state = create_state_with_tracer(true_params[0], true_params[1], tr
 if CORE_TYPE.lower() == "sisl":
     core_kwargs = {
         "dt": dt, "nu_div_factor": 0.0, "nu_h_factor": 0.0, 
-        "damp_height": 4000.0, "max_damp": 0.5, "N_bv": 0.01
+        "damp_height": 4000.0, "max_damp": 0.5, "N_bv": 0.01,
+        "solver_tol": SISL_SOLVER_TOL,
+        "solver_maxiter": SISL_SOLVER_MAXITER,
+        "solver_restart": SISL_SOLVER_RESTART,
     }
 elif CORE_TYPE.lower() == "split-explicit":
     core_kwargs = {
@@ -249,6 +266,97 @@ print(f"\n====================================================================="
 print(f"[RESULTS] True Parameters:    X={true_params[0]:.2f}, Y={true_params[1]:.2f}, Z={true_params[2]:.2f}, Amp={true_params[3]:.2f}")
 print(f"[RESULTS] Recovered Parameters: X={optimal_params[0]:.2f}, Y={optimal_params[1]:.2f}, Z={optimal_params[2]:.2f}, Amp={optimal_params[3]:.2f}")
 print(f"=====================================================================")
+
+# Save only the reduced fields needed by the figures, rather than the full
+# time-dependent model state.  This keeps plotting independent of JAX and
+# avoids repeating the inversion whenever the figure style changes.
+snapshot_indices = sorted(set([
+    max(0, min(num_steps // 4 - 1, num_steps - 1)),
+    max(0, min(num_steps // 2 - 1, num_steps - 1)),
+    max(0, min(3 * num_steps // 4 - 1, num_steps - 1)),
+    num_steps - 1,
+]))
+optimal_state = create_state_with_tracer(
+    optimal_params[0], optimal_params[1], optimal_params[2], optimal_params[3]
+)
+_, (recovered_sensor_history, _) = generate_target_data(optimal_state)
+jax.block_until_ready(recovered_sensor_history)
+parameter_history = np.stack([
+    np.asarray(guess_params),
+    *[np.asarray(value) for value in history["params"]],
+])
+artifact = xr.Dataset(
+    data_vars={
+        "plume_snapshot": (
+            ("snapshot", "x", "y", "z"),
+            np.asarray(plume_history[jnp.asarray(snapshot_indices)]),
+        ),
+        "physical_height": (
+            ("x", "y", "z"), np.asarray(grid.Z_m) / 1000.0
+        ),
+        "terrain_height": (
+            ("x", "y"),
+            np.asarray(terrain_profile(
+                grid.x_m[:, None], grid.y_m[None, :]
+            )) / 1000.0,
+        ),
+        "target_sensor_concentration": (
+            ("time", "sensor"), np.asarray(target_sensor_history)
+        ),
+        "recovered_sensor_concentration": (
+            ("time", "sensor"), np.asarray(recovered_sensor_history)
+        ),
+        "parameter_history": (
+            ("optimization_state", "parameter"), parameter_history
+        ),
+        "optimization_loss": (
+            "optimization_step", np.asarray(history["loss"])
+        ),
+        "sensor_location": (
+            ("sensor", "spatial_component"), np.asarray(sensor_locs)
+        ),
+        "sensor_index": (
+            ("sensor", "index_component"), np.asarray(sensor_indices)
+        ),
+        "true_parameter": ("parameter", np.asarray(true_params)),
+        "recovered_parameter": ("parameter", np.asarray(optimal_params)),
+    },
+    coords={
+        "snapshot": np.asarray(snapshot_indices),
+        "snapshot_time": (
+            "snapshot", (np.asarray(snapshot_indices) + 1) * dt
+        ),
+        "x": np.asarray(grid.x_m) / 1000.0,
+        "y": np.asarray(grid.y_m) / 1000.0,
+        "z": np.arange(nz),
+        "time": (np.arange(num_steps) + 1) * dt,
+        "sensor": np.arange(len(sensor_locs)),
+        "parameter": ["x_km", "y_km", "z_km", "amplitude"],
+        "optimization_step": np.arange(1, len(history["loss"]) + 1),
+        "optimization_state": np.arange(parameter_history.shape[0]),
+        "spatial_component": ["x_km", "y_km", "z_km"],
+        "index_component": ["i", "j", "k"],
+    },
+    attrs={
+        "core": CORE_TYPE,
+        "dt_s": dt, "t_end_s": t_end,
+        "nx": nx, "ny": ny, "nz": nz,
+        "dx_m": dx, "dy_m": dy, "dz_m": dz,
+    },
+)
+artifact_path = save_plot_dataset(
+    artifact,
+    os.path.join(output_dir, f"tracer_inversion_3d_complex_{CORE_TYPE}.nc"),
+    experiment="tracer_inversion_3d_complex",
+)
+print(f"[OUTPUT] Saved plot-ready inversion artifact to {artifact_path}")
+if not args.plot_inline:
+    print(
+        "[NEXT] Generate figures with: "
+        f"{sys.executable} experiments/plot_tracer_inversion_3d_complex.py "
+        f"{artifact_path}"
+    )
+    raise SystemExit(0)
 
 # --- 9. VISUALIZATIONS ---
 print("\n[PLOT] Generating visualizations...")

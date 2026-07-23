@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tune spatial NEUVE on a manifest containing one or N terrains."""
+"""Train spatial NEUVE for one of the supported physical objectives."""
 
 import argparse
 import os
@@ -14,17 +14,26 @@ import matplotlib.pyplot as plt
 import numpy as np
 import optax
 
-from experiments.neuve_pgf_common import (
-    DEFAULT_STEPS, build_case, grid_diagnostics, load_dataset, load_neuve,
-    make_dataset, neuve_template, parse_seeds, physical_tke, save_neuve,
-    terrains_from_dataset,
+from experiments.neuve_coordinate_common import (
+    TARGET_DEFAULTS, dataset_target, load_dataset, load_neuve,
+    make_dataset, neuve_template, parse_seeds, save_neuve,
+    run_target_case, terrains_from_dataset,
 )
 
 
 def main():
     parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--target",
+        choices=["pgf_rest", "tracer_reversibility", "mountain_flux"],
+        default="pgf_rest",
+    )
     parser.add_argument("--dataset", help="Existing training dataset manifest")
-    parser.add_argument("--terrain-family", choices=["ridge", "random3d"], default="ridge")
+    parser.add_argument(
+        "--terrain-family",
+        choices=["ridge", "random3d", "multiscale3d"],
+        default="ridge",
+    )
     parser.add_argument("--seeds", default="999", help="Comma-separated training seeds")
     parser.add_argument("--initial-weights")
     parser.add_argument(
@@ -37,7 +46,7 @@ def main():
         help="Updates before resetting Adam for refinement",
     )
     parser.add_argument("--refinement-lr", type=float, default=3e-3)
-    parser.add_argument("--steps", type=int, default=DEFAULT_STEPS)
+    parser.add_argument("--steps", type=int)
     parser.add_argument("--minimum-layer-m", type=float, default=100.0)
     parser.add_argument("--output-dir", default="output/neuve_pgf_tuning")
     args = parser.parse_args()
@@ -47,11 +56,24 @@ def main():
         parser.error("--discovery-epochs must be positive")
     os.makedirs(args.output_dir, exist_ok=True)
     manifest_path = os.path.join(args.output_dir, "training_dataset.json")
+    steps = args.steps or TARGET_DEFAULTS[args.target]["steps"]
     dataset = (
         load_dataset(args.dataset) if args.dataset
-        else make_dataset(args.terrain_family, parse_seeds(args.seeds), "training")
+        else make_dataset(
+            args.terrain_family, parse_seeds(args.seeds), "training",
+            target=args.target, steps=steps,
+        )
     )
-    make_dataset(dataset["terrain_family"], dataset["seeds"], "training", manifest_path)
+    target = dataset_target(dataset)
+    if args.dataset and target != args.target:
+        parser.error(
+            f"dataset target is {target!r}, not requested {args.target!r}"
+        )
+    steps = int(dataset["integration"]["steps"])
+    make_dataset(
+        dataset["terrain_family"], dataset["seeds"], "training", manifest_path,
+        target=target, steps=steps,
+    )
     terrains = terrains_from_dataset(dataset)
 
     template = neuve_template()
@@ -60,20 +82,14 @@ def main():
     def make_objective(terrain):
         def objective(current_params):
             transform = template.with_params(current_params)
-            grid, state, stepper, boundary = build_case(transform, terrain)
-
-            @jax.checkpoint
-            def scan(current, _):
-                next_state = stepper.step(current, 0.0, None, boundary)
-                return next_state, physical_tke(next_state, grid)
-
-            _, series = jax.lax.scan(scan, state, jnp.arange(args.steps))
-            mean_tke = jnp.mean(series)
+            metric, _, grid, _ = run_target_case(
+                target, transform, terrain, steps
+            )
             minimum_layer = jnp.min(grid.dz_m_full)
             thin = jax.nn.relu(
                 (args.minimum_layer_m - minimum_layer) / args.minimum_layer_m
             ) ** 2
-            return mean_tke + thin, (mean_tke, minimum_layer)
+            return metric + thin, (metric, minimum_layer)
         return jax.jit(jax.value_and_grad(objective, has_aux=True)), jax.jit(objective)
 
     functions = [make_objective(terrain) for terrain in terrains]
@@ -89,7 +105,7 @@ def main():
 
     optimizer = make_optimizer(args.lr, discovery_epochs)
     opt_state = optimizer.init(params)
-    checkpoint = os.path.join(args.output_dir, "neuve_pgf.npz")
+    checkpoint = os.path.join(args.output_dir, "neuve_coordinate.npz")
 
     def evaluate(current_params):
         values = [fn(current_params) for _, fn in functions]
@@ -107,8 +123,13 @@ def main():
         "current_objective": [best_loss], "best_objective": [best_loss],
         "minimum_layer_m": [initial_minimum],
     }
-    print(f"NEUVE tuning on {len(terrains)} terrain sample(s)")
-    print("epoch mean_TKE current_objective best_objective min_dz[m] time[s]")
+    metric_label = {
+        "pgf_rest": "mean_TKE",
+        "tracer_reversibility": "roundtrip_L2",
+        "mountain_flux": "flux_nonuniformity",
+    }[target]
+    print(f"NEUVE {target} tuning on {len(terrains)} terrain sample(s)")
+    print(f"epoch {metric_label} current_objective best_objective min_dz[m] time[s]")
     print(
         f"{0:5d} {initial_tke:.6e} {best_loss:.6e} "
         f"{best_loss:.6e} {initial_minimum:.2f}"
@@ -187,12 +208,18 @@ def main():
         seeds=np.asarray(dataset["seeds"]), terrain_family=dataset["terrain_family"],
         discovery_epochs=discovery_epochs, discovery_lr=args.lr,
         refinement_lr=args.refinement_lr,
+        target=target, steps=steps,
     )
     fig, axes = plt.subplots(1, 2, figsize=(9.0, 3.6))
     epoch = np.asarray(history["epoch"])
-    axes[0].semilogy(epoch, history["mean_tke"], label="Current physical TKE")
+    axes[0].semilogy(epoch, history["mean_tke"], label="Current metric")
     axes[0].semilogy(epoch, history["best_objective"], "--", label="Best feasible objective")
-    axes[0].set(xlabel="Epoch", ylabel=r"Mean spurious TKE (m$^2$ s$^{-2}$)")
+    metric_ylabel = {
+        "pgf_rest": r"Mean spurious TKE (m$^2$ s$^{-2}$)",
+        "tracer_reversibility": r"Relative tracer round-trip $L_2$ error",
+        "mountain_flux": r"Normalized momentum-flux non-uniformity",
+    }[target]
+    axes[0].set(xlabel="Epoch", ylabel=metric_ylabel)
     axes[0].grid(True, which="both", alpha=0.3)
     axes[0].legend()
     axes[1].plot(epoch, history["minimum_layer_m"])
