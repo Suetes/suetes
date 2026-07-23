@@ -1,0 +1,67 @@
+"""Regression tests for the learned NEUVE vertical coordinate."""
+
+import jax.numpy as jnp
+
+from suetes.shared.transforms import IntegralNeuralTransform, NEUVECoordinate
+
+
+def test_integral_neural_transform_has_exact_endpoints_and_positive_layers():
+    """A smooth positive learned density must not create crossed layers."""
+
+    def varying_density_model(_params, y, h, slope, laplacian):
+        return 4.0 * jnp.sin(2.0 * jnp.pi * y) + 0.2 * h + 0.1 * slope
+
+    transform = IntegralNeuralTransform(varying_density_model, params={})
+    nx, ny, nz = 7, 5, 48
+    x = jnp.linspace(-3000.0, 3000.0, nx)
+    eta = jnp.linspace(-2000.0, 2000.0, ny)
+    zeta = jnp.linspace(0.0, 16000.0, nz + 1)
+    xi, _, zeta_3d = jnp.meshgrid(x, eta, zeta, indexing="ij")
+    terrain_2d = (
+        2790.0
+        * jnp.exp(-0.5 * (x[:, None] / 900.0) ** 2)
+        * jnp.exp(-0.5 * (eta[None, :] / 1200.0) ** 2)
+    )
+    terrain = jnp.broadcast_to(terrain_2d[..., None], zeta_3d.shape)
+
+    physical_z = transform(xi, zeta_3d, terrain, 16000.0)
+
+    assert jnp.allclose(physical_z[..., 0], terrain_2d, atol=1.0e-10)
+    assert jnp.allclose(physical_z[..., -1], 16000.0, atol=1.0e-10)
+    assert float(jnp.min(jnp.diff(physical_z, axis=-1))) > 0.0
+
+
+def test_default_neuve_reduces_to_nearly_uniform_monotone_coordinate():
+    coordinate = NEUVECoordinate(hidden_dim=64, key_seed=42)
+    zeta = jnp.linspace(0.0, 16000.0, 33)
+    physical_z = coordinate(
+        jnp.linspace(0.0, 16000.0, 33), zeta, jnp.asarray(1800.0), 16000.0
+    )
+
+    assert jnp.isclose(physical_z[0], 1800.0)
+    assert jnp.isclose(physical_z[-1], 16000.0)
+    assert float(jnp.min(jnp.diff(physical_z))) > 0.0
+
+
+def test_global_decay_profile_is_shared_between_terrain_columns():
+    coordinate = NEUVECoordinate(
+        hidden_dim=64,
+        key_seed=42,
+        condition_on_terrain=False,
+    )
+    x = jnp.linspace(0.0, 1500.0, 4)
+    y = jnp.linspace(0.0, 1000.0, 3)
+    zeta = jnp.linspace(0.0, 16000.0, 17)
+    xi, _, zeta_3d = jnp.meshgrid(x, y, zeta, indexing="ij")
+    terrain_2d = 500.0 + 300.0 * jnp.arange(4)[:, None] + jnp.zeros((4, 3))
+    terrain = jnp.broadcast_to(terrain_2d[..., None], zeta_3d.shape)
+
+    physical_z = coordinate(xi, zeta_3d, terrain, 16000.0)
+    normalized_imprint = (physical_z - zeta_3d) / terrain
+
+    assert jnp.allclose(
+        normalized_imprint,
+        normalized_imprint[0:1, 0:1, :],
+        atol=2.0e-6,
+    )
+    assert float(jnp.min(jnp.diff(physical_z, axis=-1))) > 0.0

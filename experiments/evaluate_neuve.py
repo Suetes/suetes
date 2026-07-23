@@ -17,6 +17,8 @@ import os
 import sys
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 import argparse
+import csv
+import json
 import jax
 jax.config.update("jax_enable_x64", True)
 import jax.numpy as jnp
@@ -32,15 +34,24 @@ from suetes.regional3d.steppers import build_dynamical_core
 from suetes.physics.base import PhysicsSuite
 
 from experiments.train_neuve import (
-    nx, ny, nz, dx, dy, dz, constants, generate_rugged_terrain, make_simulation_case
+    nx, ny, nz, dx, dy, dz, constants, generate_rugged_terrain,
+    pgf_rest_metric, coordinate_shape_penalties,
 )
 
 
-def load_trained_neuve(weights_path):
-    neuve_init = NEUVECoordinate(hidden_dim=64, key_seed=42)
+def load_trained_neuve(weights_path, condition_on_terrain=True,
+                       legacy_behavior=False):
+    neuve_init = NEUVECoordinate(
+        hidden_dim=64,
+        key_seed=42,
+        condition_on_terrain=condition_on_terrain,
+        legacy_behavior=legacy_behavior,
+    )
     if not weights_path or not os.path.exists(weights_path):
-        print(f"[WARNING] Weights file '{weights_path}' not found. Using untrained NEUVE template.")
-        return neuve_init
+        raise FileNotFoundError(
+            f"NEUVE weights file '{weights_path}' was not found. Train the "
+            "coordinate before evaluation; an untrained network is not a valid baseline."
+        )
     data = np.load(weights_path)
     arrays = [data[f'arr_{i}'] for i in range(len(data.files))]
     flat_params, tree_def = jax.tree_util.tree_flatten(neuve_init.params)
@@ -48,8 +59,10 @@ def load_trained_neuve(weights_path):
     return neuve_init.with_params(restored_params)
 
 
-def eval_coordinate_case(target, name, transform_op, terrain_fn, eval_steps, dt_val):
-    print(f"  -> Integrating [{name}] over {eval_steps} steps (dt={dt_val:.1f}s)...")
+def eval_coordinate_case(target, name, transform_op, terrain_fn, eval_steps, dt_val,
+                         verbose=True):
+    if verbose:
+        print(f"  -> Integrating [{name}] over {eval_steps} steps (dt={dt_val:.1f}s)...")
     grid = RegionalGrid3D(
         nx, ny, nz, dx, dy, dz,
         lat_center=45.0, lon_center=0.0,
@@ -111,10 +124,7 @@ def eval_coordinate_case(target, name, transform_op, terrain_fn, eval_steps, dt_
     def scan_fn(st_curr, _):
         next_st = stepper.step(st_curr, 0.0, None, bc_fn)
         if target == "pgf_rest":
-            u_c = 0.5 * (next_st['u'][:-1, :, :] + next_st['u'][1:, :, :])
-            v_c = 0.5 * (next_st['v'][:, :-1, :] + next_st['v'][:, 1:, :])
-            w_c = 0.5 * (next_st['w'][:, :, :-1] + next_st['w'][:, :, 1:])
-            tke_t = 0.5 * jnp.mean(u_c**2 + v_c**2 + w_c**2)
+            tke_t = pgf_rest_metric(next_st, grid)
             max_u = jnp.max(jnp.abs(next_st['u']))
             max_w = jnp.max(jnp.abs(next_st['w']))
             return next_st, (tke_t, max_u, max_w)
@@ -134,17 +144,53 @@ def main():
                         help="Evaluation target mode: pgf_rest or acoustic_energy")
     parser.add_argument("--weights-path", type=str, default=None,
                         help="Path to trained NEUVE npz weights")
+    parser.add_argument("--terrain-mode", choices=["ensemble", "fixed"],
+                        default="ensemble",
+                        help="Training interpretation used by the checkpoint")
+    parser.add_argument("--fixed-terrain-seed", type=int, default=999,
+                        help="Fixed-domain seed encoded by a fixed-mode checkpoint")
+    parser.add_argument(
+        "--coordinate-mode", choices=["global", "spatial", "spatial-legacy"],
+        default="global",
+        help="NEUVE architecture used by the checkpoint",
+    )
     parser.add_argument("--test-seed", type=int, default=999, help="PRNG seed for zero-shot rugged terrain")
+    parser.add_argument("--num-test-topographies", type=int, default=10,
+                        help="Number of consecutive, unseen terrain seeds to evaluate")
     parser.add_argument("--output-dir", type=str, default="output", help="Root output directory")
+    parser.add_argument("--sleve-scale-s", type=float, default=4000.0,
+                        help="Frozen SLEVE small-scale decay height selected on validation data")
+    parser.add_argument("--sleve-n", type=float, default=1.35,
+                        help="Frozen SLEVE decay exponent selected on validation data")
+    parser.add_argument("--sleve-config", default=None,
+                        help="JSON produced by tune_sleve_pgf.py; overrides SLEVE arguments")
     args = parser.parse_args()
+
+    if args.sleve_config:
+        with open(args.sleve_config) as stream:
+            sleve_config = json.load(stream)
+        args.sleve_scale_s = float(sleve_config["scale_s"])
+        args.sleve_n = float(sleve_config["n"])
 
     dt_val = 0.8 if args.target == "pgf_rest" else 2.5
     eval_steps = int(400.0 / dt_val) if args.target == "pgf_rest" else 120
 
     if not args.weights_path:
         if args.target == "pgf_rest":
-            default_path = os.path.join(args.output_dir, "weights", "neuve_pgf_rest_default.npz")
-            compat_path = "output/trained_neuve_physics_pgf_rest_weights.bin.npz"
+            terrain_tag = (
+                "ensemble" if args.terrain_mode == "ensemble"
+                else f"fixed_seed{args.fixed_terrain_seed}"
+            )
+            profile_tag = (
+                "spatial"
+                if args.coordinate_mode in ("spatial", "spatial-legacy")
+                else "global_decay_v5"
+            )
+            default_path = os.path.join(
+                args.output_dir, "weights",
+                f"neuve_pgf_rest_{profile_tag}_{terrain_tag}.npz",
+            )
+            compat_path = default_path
         else:
             default_path = os.path.join(args.output_dir, "weights", "neuve_acoustic_energy_unconstrained.npz")
             compat_path = "output/trained_neuve_physics_unconstrained_weights.bin.npz"
@@ -153,27 +199,51 @@ def main():
     plots_dir = os.path.join(args.output_dir, "plots", "neuve")
     os.makedirs(plots_dir, exist_ok=True)
 
+    evaluation_kind = (
+        "Zero-Shot Evaluation"
+        if args.terrain_mode == "ensemble" else "Fixed-Domain Evaluation"
+    )
     print("=========================================================================")
-    print(f"Zero-Shot Evaluation: NEUVE vs SLEVE vs Gal-Chen | Target: [{args.target.upper()}]")
+    print(f"{evaluation_kind}: NEUVE vs SLEVE vs Gal-Chen | Target: [{args.target.upper()}]")
     print("=========================================================================")
-    print(f"Test Seed: {args.test-seed if hasattr(args, 'test-seed') else args.test_seed} | Evaluation Steps: {eval_steps} (dt={dt_val:.1f}s)")
+    print(
+        f"Test Seeds: {args.test_seed}..{args.test_seed + args.num_test_topographies - 1} "
+        f"| Evaluation Steps: {eval_steps} (dt={dt_val:.1f}s)"
+    )
     print(f"Loading NEUVE weights from: {args.weights_path}")
+    print(
+        f"Frozen SLEVE comparator: scale_s={args.sleve_scale_s:.1f} m, "
+        f"n={args.sleve_n:.3f}"
+    )
 
     terrain_fn = generate_rugged_terrain(args.test_seed)
 
     if args.target == "pgf_rest":
-        sleve_op = SleveSimple(scale_s=4000.0, scale_l=15000.0, n=1.35)
+        sleve_op = SleveSimple(
+            scale_s=args.sleve_scale_s, scale_l=15000.0, n=args.sleve_n
+        )
     else:
         sleve_op = SleveSimple(scale_s=3000.0, scale_l=15000.0, n=1.35)
 
     coords = {
         'Gal-Chen (Sigma)': GalChenSigma(),
         'SLEVE (Analytical)': sleve_op,
-        'NEUVE (PDE discovered)': load_trained_neuve(args.weights_path)
+        'NEUVE (PDE discovered)': load_trained_neuve(
+            args.weights_path,
+            condition_on_terrain=(
+                args.target != "pgf_rest"
+                or args.coordinate_mode in ("spatial", "spatial-legacy")
+            ),
+            legacy_behavior=(
+                args.target == "pgf_rest"
+                and args.coordinate_mode in ("spatial", "spatial-legacy")
+            ),
+        )
     }
 
     results = {}
     grids = {}
+    ensemble_rows = []
 
     for name, op in coords.items():
         m_data, gr = eval_coordinate_case(args.target, name, op, terrain_fn, eval_steps, dt_val)
@@ -199,6 +269,50 @@ def main():
                 'peak_2': float(np.max(max_w_s))
             }
         grids[name] = gr
+        flatness, curvature = coordinate_shape_penalties(gr)
+        ensemble_rows.append({
+            'seed': args.test_seed,
+            'coordinate': name,
+            'mean_metric': results[name]['mean_full'],
+            'peak_u_or_metric': results[name]['peak_1'],
+            'peak_w': results[name]['peak_2'],
+            'minimum_layer_m': float(jnp.min(gr.dz_m_full)),
+            'upper_slope_squared': float(flatness),
+            'dimensionless_curvature': float(curvature),
+        })
+
+    # Evaluate additional terrain realizations.  In ensemble mode these are
+    # truly unseen; in fixed mode the first seed is the optimized domain and
+    # any additional seeds are explicitly out-of-domain stress tests.
+    for seed in range(args.test_seed + 1,
+                      args.test_seed + args.num_test_topographies):
+        test_terrain = generate_rugged_terrain(seed)
+        print(f"  -> Zero-shot terrain seed {seed}")
+        for name, op in coords.items():
+            metric_data, grid = eval_coordinate_case(
+                args.target, name, op, test_terrain, eval_steps, dt_val,
+                verbose=False,
+            )
+            if args.target == "pgf_rest":
+                tke_s, u_s, w_s = metric_data
+                mean_metric = float(jnp.mean(tke_s))
+                peak_1 = float(jnp.max(u_s))
+                peak_2 = float(jnp.max(w_s))
+            else:
+                noise_s, max_w_s = metric_data
+                mean_metric = float(jnp.mean(noise_s))
+                peak_1 = float(jnp.max(noise_s))
+                peak_2 = float(jnp.max(max_w_s))
+            ensemble_rows.append({
+                'seed': seed,
+                'coordinate': name,
+                'mean_metric': mean_metric,
+                'peak_u_or_metric': peak_1,
+                'peak_w': peak_2,
+                'minimum_layer_m': float(jnp.min(grid.dz_m_full)),
+                'upper_slope_squared': float(coordinate_shape_penalties(grid)[0]),
+                'dimensionless_curvature': float(coordinate_shape_penalties(grid)[1]),
+            })
 
     print("\n=========================================================================")
     if args.target == "pgf_rest":
@@ -214,16 +328,76 @@ def main():
             print(f"{name:<24} | {r['mean_full']:<26.6e} | {r['peak_1']:<16.6e} | {r['peak_2']:<20.4f}")
     print("=========================================================================\n")
 
+    ensemble_heading = (
+        "Unseen-terrain ensemble"
+        if args.terrain_mode == "ensemble" else "Fixed/domain-test terrain set"
+    )
+    print(f"--- {ensemble_heading} (mean +/- sample standard deviation) ---")
+    ensemble_values = {}
+    for name in coords:
+        values = np.asarray([
+            row['mean_metric'] for row in ensemble_rows
+            if row['coordinate'] == name
+        ])
+        ensemble_values[name] = values
+        spread = np.std(values, ddof=1) if len(values) > 1 else 0.0
+        min_layers = np.asarray([
+            row['minimum_layer_m'] for row in ensemble_rows
+            if row['coordinate'] == name
+        ])
+        upper_slopes = np.asarray([
+            row['upper_slope_squared'] for row in ensemble_rows
+            if row['coordinate'] == name
+        ])
+        curvatures = np.asarray([
+            row['dimensionless_curvature'] for row in ensemble_rows
+            if row['coordinate'] == name
+        ])
+        print(
+            f"{name:<24}: {np.mean(values):.6e} +/- {spread:.2e}; "
+            f"minimum layer={np.min(min_layers):.2f} m; "
+            f"upper slope^2={np.mean(upper_slopes):.3e}; "
+            f"curvature={np.mean(curvatures):.3e}"
+        )
+
+    ensemble_path = os.path.join(
+        args.output_dir,
+        f"neuve_{args.target}_{args.terrain_mode}_terrain_metrics.csv",
+    )
+    with open(ensemble_path, 'w', newline='') as stream:
+        writer = csv.DictWriter(stream, fieldnames=list(ensemble_rows[0]))
+        writer.writeheader()
+        writer.writerows(ensemble_rows)
+    print(f"[SUCCESS] Saved terrain-set diagnostics to: {ensemble_path}\n")
+
+    gal_ensemble = ensemble_values['Gal-Chen (Sigma)']
+    sleve_ensemble = ensemble_values['SLEVE (Analytical)']
+    neuve_ensemble = ensemble_values['NEUVE (PDE discovered)']
+    paired_reduction = 100.0 * (1.0 - neuve_ensemble / gal_ensemble)
+    paired_spread = (
+        float(np.std(paired_reduction, ddof=1))
+        if len(paired_reduction) > 1 else 0.0
+    )
+    print(
+        "NEUVE paired reduction relative to Gal-Chen: "
+        f"{np.mean(paired_reduction):.2f}% +/- {paired_spread:.2f} percentage points"
+    )
+    print(
+        "NEUVE beats SLEVE on "
+        f"{np.count_nonzero(neuve_ensemble < sleve_ensemble)}/"
+        f"{len(neuve_ensemble)} evaluated terrains.\n"
+    )
+
     ref_val = results['Gal-Chen (Sigma)']['mean_full']
     neuve_val = results['NEUVE (PDE discovered)']['mean_full']
     sleve_val = results['SLEVE (Analytical)']['mean_full']
     reduction = (1.0 - neuve_val / ref_val) * 100.0 if ref_val > 0 else 0.0
 
-    if neuve_val < sleve_val:
-        print(f"=> [SUCCESS] NEUVE BEATS SLEVE AND GAL-CHEN!")
-        print(f"   NEUVE: {neuve_val:.6e} vs SLEVE: {sleve_val:.6e} vs Gal-Chen: {ref_val:.6e} ({reduction:.1f}% reduction vs Gal-Chen)")
-    else:
-        print(f"=> NEUVE achieves {reduction:.1f}% reduction vs Gal-Chen (NEUVE: {neuve_val:.6e} vs SLEVE: {sleve_val:.6e})")
+    print(
+        "Representative plotted terrain: "
+        f"NEUVE={neuve_val:.6e}, SLEVE={sleve_val:.6e}, "
+        f"Gal-Chen={ref_val:.6e} ({reduction:.1f}% vs Gal-Chen)."
+    )
 
     # -------------------------------------------------------------------------
     # Figure 1: Time Series Comparison
@@ -238,7 +412,7 @@ def main():
             ax1.semilogy(t_axis, r['series_1'], label=name, color=colors[name], linestyle=styles[name], linewidth=2.5)
             ax2.plot(t_axis, r['series_2'], label=name, color=colors[name], linestyle=styles[name], linewidth=2.5)
         ax1.set_title("(a) Spurious kinetic energy from rest ($u=v=w=0$)", fontsize=13)
-        ax1.set_ylabel("Spurious TKE density ($m^2/s^2$)", fontsize=11)
+        ax1.set_ylabel("Volume-weighted spurious TKE ($m^2/s^2$)", fontsize=11)
         ax2.set_title("(b) Maximum spurious horizontal wind $|u|_{max}$", fontsize=13)
         ax2.set_ylabel("Spurious horizontal wind speed (m/s)", fontsize=11)
     else:
