@@ -142,13 +142,24 @@ class StretchedSleve(BaseTransform):
 class IntegralNeuralTransform(BaseTransform):
     """
     Spatially Adaptive Robust Neural Coordinate.
-    Predicts a positive 'density' field conditioned on vertical height y AND local terrain h,
-    and integrates it to get the decay function b(zeta, h).
-    Guarantees z(0) = h and z(Lz) = Lz (Monotonic, No Crossing).
+    Predicts a positive vertical layer-density field and integrates it to
+    obtain a normalized cumulative coordinate S.  The physical height is
+
+        z = zeta + h (1 - S).
+
+    This terrain-decay form is important: spatial variations learned by the
+    network are scaled by terrain height, rather than by the full atmospheric
+    depth.  With density in [0.3, 1.7], it guarantees positive vertical
+    derivatives whenever h/Lz < 3/17, in addition to the exact endpoints
+    z(0)=h and z(Lz)=Lz.  ``RegionalGrid3D`` also checks physical layer
+    thicknesses when grids are constructed outside a traced calculation.
     """
-    def __init__(self, nn_apply_fn, params):
+    def __init__(self, nn_apply_fn, params, condition_on_terrain=True,
+                 legacy_behavior=False):
         self.apply_fn = nn_apply_fn
         self.params = params
+        self.condition_on_terrain = condition_on_terrain
+        self.legacy_behavior = legacy_behavior
 
     def __call__(self, xi, zeta, h, Lz):
         # 12-point Gauss-Legendre Quadrature nodes and weights on [-1, 1]
@@ -170,18 +181,47 @@ class IntegralNeuralTransform(BaseTransform):
         if zeta.ndim == 3:
             # 3D field case: shape (nx, ny, nz)
             h_2d = h_norm[:, :, 0:1, None]  # (nx, ny, 1, 1)
-            dh_dx = jnp.gradient(h_norm[:, :, 0], axis=0)[:, :, None, None]
-            dh_dy = jnp.gradient(h_norm[:, :, 0], axis=1)[:, :, None, None]
+            # ``RegionalGrid3D`` currently passes only xi to transforms.  Its
+            # NEUVE experiments use dx=dy, so infer that common physical grid
+            # spacing from xi.  Scaling by the 4-km terrain normalization makes
+            # slope and curvature features independent of horizontal resolution.
+            spacing_norm = jnp.maximum(
+                jnp.mean(jnp.abs(jnp.diff(xi[:, 0, 0]))) / 4000.0, 1.0e-8
+            )
+            feature_spacing = 1.0 if self.legacy_behavior else spacing_norm
+            dh_dx = (
+                jnp.gradient(h_norm[:, :, 0], axis=0) / feature_spacing
+            )[:, :, None, None]
+            dh_dy = (
+                jnp.gradient(h_norm[:, :, 0], axis=1) / feature_spacing
+            )[:, :, None, None]
             slope_2d = jnp.sqrt(dh_dx**2 + dh_dy**2 + 1e-8)
-            d2h_dx2 = jnp.gradient(dh_dx[:, :, 0, 0], axis=0)[:, :, None, None]
-            d2h_dy2 = jnp.gradient(dh_dy[:, :, 0, 0], axis=1)[:, :, None, None]
+            d2h_dx2 = (
+                jnp.gradient(dh_dx[:, :, 0, 0], axis=0) / feature_spacing
+            )[:, :, None, None]
+            d2h_dy2 = (
+                jnp.gradient(dh_dy[:, :, 0, 0], axis=1) / feature_spacing
+            )[:, :, None, None]
             laplacian_2d = d2h_dx2 + d2h_dy2
+
+            if not self.condition_on_terrain:
+                # Learn one shared vertical decay profile b(eta).  Terrain
+                # enters only through z=zeta+h*b, so every coordinate surface
+                # remains a smooth scaled copy of the physical topography.
+                h_2d = jnp.zeros_like(h_2d)
+                slope_2d = jnp.zeros_like(slope_2d)
+                laplacian_2d = jnp.zeros_like(laplacian_2d)
 
             eta = zeta / Lz
 
             def eval_density(y_inputs, h_inputs, s_inputs, l_inputs):
                 raw_out = self.apply_fn(self.params, y_inputs, h_inputs, s_inputs, l_inputs).squeeze(-1)
-                return 0.08 + 1.90 * jax.nn.sigmoid(raw_out)
+                if self.legacy_behavior:
+                    return 0.08 + 1.90 * jax.nn.sigmoid(raw_out)
+                # The ratio 1.7/0.3 = 5.67 is large enough to represent the
+                # near-surface decay of the SLEVE comparator (~5.4), while the
+                # PGF experiment's h/Lz < 3/17 bound still prevents tangling.
+                return 0.3 + 1.4 * jax.nn.sigmoid(raw_out)
 
             # --- 1. Compute I(1) = \int_0^1 \rho(y) dy ---
             y_1 = (0.5 * x_nodes + 0.5)[None, None, None, :, None]
@@ -202,11 +242,12 @@ class IntegralNeuralTransform(BaseTransform):
             I_eta = 0.5 * eta * jnp.sum(w_nodes * density_eta, axis=-1)  # (nx, ny, nz)
 
             S_eta = I_eta / I_total
-            b_vals = 1.0 - S_eta
-            return zeta + h * b_vals
+            return zeta + h * (1.0 - S_eta)
         else:
             # 1D column / scalar case
-            h_scalar = jnp.mean(h_norm)
+            h_scalar = (
+                jnp.mean(h_norm) if self.condition_on_terrain else jnp.asarray(0.0)
+            )
             eta = zeta / Lz
 
             def eval_density_1d(y_inputs):
@@ -214,7 +255,9 @@ class IntegralNeuralTransform(BaseTransform):
                 s_in = jnp.zeros_like(y_inputs)
                 l_in = jnp.zeros_like(y_inputs)
                 raw_out = self.apply_fn(self.params, y_inputs, h_in, s_in, l_in).squeeze(-1)
-                return 0.08 + 1.90 * jax.nn.sigmoid(raw_out)
+                if self.legacy_behavior:
+                    return 0.08 + 1.90 * jax.nn.sigmoid(raw_out)
+                return 0.3 + 1.4 * jax.nn.sigmoid(raw_out)
 
             y_1 = (0.5 * x_nodes + 0.5)[:, None]
             density_1 = eval_density_1d(y_1)
@@ -225,8 +268,7 @@ class IntegralNeuralTransform(BaseTransform):
             I_eta = 0.5 * eta * jnp.sum(w_nodes * density_eta, axis=-1)
 
             S_eta = I_eta / I_total
-            b_vals = 1.0 - S_eta
-            return zeta + h * b_vals
+            return zeta + h * (1.0 - S_eta)
 
 
 class NEUVEMLP(nn.Module):
@@ -271,8 +313,11 @@ class NEUVECoordinate(BaseTransform):
     Self-contained Spatially Adaptive Neural Vertical Coordinate (NEUVE) wrapper.
     Can be passed directly as `transform` to RegionalGrid3D.
     """
-    def __init__(self, params=None, hidden_dim=64, key_seed=42):
+    def __init__(self, params=None, hidden_dim=64, key_seed=42,
+                 condition_on_terrain=True, legacy_behavior=False):
         self.model = NEUVEMLP(hidden_dim=hidden_dim)
+        self.condition_on_terrain = condition_on_terrain
+        self.legacy_behavior = legacy_behavior
         if params is None:
             key = jax.random.PRNGKey(key_seed)
             dummy_y = jnp.linspace(0, 1.0, 51)[:, None]
@@ -282,11 +327,20 @@ class NEUVECoordinate(BaseTransform):
             self.params = self.model.init(key, dummy_y, dummy_h, dummy_slope, dummy_laplacian)
         else:
             self.params = params
-        self.integral_transform = IntegralNeuralTransform(self.model.apply, self.params)
+        self.integral_transform = IntegralNeuralTransform(
+            self.model.apply, self.params,
+            condition_on_terrain=self.condition_on_terrain,
+            legacy_behavior=self.legacy_behavior,
+        )
 
     def with_params(self, params):
         """Returns a new NEUVECoordinate instance with updated weights."""
-        return NEUVECoordinate(params=params, hidden_dim=self.model.hidden_dim)
+        return NEUVECoordinate(
+            params=params,
+            hidden_dim=self.model.hidden_dim,
+            condition_on_terrain=self.condition_on_terrain,
+            legacy_behavior=self.legacy_behavior,
+        )
 
     def save_weights(self, filepath):
         """Saves the neural coordinate weights to binary file."""
@@ -295,13 +349,23 @@ class NEUVECoordinate(BaseTransform):
             f.write(bytes_data)
 
     @classmethod
-    def from_file(cls, filepath, hidden_dim=64):
+    def from_file(cls, filepath, hidden_dim=64, condition_on_terrain=True,
+                  legacy_behavior=False):
         """Loads a trained NEUVECoordinate from binary file."""
-        instance = cls(hidden_dim=hidden_dim)
+        instance = cls(
+            hidden_dim=hidden_dim,
+            condition_on_terrain=condition_on_terrain,
+            legacy_behavior=legacy_behavior,
+        )
         with open(filepath, 'rb') as f:
             bytes_data = f.read()
         loaded_params = serialization.from_bytes(instance.params, bytes_data)
-        return cls(params=loaded_params, hidden_dim=hidden_dim)
+        return cls(
+            params=loaded_params,
+            hidden_dim=hidden_dim,
+            condition_on_terrain=condition_on_terrain,
+            legacy_behavior=legacy_behavior,
+        )
 
 
     def __call__(self, xi, zeta, h, Lz):
