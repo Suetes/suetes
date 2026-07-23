@@ -205,8 +205,8 @@ def main():
                 ratio[valid] = cumulative[name][valid] / reference[valid]
                 axis.plot(time, ratio, label=name)
             axis.axhline(1.0, color="0.25", linestyle="--", linewidth=0.8)
-            axis.set_title(f"Seed {dataset['seeds'][sample_index]}")
             axis.set_xlabel("Time (s)")
+            axis.set_xlim(0.0, time[-1])
             axis.grid(True, alpha=0.25)
         axes[0, 0].set_ylabel("Cumulative mean TKE / tuned SLEVE")
         axes[0, -1].legend()
