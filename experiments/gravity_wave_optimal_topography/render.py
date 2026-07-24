@@ -27,7 +27,7 @@ def main():
     if not source.exists():
         parser.error(
             f"artifact does not exist: {source}. Run "
-            "gravity_wave_optimal_topography_3d.py once with the updated code."
+            "run.py once with the updated code."
         )
     output = (
         Path(args.output_dir) if args.output_dir else figure_dir_for(source)
