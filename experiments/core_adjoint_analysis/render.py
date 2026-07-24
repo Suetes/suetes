@@ -25,21 +25,38 @@ def render(source: Path, output_dir: Path | None = None) -> Path:
     gradient = data["adjoint_gradient"]
     limit = float(abs(gradient).max())
     fig, axes = plt.subplots(1, 3, figsize=(18, 5.5), constrained_layout=True)
+    panel_titles = {
+        "split-explicit": "(a) Split-Explicit",
+        "sisl": "(b) SISL",
+    }
+    core_colors = {
+        "split-explicit": "#D55E00",
+        "sisl": "#0072B2",
+    }
     for axis, core in zip(axes[:2], data["core"].values):
+        core_name = str(core)
         image = axis.pcolormesh(
             data["x"] / 1000.0, data["z"] / 1000.0,
             gradient.sel(core=core).values.T,
             cmap="RdBu_r", vmin=-limit, vmax=limit, shading="auto",
         )
-        axis.set(title=str(core), xlabel="x (km)", ylabel="z (km)")
+        axis.set(
+            title=panel_titles.get(core_name, core_name),
+            xlabel="x (km)", ylabel="z (km)",
+        )
     z_index = int(np.argmin(abs(data["z"].values - data.attrs["profile_height_m"])))
     for core in data["core"].values:
+        core_name = str(core)
         axes[2].plot(
             data["x"] / 1000.0,
             gradient.sel(core=core).isel(z=z_index),
-            label=str(core),
+            color=core_colors.get(core_name),
+            label="Split-Explicit" if core_name == "split-explicit" else "SISL",
         )
-    axes[2].set(xlabel="x (km)", ylabel="Adjoint sensitivity")
+    axes[2].set(
+        title="(c) Sensitivity profile",
+        xlabel="x (km)", ylabel="Adjoint sensitivity",
+    )
     axes[2].grid(True, ls="--", alpha=0.5)
     axes[2].legend()
     fig.colorbar(image, ax=axes[:2], label="Adjoint gradient")

@@ -20,7 +20,6 @@ from suetes.regional3d.steppers import build_dynamical_core
 from suetes.shared.artifacts import ArtifactLayout
 from suetes.shared.driver import Simulation
 
-T_END = 24.0
 RESOLUTIONS = [250.0, 125.0, 62.5, 31.25]
 DT_AT_250M = 1.0
 SPLIT_EXPLICIT_NS = 12
@@ -69,7 +68,9 @@ def get_native_slices(res_3d):
         'th_v': np.array(res_3d['th_v'][:, 1, :]),
     }
 
-def run_bubble_at_resolution(core_type, dx, alpha=0.55, dt_mode="constant"):
+def run_bubble_at_resolution(
+    core_type, dx, *, t_end, alpha=0.55, dt_mode="constant"
+):
     nx = int(10000 / dx)
     nz = int(10000 / dx)
     ny = 3
@@ -147,12 +148,12 @@ def run_bubble_at_resolution(core_type, dx, alpha=0.55, dt_mode="constant"):
     )
 
     sim = Simulation(step_fn=lambda s, i: (stepper.step(s, i*dt, None, lambda x, f: x), jnp.max(jnp.abs(s['w']))), dt=dt)
-    total_steps = int(round(T_END / dt))
-    if not np.isclose(total_steps * dt, T_END):
-        raise ValueError(f"dt={dt} does not land exactly on T_END={T_END}")
+    total_steps = int(round(t_end / dt))
+    if not np.isclose(total_steps * dt, t_end):
+        raise ValueError(f"dt={dt} does not land exactly on t_end={t_end}")
     chunk_steps = max(1, total_steps // NUM_PROGRESS_UPDATES)
     raw_res = sim.run(
-        state, t_start=0.0, t_end=T_END, chunk_steps=chunk_steps
+        state, t_start=0.0, t_end=t_end, chunk_steps=chunk_steps
     )
     slices = get_native_slices(raw_res)
     del raw_res, state, tmp_phys, stepper, sim
@@ -160,7 +161,7 @@ def run_bubble_at_resolution(core_type, dx, alpha=0.55, dt_mode="constant"):
     release_jax_memory()
     return slices
 
-def run_study(core_type, alpha=0.55, dt_mode="constant"):
+def run_study(core_type, *, t_end, alpha=0.55, dt_mode="constant"):
     print(f"\n========================================")
     print(f"Running self-convergence study for {core_type.upper()} (alpha={alpha}, dt_mode={dt_mode})...")
     print(f"========================================")
@@ -168,7 +169,9 @@ def run_study(core_type, alpha=0.55, dt_mode="constant"):
     slices = []
     for dx in dxs:
         release_jax_memory()
-        result = run_bubble_at_resolution(core_type, dx, alpha, dt_mode=dt_mode)
+        result = run_bubble_at_resolution(
+            core_type, dx, t_end=t_end, alpha=alpha, dt_mode=dt_mode
+        )
         slices.append(result)
         del result
         release_jax_memory()
@@ -250,27 +253,29 @@ def report_cross_core_convergence(sisl_slices, split_slices):
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Run the 24 s rising-bubble self/cross convergence audit."
+        description="Run the rising-bubble self/cross convergence audit."
     )
     parser.add_argument("--output-root", type=Path, default=Path("output"))
-    parser.add_argument("--name", default="t24")
+    parser.add_argument("--name")
+    parser.add_argument("--t-end", type=float, default=24.0)
     return parser.parse_args()
 
 
 def main():
     args = parse_args()
+    execution = args.name or f"t{args.t_end:g}"
     errors_sisl, rates_sisl, slices_sisl = run_study(
-        "sisl", alpha=0.5, dt_mode="scaling"
+        "sisl", t_end=args.t_end, alpha=0.5, dt_mode="scaling"
     )
     errors_se, rates_se, slices_se = run_study(
-        "split-explicit", alpha=0.5, dt_mode="scaling"
+        "split-explicit", t_end=args.t_end, alpha=0.5, dt_mode="scaling"
     )
     cross_differences, cross_rates = report_cross_core_convergence(
         slices_sisl, slices_se
     )
     summary = {
         "test": "rising_bubble_core_convergence",
-        "t_end_s": T_END,
+        "t_end_s": args.t_end,
         "resolutions_m": RESOLUTIONS,
         "dt_at_250m_s": DT_AT_250M,
         "dt_mode": "scaling",
@@ -289,12 +294,12 @@ def main():
     }
     layout = ArtifactLayout(
         kind="verification", case="rising_bubble_core_convergence",
-        execution=args.name, output_root=args.output_root,
+        execution=execution, output_root=args.output_root,
     ).create()
     path = layout.data / "summary.json"
     with path.open("w", encoding="utf-8") as stream:
         json.dump(summary, stream, indent=2)
-    print(f"Saved 24 s bubble convergence artifact to {path}")
+    print(f"Saved {args.t_end:g} s bubble convergence artifact to {path}")
 
 
 if __name__ == "__main__":

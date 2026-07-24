@@ -3,7 +3,7 @@
 Produce a reusable artifact without rendering:
 
 ```bash
-python benchmarks/physical/schaer_mountain_3d.py --name smoke --no-render
+python benchmarks/physical/schaer_mountain_3d/run.py --name smoke --no-render
 ```
 
 Render it independently:

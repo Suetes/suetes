@@ -115,9 +115,28 @@ Render the fixed-grid temporal convergence artifact with:
 python verification/render_temporal_core_convergence.py
 ```
 
+The rising-bubble convergence horizon is configurable.  For the publication
+$t=100$ s experiment, run and render:
+
+```bash
+python verification/rising_bubble_core_convergence.py --t-end 100 --name t100
+python verification/render_short_bubble_convergence.py \
+  output/verification/rising_bubble_core_convergence/t100
+```
+
+Use `--t-end 50 --name t50` for the shorter fallback study.
+
 The GMRES adjoint conditioning study follows the same two-step pattern:
 
 ```bash
 python verification/gmres_adjoint_convergence.py
 python verification/render_gmres_adjoint_convergence.py
+```
+
+Verify the discrete adjoints of both cores with directional Taylor tests and
+measure fixed-grid temporal self- and cross-core gradient convergence with:
+
+```bash
+python verification/adjoint_gradient_convergence.py
+python verification/render_adjoint_gradient_convergence.py
 ```

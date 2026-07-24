@@ -25,7 +25,7 @@ import xarray as xr
 from suetes.shared.artifacts import ArtifactLayout, save_plot_dataset
 
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+REPO_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_OUTPUT_ROOT = REPO_ROOT / "output"
 CONSTANTS = {
     "g": 9.81, "cp": 1004.0, "Rd": 287.0,

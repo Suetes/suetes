@@ -84,7 +84,6 @@ def render(metrics_path: Path, output_dir: Path | None = None) -> list[Path]:
     axes[1].legend()
     for axis in axes:
         axis.grid(True, which="both", ls="--", alpha=0.4)
-    fig.suptitle("Long-horizon rising-bubble convergence")
     fig.tight_layout()
     convergence_path = output_dir / "long_horizon_convergence.png"
     fig.savefig(convergence_path, dpi=300, bbox_inches="tight")
@@ -103,7 +102,6 @@ def render(metrics_path: Path, output_dir: Path | None = None) -> list[Path]:
         )
     axis.set_xlabel("Simulation time (s)")
     axis.set_ylabel("SISL–Split relative $L_2$ difference")
-    axis.set_title("Cross-core disagreement through time")
     axis.grid(True, ls="--", alpha=0.4)
     axis.legend()
     fig.tight_layout()

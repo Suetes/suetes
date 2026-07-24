@@ -20,7 +20,7 @@ import sys
 
 from suetes.shared.artifacts import ArtifactLayout
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+REPO_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_OUTPUT_ROOT = REPO_ROOT / "output"
 
 

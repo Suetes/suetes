@@ -61,7 +61,9 @@ def parse_log(path: Path) -> tuple[np.ndarray, dict, dict, np.ndarray, dict]:
     return dx, errors[0], errors[1], cross_dx, cross
 
 
-def parse_summary(path: Path) -> tuple[np.ndarray, dict, dict, np.ndarray, dict]:
+def parse_summary(path: Path) -> tuple[
+    np.ndarray, dict, dict, np.ndarray, dict, float
+]:
     with path.open(encoding="utf-8") as stream:
         summary = json.load(stream)
     resolutions = np.asarray(summary["resolutions_m"], dtype=float)
@@ -71,6 +73,7 @@ def parse_summary(path: Path) -> tuple[np.ndarray, dict, dict, np.ndarray, dict]
         summary["cores"]["split-explicit"]["self_errors"],
         resolutions,
         summary["cross_core"]["differences"],
+        float(summary["t_end_s"]),
     )
 
 
@@ -78,9 +81,10 @@ def render(source: Path, output_dir: Path | None = None) -> list[Path]:
     if source.is_dir():
         source = artifact_from_bundle(source, pattern="summary.json")
     if source.suffix == ".json":
-        dx, sisl, split, cross_dx, cross = parse_summary(source)
+        dx, sisl, split, cross_dx, cross, t_end = parse_summary(source)
     else:
         dx, sisl, split, cross_dx, cross = parse_log(source)
+        t_end = 24.0
     output_dir = output_dir or figure_dir_for(source)
     output_dir.mkdir(parents=True, exist_ok=True)
     ylabels = {
@@ -89,23 +93,24 @@ def render(source: Path, output_dir: Path | None = None) -> list[Path]:
         "pi": r"$L_2$ difference",
         "th_v": r"$L_2$ difference (K)",
     }
-    self_path = output_dir / "bubble_t24_self_convergence.png"
+    time_label = f"{t_end:g}"
+    self_path = output_dir / f"bubble_t{time_label}_self_convergence.png"
     save_four_panel_convergence(
         dx,
         [("SISL", sisl), ("Split-Explicit", split)],
         ylabels,
         r"Coarse-grid spacing $\Delta x$ (m)",
-        "Rising bubble self-convergence at $t=24$ s",
+        rf"Rising bubble self-convergence at $t={time_label}$ s",
         self_path,
         reference_order=2,
     )
-    cross_path = output_dir / "bubble_t24_cross_core_convergence.png"
+    cross_path = output_dir / f"bubble_t{time_label}_cross_core_convergence.png"
     save_four_panel_convergence(
         cross_dx,
         [("SISL minus Split-Explicit", cross)],
         ylabels,
         r"Grid spacing $\Delta x$ (m)",
-        "Rising bubble cross-core convergence at $t=24$ s",
+        rf"Rising bubble cross-core convergence at $t={time_label}$ s",
         cross_path,
         reference_order=2,
     )
@@ -121,11 +126,10 @@ def render(source: Path, output_dir: Path | None = None) -> list[Path]:
     axis.invert_xaxis()
     axis.set_xlabel(r"Coarse-grid spacing $\Delta x$ (m)")
     axis.set_ylabel(r"Successive-grid $L_2$ difference in $\theta_v$ (K)")
-    axis.set_title(r"Rising bubble self-convergence at $t=24$ s")
     axis.grid(True, which="both", ls="--", alpha=0.4)
     axis.legend()
     fig.tight_layout()
-    theta_path = output_dir / "bubble_t24_theta_self_convergence.png"
+    theta_path = output_dir / f"bubble_t{time_label}_theta_self_convergence.png"
     fig.savefig(theta_path, dpi=300, bbox_inches="tight")
     plt.close(fig)
 

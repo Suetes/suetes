@@ -54,12 +54,6 @@ def render(summary_path: Path, output_dir: Path | None = None) -> list[Path]:
                     label=style["label"], marker=style["marker"],
                     color=style["color"],
                 )
-                axis.text(
-                    0.04, 0.08 + 0.08 * list(core_results).index(core),
-                    f"{style['label']}: finest order "
-                    f"{result['orders'][field][-1]:.2f}",
-                    transform=axis.transAxes, color=style["color"], fontsize=9,
-                )
                 if first_values is None:
                     first_values, first_x = errors, dt
             reference = first_values[0] * (first_x / first_x[0]) ** reference_order
@@ -68,7 +62,8 @@ def render(summary_path: Path, output_dir: Path | None = None) -> list[Path]:
                 label=f"Order {reference_order}",
             )
             axis.invert_xaxis()
-            axis.set_title(LABELS.get(field, field))
+            if len(fields) > 1:
+                axis.set_title(LABELS.get(field, field))
             axis.set_xlabel(r"Outer timestep $\Delta t$ (s)")
             axis.set_ylabel("Successive-refinement relative $L_2$ error")
             axis.grid(True, which="both", ls="--", alpha=0.4)
@@ -77,11 +72,7 @@ def render(summary_path: Path, output_dir: Path | None = None) -> list[Path]:
             handles, labels, loc="upper center", ncol=len(labels),
             frameon=False, bbox_to_anchor=(0.5, 1.02),
         )
-        fig.suptitle(
-            f"{case.replace('_', ' ').title()} temporal self-convergence",
-            y=1.08,
-        )
-        fig.tight_layout()
+        fig.tight_layout(rect=(0, 0, 1, 0.93))
         output = output_dir / f"{case}_temporal_self_convergence.png"
         fig.savefig(output, dpi=300, bbox_inches="tight")
         plt.close(fig)

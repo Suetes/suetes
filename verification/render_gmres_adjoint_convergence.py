@@ -41,9 +41,6 @@ def main() -> None:
         1.0e-6, color="black", linestyle="-.", alpha=0.7,
         label=r"High accuracy ($10^{-6}$)",
     )
-    axis.set_title(
-        "SISL adjoint relative $L_2$ error versus GMRES iterations"
-    )
     axis.set_xlabel("GMRES iterations per timestep")
     axis.set_ylabel("Relative adjoint $L_2$ error")
     axis.grid(True, which="both", ls="--", alpha=0.5)

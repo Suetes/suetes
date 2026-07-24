@@ -90,8 +90,9 @@ def save_four_panel_convergence(
         frameon=False,
         fontsize=10,
     )
-    fig.suptitle(title, fontsize=14, y=1.12)
-    fig.tight_layout(w_pad=1.8)
+    # The manuscript caption supplies the figure-level title.  Keeping only
+    # variable/panel labels here saves vertical space and avoids duplicating it.
+    fig.tight_layout(w_pad=1.8, rect=(0, 0, 1, 0.94))
 
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     fig.savefig(output_path, dpi=300, bbox_inches="tight")

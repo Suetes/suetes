@@ -254,19 +254,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-    out_path_all = f'{output_dir}/temporal_convergence_study.png'
-    save_four_panel_convergence(
-        dt_plot,
-        [('SISL', errors_sisl), ('Split-explicit', errors_se)],
-        {
-            'u': r'$L_2$ difference (m s$^{-1}$)',
-            'w': r'$L_2$ difference (m s$^{-1}$)',
-            'pi': r'$L_2$ difference',
-            'th_v': r'$L_2$ difference (K)',
-        },
-        r'Time step $\Delta t$ (s)',
-        'Temporal self-convergence: rising thermal bubble',
-        out_path_all,
-    )
-    print(f"Saved all-variable temporal convergence plot to {out_path_all}")

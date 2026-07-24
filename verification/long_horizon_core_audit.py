@@ -23,7 +23,7 @@ from suetes.shared.artifacts import ArtifactLayout, artifact_from_bundle
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-BENCHMARK = REPO_ROOT / "benchmarks" / "physical" / "rising_bubble_3d.py"
+BENCHMARK = REPO_ROOT / "benchmarks" / "physical" / "rising_bubble_3d" / "run.py"
 CORES = ("sisl", "split-explicit")
 
 

@@ -1,12 +1,11 @@
 # Rising bubble 3-D pilot
 
-This benchmark is the pilot for the common artifact workflow. The existing
-runner remains at `benchmarks/physical/rising_bubble_3d.py` during migration.
+This benchmark provides the 3D rising thermal bubble test case.
 
 Run the model:
 
 ```bash
-python benchmarks/physical/rising_bubble_3d.py --name smoke --no-render
+python benchmarks/physical/rising_bubble_3d/run.py --name smoke --no-render
 ```
 
 This creates `output/benchmarks/rising_bubble_3d/smoke/`, with numerical data

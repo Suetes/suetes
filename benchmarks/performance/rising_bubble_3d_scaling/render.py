@@ -12,7 +12,7 @@ import pandas as pd
 
 from suetes.shared.artifacts import ArtifactLayout
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+REPO_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_OUTPUT_ROOT = REPO_ROOT / "output"
 
 
@@ -25,7 +25,7 @@ def select_inputs(requested: list[Path] | None, data_dir: Path) -> list[Path]:
     )
     if not candidates:
         raise FileNotFoundError(
-            "No scaling CSV found; run rising_bubble_3d_scaling.py first"
+            "No scaling CSV found; run rising_bubble_3d_scaling/run.py first"
         )
     return candidates
 

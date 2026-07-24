@@ -31,7 +31,7 @@ rerunning the model.
 For example:
 
 ```bash
-python benchmarks/physical/rising_bubble_3d.py --name paper --no-render
+python benchmarks/physical/rising_bubble_3d/run.py --name paper --no-render
 python benchmarks/physical/rising_bubble_3d/render.py \
   output/benchmarks/rising_bubble_3d/paper
 ```
