@@ -236,6 +236,9 @@ def test_unit_4_gmres_inversion(resolutions=[8, 16, 32, 64]):
 
         rhs_prime = physics.linear_operator(x_true, bg, dt=dt_test, alpha=alpha_test)
         x_num = solver.solve(rhs_prime, bg, x0=None)
+        relative_residual = float(
+            solver.relative_residual(x_num, rhs_prime, bg)
+        )
 
         mask_u = jnp.ones_like(x_true['u'], dtype=bool)
         mask_w = jnp.ones_like(x_true['w'], dtype=bool)
@@ -245,7 +248,16 @@ def test_unit_4_gmres_inversion(resolutions=[8, 16, 32, 64]):
         err_pi = compute_safe_err(x_num['pi'], x_true['pi'], mask_pi)
 
         results.append((dx, err_u, err_w, err_pi))
-        print(f"N = {r:3d} | GMRES Inversion Error -> u: {err_u:.2e} | w: {err_w:.2e} | pi: {err_pi:.2e}")
+        print(
+            f"N = {r:3d} | GMRES Inversion Error -> u: {err_u:.2e} "
+            f"| w: {err_w:.2e} | pi: {err_pi:.2e} "
+            f"| relative residual: {relative_residual:.2e}"
+        )
+        assert np.isfinite(relative_residual)
+        assert relative_residual < 1.0e-9, (
+            f"GMRES did not satisfy the implicit system at N={r}: "
+            f"relative residual={relative_residual:.3e}"
+        )
 
 
 # =============================================================================

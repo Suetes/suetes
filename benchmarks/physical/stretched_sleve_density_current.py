@@ -1,18 +1,19 @@
-import os
+import argparse
+from pathlib import Path
 import jax
 jax.config.update("jax_enable_x64", True)
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
+import numpy as np
+import xarray as xr
 
 from suetes.regional3d.geometry import RegionalGrid3D
 from suetes.regional3d.euler import Euler3D
 from suetes.regional3d.operators import CGridOperator3D
 from suetes.regional3d.steppers import SISLStepper3D
 from suetes.shared.driver import Simulation
+from suetes.shared.artifacts import ArtifactLayout, save_plot_dataset
 from suetes.shared.transforms import SleveSimple, BaseTransform
-
-output_dir = "output/plots/benchmarks"
-os.makedirs(output_dir, exist_ok=True)
 
 class StretchedSleveSimple(BaseTransform):
     def __init__(self, stretch_kappa=3.0, scale_s=4000.0, n=1.35):
@@ -31,7 +32,14 @@ class StretchedSleveSimple(BaseTransform):
         return zeta_stretched + h * (b_s ** self.n)
 
 
-def run_stress_test(experiment='density_current', use_stretched=True):
+def run_stress_test(
+    experiment='density_current',
+    use_stretched=True,
+    *,
+    data_dir: Path,
+    figure_dir: Path,
+    render: bool,
+):
     name = f"{experiment}_{'stretched' if use_stretched else 'standard'}"
     print(f"\n{'='*50}\nLaunching Setup: {name}\n{'='*50}")
     
@@ -174,14 +182,59 @@ def run_stress_test(experiment='density_current', use_stretched=True):
     plt.ylim(0, 10.0) # Zoom in to bottom 10km
 
     terrain = h_func(grid.x_m, 0.0) / 1000.0
+    artifact = xr.Dataset(
+        data_vars={
+            "field": (("x", "z"), np.asarray(var_to_plot)),
+            "physical_height": (("x", "z"), np.asarray(Z_plot) * 1000.0),
+            "terrain_height": ("x", np.asarray(terrain) * 1000.0),
+        },
+        coords={
+            "x": np.asarray(grid.x_m),
+            "z": np.arange(nz_plot),
+        },
+        attrs={
+            "experiment": experiment,
+            "coordinate": "stretched" if use_stretched else "standard",
+            "variable": "w" if is_w_plot else "th_v",
+            "dt_s": dt,
+            "t_end_s": t_end,
+        },
+    )
+    artifact_path = save_plot_dataset(
+        artifact, data_dir / f"{name}.nc",
+        experiment="stretched_sleve_stress_test",
+    )
+    print(f"Saved plot-ready artifact to '{artifact_path}'")
+    if not render:
+        plt.close()
+        return
     plt.fill_between(x_plot_1d, 0, terrain, color='black')
 
-    filename = f'{output_dir}/{name}.png'
+    filename = figure_dir / f"{name}.png"
     plt.savefig(filename, dpi=150, bbox_inches='tight')
     plt.close()
     print(f"Saved plot to '{filename}'")
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Compare stretched and standard SLEVE coordinates")
+    parser.add_argument("--output-root", type=Path, default=Path("output"))
+    parser.add_argument("--name", default="default")
+    parser.add_argument("--output-dir", type=Path)
+    parser.add_argument("--no-render", action="store_true")
+    args = parser.parse_args()
+    if args.output_dir is None:
+        layout = ArtifactLayout(
+            kind="benchmarks", case="stretched_sleve",
+            execution=args.name, output_root=args.output_root,
+        ).create()
+        data_dir, figure_dir = layout.data, layout.figures
+    else:
+        data_dir = figure_dir = args.output_dir
+        data_dir.mkdir(parents=True, exist_ok=True)
     for exp in ['density_current', 'wave_breaking']:
         for stretched in [True, False]:
-            run_stress_test(experiment=exp, use_stretched=stretched)
+            run_stress_test(
+                experiment=exp, use_stretched=stretched,
+                data_dir=data_dir, figure_dir=figure_dir,
+                render=not args.no_render,
+            )

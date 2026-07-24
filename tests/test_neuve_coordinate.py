@@ -4,7 +4,7 @@ import jax.numpy as jnp
 
 from suetes.shared.transforms import IntegralNeuralTransform, NEUVECoordinate
 from suetes.shared.transforms import GalChenSigma
-from experiments.neuve_coordinate_common import (
+from experiments._shared.neuve_coordinate import (
     build_transport_case, random_3d_terrain, transport_reversibility,
 )
 

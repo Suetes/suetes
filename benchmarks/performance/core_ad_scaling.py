@@ -7,6 +7,10 @@ import subprocess
 import time
 import statistics
 import csv
+import argparse
+from pathlib import Path
+
+from suetes.shared.artifacts import ArtifactLayout
 
 def run_single_worker(core_mode, T_val, grid_size, worker_type="total"):
     import jax
@@ -177,8 +181,21 @@ if __name__ == "__main__":
     import matplotlib.pyplot as plt
     import numpy as np
 
-    output_dir = "output/plots/benchmarks"
-    os.makedirs(output_dir, exist_ok=True)
+    parser = argparse.ArgumentParser(description="Benchmark reverse-mode core scaling")
+    parser.add_argument("--output-root", type=Path, default=Path("output"))
+    parser.add_argument("--name", default="default")
+    parser.add_argument("--output-dir", type=Path)
+    parser.add_argument("--no-render", action="store_true")
+    args = parser.parse_args()
+    if args.output_dir is None:
+        layout = ArtifactLayout(
+            kind="benchmarks", case="core_ad_scaling",
+            execution=args.name, output_root=args.output_root,
+        ).create()
+        data_dir, figure_dir = layout.data, layout.figures
+    else:
+        data_dir = figure_dir = args.output_dir
+        data_dir.mkdir(parents=True, exist_ok=True)
     
     print("\n==========================================================================")
     print("EXPERIMENT: 3D DOMAIN SIZE SCALING ON A SINGLE GPU (T = 30s)")
@@ -263,7 +280,7 @@ if __name__ == "__main__":
                     flush=True,
                 )
 
-    csv_path = os.path.join(output_dir, "single_gpu_domain_scaling.csv")
+    csv_path = data_dir / "single_gpu_domain_scaling.csv"
     with open(csv_path, "w", newline="") as handle:
         writer = csv.DictWriter(
             handle,
@@ -291,6 +308,10 @@ if __name__ == "__main__":
                     "peak_difference_mib": results_dom[mode]["vrams"][i],
                     "worker_failed": results_dom[mode]["oom"][i],
                 })
+
+    if args.no_render:
+        print(f"\nNumerical results saved to {csv_path}\n")
+        raise SystemExit(0)
 
     fig, (ax_time, ax_ratio, ax_mem_total, ax_mem_delta) = plt.subplots(
         1, 4, figsize=(24, 5.5)
@@ -367,11 +388,12 @@ if __name__ == "__main__":
 
     fig.suptitle('Reverse-mode scaling benchmark (float64)', fontsize=14, y=1.03)
     fig.tight_layout(rect=(0, 0, 1, 0.97))
-    fig.savefig(f'{output_dir}/single_gpu_domain_scaling.png', dpi=300, bbox_inches='tight')
+    figure_path = figure_dir / "single_gpu_domain_scaling.png"
+    fig.savefig(figure_path, dpi=300, bbox_inches='tight')
     plt.close(fig)
 
     print(
         f"\n[SUCCESS] Benchmark complete. Plot saved to "
-        f"{output_dir}/single_gpu_domain_scaling.png\n"
+        f"{figure_path}\n"
         f"Numerical results saved to {csv_path}\n"
     )

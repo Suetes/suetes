@@ -10,16 +10,17 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
+from suetes.shared.artifacts import ArtifactLayout
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_PLOT_DIR = REPO_ROOT / "output" / "plots" / "benchmarks"
+DEFAULT_OUTPUT_ROOT = REPO_ROOT / "output"
 
 
-def select_inputs(requested: list[Path] | None) -> list[Path]:
+def select_inputs(requested: list[Path] | None, data_dir: Path) -> list[Path]:
     if requested:
         return [path.resolve() for path in requested]
     candidates = sorted(
-        (REPO_ROOT / "output").glob("benchmark_bubble_scaling_*.csv"),
+        data_dir.glob("benchmark_bubble_scaling_*.csv"),
         key=lambda path: path.stat().st_mtime,
     )
     if not candidates:
@@ -65,10 +66,18 @@ def main():
         "--input", type=Path, nargs="+",
         help="One or more device-specific CSVs (default: all device CSVs)",
     )
-    parser.add_argument("--output-dir", type=Path, default=DEFAULT_PLOT_DIR)
+    parser.add_argument("--output-root", type=Path, default=DEFAULT_OUTPUT_ROOT)
+    parser.add_argument("--name", default="default", help="Execution label")
+    parser.add_argument("--output-dir", type=Path)
     args = parser.parse_args()
 
-    input_paths = select_inputs(args.input)
+    layout = ArtifactLayout(
+        kind="benchmarks",
+        case="rising_bubble_3d_scaling",
+        execution=args.name,
+        output_root=args.output_root,
+    )
+    input_paths = select_inputs(args.input, layout.data)
     frames = []
     for input_path in input_paths:
         frames.append(load_data(input_path))
@@ -180,8 +189,9 @@ def main():
     precision_suffix = f" ({precisions[0]})" if len(precisions) == 1 else ""
     fig.suptitle(f"Rising-bubble kernel scaling{precision_suffix}", fontsize=14)
 
-    args.output_dir.mkdir(parents=True, exist_ok=True)
-    output_path = args.output_dir / "suetes_scaling_metrics.png"
+    output_dir = args.output_dir or layout.figures
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_path = output_dir / "suetes_scaling_metrics.png"
     fig.savefig(output_path, dpi=300, bbox_inches="tight")
     plt.close(fig)
     print(f"Figure saved to {output_path}")

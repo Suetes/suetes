@@ -1,10 +1,11 @@
 import os
 import gc
+import argparse
+import json
+from pathlib import Path
 os.environ["XLA_PYTHON_CLIENT_ALLOCATOR"] = "platform"
 os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
 
-import matplotlib.pyplot as plt
-from convergence_plotting import save_four_panel_convergence
 import numpy as np
 import jax
 import jax.numpy as jnp
@@ -16,10 +17,8 @@ from suetes.regional3d.geometry import RegionalGrid3D
 from suetes.regional3d.operators import CGridOperator3D
 from suetes.regional3d.euler import Euler3D
 from suetes.regional3d.steppers import build_dynamical_core
+from suetes.shared.artifacts import ArtifactLayout
 from suetes.shared.driver import Simulation
-
-output_dir = "output/plots/benchmarks"
-os.makedirs(output_dir, exist_ok=True)
 
 # Keep the split-explicit method fixed throughout temporal refinement.  With a
 # constant number of acoustic substeps, halving the outer timestep also halves
@@ -28,6 +27,9 @@ os.makedirs(output_dir, exist_ok=True)
 # ratio.
 SPLIT_EXPLICIT_NS = 40
 NUM_PROGRESS_UPDATES = 8
+# Cross-core comparisons must use identical physical damping.  This test is
+# short enough that no upper sponge is needed, so disable it for both methods.
+MAX_DAMP = 0.0
 
 
 def release_jax_memory():
@@ -67,7 +69,7 @@ def run_bubble_temporal(
     if core_type == "sisl":
         core_kwargs = {
             "dt": dt, "nu_div_factor": 0.0, "nu_h_factor": 0.0, "damp_height": 7500.0, 
-            "max_damp": 0.0, "alpha": alpha, "solver_tol": 1e-12, # <-- SET MAX_DAMP TO 0.0
+            "max_damp": MAX_DAMP, "alpha": alpha, "solver_tol": 1e-12,
             "solver_maxiter": 20, "solver_restart": 20
         }
     elif core_type == "split-explicit":
@@ -80,7 +82,7 @@ def run_bubble_temporal(
             "nu_div_factor": 0.0,
             "nu_h_factor": 0.0,
             "damp_height": 7500.0,
-            "max_damp": 0.05,
+            "max_damp": MAX_DAMP,
             "alpha": alpha,
         }
     else:
@@ -207,36 +209,51 @@ def run_temporal_study(core_type, alpha=0.55):
             rates[k].append(rate)
             print(f"  Rate {k:4s}: {rate:.2f}")
 
-    return dt_vals[:-1], errors
+    return dt_vals[:-1], errors, rates
+
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="Run fixed-grid temporal convergence for both dynamical cores."
+    )
+    parser.add_argument("--output-root", type=Path, default=Path("output"))
+    parser.add_argument("--name", default="default")
+    return parser.parse_args()
+
+
+def main():
+    args = parse_args()
+    dt_vals, errors_sisl, rates_sisl = run_temporal_study(
+        "sisl", alpha=0.5
+    )
+    _, errors_se, rates_se = run_temporal_study(
+        "split-explicit", alpha=0.5
+    )
+    summary = {
+        "test": "rising_bubble_temporal_convergence",
+        "t_end_s": 24.0,
+        "dx_m": 250.0,
+        "damping": MAX_DAMP,
+        "split_explicit_ns": SPLIT_EXPLICIT_NS,
+        "coarse_dt_s": list(dt_vals),
+        "cores": {
+            "sisl": {"self_errors": errors_sisl, "self_orders": rates_sisl},
+            "split-explicit": {
+                "self_errors": errors_se, "self_orders": rates_se
+            },
+        },
+    }
+    layout = ArtifactLayout(
+        kind="verification", case="temporal_core_convergence",
+        execution=args.name, output_root=args.output_root,
+    ).create()
+    path = layout.data / "summary.json"
+    with path.open("w", encoding="utf-8") as stream:
+        json.dump(summary, stream, indent=2)
+    print(f"Saved temporal convergence artifact to {path}")
+
 
 if __name__ == "__main__":
-    dt_vals, errors_sisl = run_temporal_study("sisl", alpha=0.5)
-    _, errors_se = run_temporal_study("split-explicit", alpha=0.5)
-
-    dt_plot = np.array(dt_vals)
-
-    # --- Plotting Momentum (u) Temporal Convergence ---
-    plt.figure(figsize=(10, 8))
-    plt.loglog(dt_plot, errors_sisl['u'], 'o-', label='SISL', linewidth=2, markersize=8)
-    plt.loglog(dt_plot, errors_se['u'], 's-', label='Split-explicit', linewidth=2, markersize=8)
-
-    ref_start = max(errors_sisl['u'][0], errors_se['u'][0]) * 1.5
-    ref_line_2nd = ref_start * (dt_plot / dt_plot[0])**2
-    plt.loglog(dt_plot, ref_line_2nd, 'k--', label='Theoretical 2nd Order', alpha=0.7)
-
-    plt.xlabel('Timestep dt (s)', fontsize=12)
-    plt.ylabel('L2 Error in u (m/s)', fontsize=12)
-    plt.title('Temporal convergence study: Rising bubble benchmark (u momentum)', fontsize=14)
-    plt.grid(True, which="both", ls="--", alpha=0.5)
-    plt.legend(fontsize=10, loc='lower right')
-    
-    # Notice we flip the x-axis so smaller dt is on the right, matching spatial grid plotting
-    plt.gca().invert_xaxis() 
-
-    out_path_u = f'{output_dir}/temporal_convergence_study_u.png'
-    plt.savefig(out_path_u, dpi=300, bbox_inches='tight')
-    plt.close()
-    print(f"\nSaved pure temporal convergence plot to {out_path_u}")
+    main()
 
     out_path_all = f'{output_dir}/temporal_convergence_study.png'
     save_four_panel_convergence(

@@ -1,0 +1,168 @@
+#!/usr/bin/env python3
+"""Render the 24 s rising-bubble self- and cross-convergence diagnostics."""
+
+from __future__ import annotations
+
+import argparse
+import json
+from pathlib import Path
+import re
+
+import matplotlib.pyplot as plt
+import numpy as np
+
+from convergence_plotting import save_four_panel_convergence
+from suetes.shared.artifacts import artifact_from_bundle, figure_dir_for
+
+
+FIELDS = ("u", "w", "pi", "th_v")
+SELF_PATTERN = re.compile(
+    r"Res\s+(?P<coarse>[\d.]+)\s+->\s+(?P<fine>[\d.]+)m"
+    r"\s+\|\s+err_u:\s+(?P<u>[\deE+.-]+)"
+    r"\s+\|\s+err_w:\s+(?P<w>[\deE+.-]+)"
+    r"\s+\|\s+err_pi:\s+(?P<pi>[\deE+.-]+)"
+    r"\s+\|\s+err_th:\s+(?P<th_v>[\deE+.-]+)"
+)
+CROSS_PATTERN = re.compile(
+    r"dx=\s*(?P<dx>[\d.]+)m\s+\|\s+u=(?P<u>[\deE+.-]+)"
+    r"\s+\|\s+w=(?P<w>[\deE+.-]+)"
+    r"\s+\|\s+pi=(?P<pi>[\deE+.-]+)"
+    r"\s+\|\s+th_v=(?P<th_v>[\deE+.-]+)"
+)
+
+
+def parse_log(path: Path) -> tuple[np.ndarray, dict, dict, np.ndarray, dict]:
+    text = path.read_text(encoding="utf-8")
+    self_matches = list(SELF_PATTERN.finditer(text))
+    if len(self_matches) != 6:
+        raise ValueError(
+            f"Expected three self-error rows per core in {path}, "
+            f"found {len(self_matches)}"
+        )
+    halves = (self_matches[:3], self_matches[3:])
+    dx = np.asarray([float(match["coarse"]) for match in halves[0]])
+    errors = []
+    for matches in halves:
+        errors.append({
+            field: [float(match[field]) for match in matches]
+            for field in FIELDS
+        })
+
+    cross_matches = list(CROSS_PATTERN.finditer(text))
+    if len(cross_matches) != 4:
+        raise ValueError(
+            f"Expected four cross-core rows in {path}, found {len(cross_matches)}"
+        )
+    cross_dx = np.asarray([float(match["dx"]) for match in cross_matches])
+    cross = {
+        field: [float(match[field]) for match in cross_matches]
+        for field in FIELDS
+    }
+    return dx, errors[0], errors[1], cross_dx, cross
+
+
+def parse_summary(path: Path) -> tuple[np.ndarray, dict, dict, np.ndarray, dict]:
+    with path.open(encoding="utf-8") as stream:
+        summary = json.load(stream)
+    resolutions = np.asarray(summary["resolutions_m"], dtype=float)
+    return (
+        resolutions[:-1],
+        summary["cores"]["sisl"]["self_errors"],
+        summary["cores"]["split-explicit"]["self_errors"],
+        resolutions,
+        summary["cross_core"]["differences"],
+    )
+
+
+def render(source: Path, output_dir: Path | None = None) -> list[Path]:
+    if source.is_dir():
+        source = artifact_from_bundle(source, pattern="summary.json")
+    if source.suffix == ".json":
+        dx, sisl, split, cross_dx, cross = parse_summary(source)
+    else:
+        dx, sisl, split, cross_dx, cross = parse_log(source)
+    output_dir = output_dir or figure_dir_for(source)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    ylabels = {
+        "u": r"$L_2$ difference (m s$^{-1}$)",
+        "w": r"$L_2$ difference (m s$^{-1}$)",
+        "pi": r"$L_2$ difference",
+        "th_v": r"$L_2$ difference (K)",
+    }
+    self_path = output_dir / "bubble_t24_self_convergence.png"
+    save_four_panel_convergence(
+        dx,
+        [("SISL", sisl), ("Split-Explicit", split)],
+        ylabels,
+        r"Coarse-grid spacing $\Delta x$ (m)",
+        "Rising bubble self-convergence at $t=24$ s",
+        self_path,
+        reference_order=2,
+    )
+    cross_path = output_dir / "bubble_t24_cross_core_convergence.png"
+    save_four_panel_convergence(
+        cross_dx,
+        [("SISL minus Split-Explicit", cross)],
+        ylabels,
+        r"Grid spacing $\Delta x$ (m)",
+        "Rising bubble cross-core convergence at $t=24$ s",
+        cross_path,
+        reference_order=2,
+    )
+
+    # A compact manuscript-friendly theta-only figure.
+    fig, axis = plt.subplots(figsize=(6.7, 5.0))
+    axis.loglog(dx, sisl["th_v"], "o-", lw=2, label="SISL")
+    axis.loglog(dx, split["th_v"], "s-", lw=2, label="Split-Explicit")
+    reference = max(sisl["th_v"][0], split["th_v"][0]) * (
+        dx / dx[0]
+    ) ** 2
+    axis.loglog(dx, reference, "k--", alpha=0.7, label="Order 2")
+    axis.invert_xaxis()
+    axis.set_xlabel(r"Coarse-grid spacing $\Delta x$ (m)")
+    axis.set_ylabel(r"Successive-grid $L_2$ difference in $\theta_v$ (K)")
+    axis.set_title(r"Rising bubble self-convergence at $t=24$ s")
+    axis.grid(True, which="both", ls="--", alpha=0.4)
+    axis.legend()
+    fig.tight_layout()
+    theta_path = output_dir / "bubble_t24_theta_self_convergence.png"
+    fig.savefig(theta_path, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+
+    outputs = [self_path, cross_path, theta_path]
+    for output in outputs:
+        print(f"Saved {output}")
+    return outputs
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "source", nargs="?", type=Path,
+        default=Path(
+            "output/verification/rising_bubble_core_convergence/t24"
+        ),
+        help="Standard bundle, summary JSON, or legacy bubble.log",
+    )
+    parser.add_argument(
+        "--output-dir", type=Path,
+    )
+    args = parser.parse_args()
+    source = args.source
+    standard_summary = source / "data" / "summary.json"
+    output_dir = args.output_dir
+    if (
+        source.name == "t24"
+        and (not source.exists() or not standard_summary.exists())
+    ):
+        source = Path("output/verification/bubble.log")
+        if output_dir is None:
+            output_dir = Path(
+                "output/verification/rising_bubble_core_convergence/"
+                "t24/figures"
+            )
+    render(source, output_dir)
+
+
+if __name__ == "__main__":
+    main()

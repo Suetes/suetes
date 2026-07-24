@@ -8,14 +8,64 @@ correctness or reusable performance baselines.
 Operational ERA5 preprocessing, forecast execution, and rendering entry points
 belong in `runs/`.
 
+## Case layout
+
+Every experiment owns a directory. A typical case contains:
+
+```text
+experiments/<case>/
+├── run.py
+├── render.py
+└── README.md          # optional case-specific scientific notes
+```
+
+Multi-stage cases use descriptive entry-point names instead. For example,
+`neuve_coordinates/` contains `train.py`, `tune_sleve.py`, `evaluate.py`, and
+their renderers. Shared implementation belongs in `experiments/_shared/`.
+
+Current cases:
+
+- `core_adjoint_analysis/`
+- `core_quantitative_comparison/`
+- `core_separation_showcase/`
+- `differentiable_closure/`
+- `era5_4dvar/`
+- `gravity_wave_optimal_topography/`
+- `neuve_coordinates/`
+- `schaer_optimal_perturbation/`
+- `simulation_adjoint/`
+- `synthetic_4dvar/`
+- `tracer_inversion_3d/`
+- `tracer_inversion_3d_complex/`
+
+## Output layout
+
+Each execution owns a self-contained bundle:
+
+```text
+output/experiments/<experiment-name>/<execution-name>/
+├── data/
+│   ├── artifact.nc
+│   ├── artifact.json
+│   └── checkpoints, tables, or optimization histories
+└── figures/
+```
+
+Entry points use `--name` to distinguish executions and `--output-root` to
+redirect the bundle tree. `--output-dir` remains as a flat-directory
+compatibility override. Where a simulation historically rendered inline,
+`--no-render` or the existing opt-in plotting flag allows data production to
+run independently. Renderer scripts accept either the execution bundle or its
+primary artifact and never rerun the model.
+
 ## NEUVE coordinate-discovery workflow
 
 The coordinate experiments have three manifest-driven entry points:
 
-1. `train_neuve_coordinate.py` trains NEUVE on one or more terrain samples and writes
+1. `neuve_coordinates/train.py` trains NEUVE on one or more terrain samples and writes
    `training_dataset.json`, a frozen checkpoint, history, and training plot.
-2. `tune_sleve_coordinate.py` tunes SLEVE on that exact training manifest.
-3. `evaluate_neuve_coordinates.py` evaluates frozen NEUVE, tuned SLEVE, and
+2. `neuve_coordinates/tune_sleve.py` tunes SLEVE on that exact training manifest.
+3. `neuve_coordinates/evaluate.py` evaluates frozen NEUVE, tuned SLEVE, and
    Gal-Chen on an arbitrary testing manifest containing one or more samples.
 
 All entry points support `--target pgf_rest`, `--target
@@ -36,11 +86,11 @@ transmitted into the upper troposphere.  This exposes the compromise imposed by
 a single global terrain-decay scale while allowing a terrain-conditioned
 coordinate to respond locally.
 
-All three commands should use the same `--output-dir`.  Files are kept flat in
-that experiment directory: `neuve_coordinate.npz`, `training_dataset.json`,
-`best_sleve.json`, CSV/JSON diagnostics, and PNG figures.  The SLEVE script
-defaults to the directory containing its dataset, and evaluation can infer the
-NEUVE and SLEVE filenames from `--output-dir`.
+All three commands should use the same `--name` and `--output-root`. Data files
+such as `neuve_coordinate.npz`, `training_dataset.json`, `best_sleve.json`,
+and CSV/JSON diagnostics are kept in the bundle's `data/` directory. The SLEVE
+script defaults to the directory containing its dataset, and evaluation can
+infer the NEUVE and SLEVE filenames from its resolved data directory.
 
 SLEVE tuning first uses inexpensive grid geometry and bisection to locate the
 largest feasible exponent at each decay scale.  For the resting-PGF target it
@@ -59,8 +109,8 @@ three test terrains; use `--plot-samples` to change that count.
 Use `--terrain-family ridge --seeds 999` for fixed-domain curve fitting, or
 provide multiple comma-separated seeds (normally with `random3d`) for dataset
 training.  A held-out test manifest must use seeds not present in the training
-manifest.  `neuve_coordinate_common.py` is a shared implementation module rather than
-an experiment entry point.
+manifest. `_shared/neuve_coordinate.py` is a shared implementation module
+rather than an experiment entry point.
 
 The default NEUVE optimization is a reproducible 90-update run: 30 discovery
 updates at $5\times10^{-3}$ followed automatically by a reset Adam optimizer
@@ -81,12 +131,12 @@ NEUVE evaluation writes `coordinate_evaluation.nc`; regenerate its galleries
 without running the model with:
 
 ```bash
-python experiments/plot_neuve_coordinate_evaluation.py \
-  output/EXPERIMENT/coordinate_evaluation.nc
+python experiments/neuve_coordinates/render_evaluation.py \
+  output/experiments/neuve_coordinates/EXPERIMENT/data/coordinate_evaluation.nc
 ```
 
 The optimal-topography experiment writes
 `gravity_wave_optimal_topography_CORE.nc`; regenerate its figures with
-`experiments/plot_gravity_wave_optimal_topography.py`.  The Wreckhouse run
+`experiments/gravity_wave_optimal_topography/render.py`. The Wreckhouse run
 writes `wreckhouse_worst_case_feb2025_plot_data.nc`, consumed by
 `runs/plot_wreckhouse_worst_case.py`.

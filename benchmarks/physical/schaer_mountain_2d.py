@@ -1,17 +1,18 @@
-import os
+import argparse
+from pathlib import Path
 
 import jax
 jax.config.update("jax_enable_x64", True)
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
+import numpy as np
+import xarray as xr
 
 from suetes.slice2d.geometry import StaggeredGrid
 from suetes.slice2d.euler import VerticalSlice
 from suetes.slice2d.steppers import SISLStepper
+from suetes.shared.artifacts import ArtifactLayout, save_plot_dataset
 from suetes.shared.driver import Simulation
-
-output_dir = "output/plots/benchmarks"
-os.makedirs(output_dir, exist_ok=True)
 
 # ====================================================================
 # 1. SETUP GRID
@@ -96,12 +97,51 @@ def step_fn(curr_state, step_idx):
 # 5. RUN SIMULATION
 # ====================================================================
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Run the 2-D Schär mountain benchmark")
+    parser.add_argument("--output-root", type=Path, default=Path("output"))
+    parser.add_argument("--name", default="default")
+    parser.add_argument("--output-dir", type=Path)
+    parser.add_argument("--no-render", action="store_true")
+    args = parser.parse_args()
+    if args.output_dir is None:
+        layout = ArtifactLayout(
+            kind="benchmarks", case="schaer_mountain_2d",
+            execution=args.name, output_root=args.output_root,
+        ).create()
+        data_dir, figure_dir = layout.data, layout.figures
+    else:
+        data_dir = figure_dir = args.output_dir
+        data_dir.mkdir(parents=True, exist_ok=True)
+
     t_start = 0.0
     t_end = 7200.0  
     print(f"[TEST 2D] Running Schär Mountain Test (dt={dt}, T={t_end}s)...")
 
     sim = Simulation(step_fn=step_fn, dt=dt)
     final_state = sim.run(state, t_start, t_end, chunk_steps=50)
+    artifact = xr.Dataset(
+        data_vars={
+            "vertical_velocity": (
+                ("x", "z_interface"), np.asarray(final_state["w"])
+            ),
+            "physical_height": (
+                ("x", "z_interface"), np.asarray(grid.Z_w)
+            ),
+            "terrain_height": ("x", np.asarray(hx_m)),
+        },
+        coords={
+            "x": np.asarray(grid.X_w[:, 0]),
+            "z_interface": np.arange(grid.Z_w.shape[1]),
+        },
+        attrs={"dt_s": dt, "t_end_s": t_end, "core": "sisl"},
+    )
+    artifact_path = save_plot_dataset(
+        artifact, data_dir / "artifact.nc",
+        experiment="schaer_mountain_2d",
+    )
+    print(f"[OUTPUT] Saved {artifact_path}")
+    if args.no_render:
+        raise SystemExit(0)
 
     # ====================================================================
     # 6. PLOTTING
@@ -130,5 +170,6 @@ if __name__ == "__main__":
     plt.xlabel("Distance (km)")
     plt.ylabel("Altitude (km)")
 
-    plt.savefig(f'{output_dir}/schaer_mountain_2d_{t_end}.png', dpi=150, bbox_inches='tight')
-    print(f"[PLOTTING] Saved plot to '{output_dir}/schaer_mountain_2d_{t_end}.png'")
+    output_path = figure_dir / "schaer_mountain_2d.png"
+    plt.savefig(output_path, dpi=150, bbox_inches='tight')
+    print(f"[PLOTTING] Saved plot to '{output_path}'")

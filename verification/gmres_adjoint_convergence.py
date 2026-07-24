@@ -25,6 +25,9 @@ import os
 import sys
 import time
 import gc
+import argparse
+import json
+from pathlib import Path
 
 # Prevent XLA from preallocating 90% of GPU memory and crashing on subsequent compiles
 os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
@@ -35,15 +38,12 @@ import jax
 jax.config.update("jax_enable_x64", True)
 import jax.numpy as jnp
 import numpy as np
-import matplotlib.pyplot as plt
 
 from suetes.regional3d.geometry import RegionalGrid3D
 from suetes.regional3d.operators import CGridOperator3D
 from suetes.regional3d.euler import Euler3D
 from suetes.regional3d.steppers import build_dynamical_core
-
-output_dir = "output/plots/benchmarks"
-os.makedirs(output_dir, exist_ok=True)
+from suetes.shared.artifacts import ArtifactLayout
 
 
 def build_experiment_case(nx=64, ny=3, nz=32, dx=100.0):
@@ -133,10 +133,13 @@ def evaluate_adjoint(dt_val, maxiter, tol):
 
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--output-root", type=Path, default=Path("output"))
+    parser.add_argument("--name", default="default")
+    args = parser.parse_args()
     print("==========================================================================")
     print("GMRES Adjoint Convergence Analysis & Time-Step Sensitivity Study")
     print("==========================================================================")
-    print(f"Output Directory: {output_dir}\n")
 
     dt_configs = [
         {"dt": 10.0, "label": r"$\Delta t = 10.0$ s ($\mathrm{CFL}_h \approx 22.7$)", "color": "#E53E3E", "iters": [2, 4, 6, 8, 10, 12, 15, 20]},
@@ -180,27 +183,22 @@ def main():
         }
         print()
 
-    # --- Plotting Comprehensive Convergence Curves ---
-    fig, ax = plt.subplots(1, 1, figsize=(8.5, 5.5))
-
-    for dt_val, r in results.items():
-        ax.semilogy(r["iters"], r["l2_errors"], 'o-', color=r["color"], label=r["label"], linewidth=2.5, markersize=6)
-
-    # Threshold horizontal reference lines
-    ax.axhline(1e-4, color='gray', linestyle=':', alpha=0.7, label=r'Target accuracy ($10^{-4}$)')
-    ax.axhline(1e-6, color='black', linestyle='-.', alpha=0.7, label=r'High accuracy ($10^{-6}$)')
-
-    ax.set_title("SISL adjoint relative $L_2$-error convergence vs. time-step", fontsize=13)
-    ax.set_xlabel("GMRES iterations per time-step", fontsize=11)
-    ax.set_ylabel(r"Relative $L_2$-error $\|\nabla \mathcal{L}_k - \nabla \mathcal{L}_{\text{ref}}\|_2 / \|\nabla \mathcal{L}_{\text{ref}}\|_2$", fontsize=11)
-    ax.grid(True, which='both', ls='--', alpha=0.5)
-    ax.legend(fontsize=10, loc='upper right')
-
-    out_path = f"{output_dir}/sisl_adjoint_gmres_dt_convergence_study.png"
-    fig.tight_layout()
-    fig.savefig(out_path, dpi=300, bbox_inches='tight')
-    plt.close(fig)
-    print(f"[SUCCESS] Saved multi-dt GMRES convergence analysis figure to {out_path}")
+    layout = ArtifactLayout(
+        kind="verification", case="gmres_adjoint_convergence",
+        execution=args.name, output_root=args.output_root,
+    ).create()
+    artifact = layout.data / "summary.json"
+    with artifact.open("w", encoding="utf-8") as stream:
+        json.dump(
+            {
+                "test": "gmres_adjoint_convergence",
+                "target_relative_l2": [1.0e-4, 1.0e-6],
+                "results": {str(key): value for key, value in results.items()},
+            },
+            stream,
+            indent=2,
+        )
+    print(f"[SUCCESS] Saved GMRES adjoint artifact to {artifact}")
 
     # Summary table output
     print("\n==========================================================================")

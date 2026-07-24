@@ -18,9 +18,10 @@ import statistics
 import subprocess
 import sys
 
+from suetes.shared.artifacts import ArtifactLayout
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_OUTPUT_DIR = REPO_ROOT / "output"
+DEFAULT_OUTPUT_ROOT = REPO_ROOT / "output"
 
 
 def _memory_stats(device) -> dict[str, int]:
@@ -316,7 +317,12 @@ def parse_args():
     parser.add_argument(
         "--grid-sizes", type=int, nargs="+", default=(64, 96, 128, 160, 192)
     )
-    parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
+    parser.add_argument("--output-root", type=Path, default=DEFAULT_OUTPUT_ROOT)
+    parser.add_argument("--name", default="default", help="Execution label")
+    parser.add_argument(
+        "--output-dir", type=Path,
+        help="Explicit data directory (legacy compatibility override)",
+    )
     return parser.parse_args()
 
 
@@ -335,6 +341,16 @@ def main():
         )
         print(json.dumps(result, allow_nan=True))
         return
+
+    if args.output_dir is None:
+        output_dir = ArtifactLayout(
+            kind="benchmarks",
+            case="rising_bubble_3d_scaling",
+            execution=args.name,
+            output_root=args.output_root,
+        ).create().data
+    else:
+        output_dir = args.output_dir
 
     results = []
     output_path = None
@@ -357,7 +373,7 @@ def main():
             results.append(result)
             if output_path is None:
                 device_name = result["device"].replace(" ", "_")
-                output_path = args.output_dir / f"benchmark_bubble_scaling_{device_name}.csv"
+                output_path = output_dir / f"benchmark_bubble_scaling_{device_name}.csv"
             write_results(output_path, results)
             print(
                 f"dt={result['dt']:.5g}s, ns={result['ns']}, "

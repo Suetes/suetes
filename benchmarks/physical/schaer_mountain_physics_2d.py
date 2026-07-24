@@ -1,22 +1,24 @@
 import os
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+import argparse
+from pathlib import Path
 
 import jax
 jax.config.update("jax_enable_x64", True)
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
+import numpy as np
+import xarray as xr
 
 from suetes.regional3d.geometry import RegionalGrid3D
 from suetes.regional3d.euler import Euler3D
 from suetes.regional3d.operators import CGridOperator3D
 from suetes.regional3d.steppers import SISLStepper3D
 from suetes.shared.driver import Simulation
+from suetes.shared.artifacts import ArtifactLayout, save_plot_dataset
 
 from suetes.physics.base import PhysicsSuite
 from suetes.physics.gravity_waves import UpperRayleighDamping, McFarlaneGWD
-
-output_dir = "output/plots/benchmarks"
-os.makedirs(output_dir, exist_ok=True)
 
 # --- 1. SCHÄR MOUNTAIN PROFILE ---
 def schaer_mountain(x, y):
@@ -128,15 +130,53 @@ def step_fn(curr_state, step_idx):
 sim = Simulation(step_fn=step_fn, dt=dt)
 
 def main():
+    parser = argparse.ArgumentParser(description="Run Schär mountain with gravity-wave physics")
+    parser.add_argument("--output-root", type=Path, default=Path("output"))
+    parser.add_argument("--name", default="default")
+    parser.add_argument("--output-dir", type=Path)
+    parser.add_argument("--no-render", action="store_true")
+    args = parser.parse_args()
+    if args.output_dir is None:
+        layout = ArtifactLayout(
+            kind="benchmarks", case="schaer_mountain_physics_2d",
+            execution=args.name, output_root=args.output_root,
+        ).create()
+        data_dir, figure_dir = layout.data, layout.figures
+    else:
+        data_dir = figure_dir = args.output_dir
+        data_dir.mkdir(parents=True, exist_ok=True)
+
     # --- 5. RUN SIMULATION ---
     print("\nLaunching Schär Mountain Benchmark...")
     final_state = sim.run(state, t_start=0.0, t_end=t_end, chunk_steps=50)
+    w_slice = np.asarray(final_state["w"][:, 1, :])
+    artifact = xr.Dataset(
+        data_vars={
+            "vertical_velocity": (("x", "z_interface"), w_slice),
+            "physical_height": (
+                ("x", "z_interface"), np.asarray(grid.Z_w[:, 1, :])
+            ),
+            "terrain_height": (
+                "x", np.asarray(schaer_mountain(grid.x_m, 0.0))
+            ),
+        },
+        coords={
+            "x": np.asarray(grid.x_m),
+            "z_interface": np.arange(nz + 1),
+        },
+        attrs={"dt_s": dt, "t_end_s": t_end, "core": "sisl"},
+    )
+    artifact_path = save_plot_dataset(
+        artifact, data_dir / "artifact.nc",
+        experiment="schaer_mountain_physics_2d",
+    )
+    print(f"Saved plot-ready artifact to {artifact_path}")
+    if args.no_render:
+        return
 
     # --- 6. VISUALIZE RESULTS ---
     print("\nPlotting final state...")
     # Vertical velocity at the mid-level in the vertical (index 1)
-    w_slice = final_state['w'][:, 1, :] 
-
     x_start_idx = (nx // 4)
     x_end_idx = 3 * (nx // 4)
     x_plot_1d = grid.x_m[x_start_idx:x_end_idx] / 1000.0 
@@ -158,8 +198,9 @@ def main():
     mountain_terrain = schaer_mountain(grid.x_m[x_start_idx:x_end_idx], 0.0) / 1000.0
     plt.fill_between(x_plot_1d, 0, mountain_terrain, color='black')
 
-    plt.savefig(f'{output_dir}/schaer_mountain_3d_{t_end}.png', dpi=150, bbox_inches='tight')
-    print(f"Saved plot to '{output_dir}/schaer_mountain_3d_{t_end}.png'")
+    figure_path = figure_dir / "schaer_mountain_physics_2d.png"
+    plt.savefig(figure_path, dpi=150, bbox_inches='tight')
+    print(f"Saved plot to '{figure_path}'")
 
 if __name__ == "__main__":
     main()

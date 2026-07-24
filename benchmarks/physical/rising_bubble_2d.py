@@ -1,17 +1,18 @@
-import os
+import argparse
+from pathlib import Path
 
 import jax
 jax.config.update("jax_enable_x64", True)
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
+import numpy as np
+import xarray as xr
 
 from suetes.slice2d.geometry import StaggeredGrid
 from suetes.slice2d.euler import VerticalSlice
 from suetes.slice2d.steppers import SISLStepper
+from suetes.shared.artifacts import ArtifactLayout, save_plot_dataset
 from suetes.shared.driver import Simulation
-
-output_dir = "output/plots/benchmarks"
-os.makedirs(output_dir, exist_ok=True)
 
 # ====================================================================
 # 1. SETUP GRID & PHYSICS
@@ -81,18 +82,49 @@ t_end = 1000.0
 sim = Simulation(step_fn=unified_step_fn, dt=dt)
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Run the 2-D rising-bubble benchmark")
+    parser.add_argument("--output-root", type=Path, default=Path("output"))
+    parser.add_argument("--name", default="default")
+    parser.add_argument("--output-dir", type=Path)
+    parser.add_argument("--no-render", action="store_true")
+    args = parser.parse_args()
+    if args.output_dir is None:
+        layout = ArtifactLayout(
+            kind="benchmarks", case="rising_bubble_2d",
+            execution=args.name, output_root=args.output_root,
+        ).create()
+        data_dir, figure_dir = layout.data, layout.figures
+    else:
+        data_dir = figure_dir = args.output_dir
+        data_dir.mkdir(parents=True, exist_ok=True)
+
     print(f"[TEST 2D] Running SISL Bubble Test (dt={dt}s)...")
     final_state = sim.run(state, t_start=0.0, t_end=t_end, chunk_steps=100)
+    th_pert = np.asarray(final_state["th_v"] - 300.0)
+    artifact = xr.Dataset(
+        data_vars={"theta_perturbation": (("x", "z"), th_pert)},
+        coords={
+            "x": np.asarray(grid.X_m[:, 0]),
+            "z": np.asarray(grid.Z_m[0, :]),
+        },
+        attrs={"dt_s": dt, "t_end_s": t_end, "core": "sisl"},
+    )
+    artifact_path = save_plot_dataset(
+        artifact, data_dir / "artifact.nc",
+        experiment="rising_bubble_2d",
+    )
+    print(f"[OUTPUT] Saved {artifact_path}")
 
     # ====================================================================
     # 4. PLOTTING
     # ====================================================================
+    if args.no_render:
+        raise SystemExit(0)
     plt.figure(figsize=(12, 5))
-    th_pert = final_state['th_v'] - 300.0
     plt.contourf(grid.X_m / 1000.0, grid.Z_m / 1000.0, th_pert, levels=20, cmap='RdBu_r')
     plt.title(fr"SISL Rising Bubble: $\Delta \theta$ at T={t_end}s (dt={dt}s)")
     plt.xlabel("x (km)")
     plt.ylabel("z (km)")
     plt.colorbar(label="Temperature Perturbation (K)")
-    plt.savefig(f'{output_dir}/rising_bubble_2d_{t_end}s.png', dpi=150, bbox_inches='tight')
+    plt.savefig(figure_dir / "rising_bubble_2d.png", dpi=150, bbox_inches='tight')
     print("[PLOTTING]Saved rising_bubble_2d.png")

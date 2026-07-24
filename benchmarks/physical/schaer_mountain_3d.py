@@ -22,12 +22,11 @@ import sys
 
 import numpy as np
 import xarray as xr
-from suetes.shared.artifacts import save_plot_dataset
+from suetes.shared.artifacts import ArtifactLayout, save_plot_dataset
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_DATA_DIR = REPO_ROOT / "output" / "benchmark_data"
-DEFAULT_PLOT_DIR = REPO_ROOT / "output" / "plots" / "benchmarks"
+DEFAULT_OUTPUT_ROOT = REPO_ROOT / "output"
 CONSTANTS = {
     "g": 9.81, "cp": 1004.0, "Rd": 287.0,
     "cvd": 717.0, "p0": 100_000.0,
@@ -45,9 +44,9 @@ def mountain_numpy(x):
     return 250.0 * np.exp(-(x / 5000.0) ** 2) * np.cos(np.pi * x / 4000.0) ** 2
 
 
-def result_path(data_dir, core, dx, dz, dt, t_end, stabilization, snapshot_interval):
+def result_path(output_dir, core, dx, dz, dt, t_end, stabilization, snapshot_interval):
     suffix = "" if stabilization == 0.0 else f"_nu{stabilization:g}"
-    return data_dir / (
+    return output_dir / (
         f"schaer_mountain_{core.replace('-', '_')}_dx{dx:g}_dz{dz:g}"
         f"_dt{dt:g}_t{t_end:g}"
         f"{suffix}_snap{snapshot_interval:g}.npz"
@@ -431,8 +430,16 @@ def parse_args():
     parser.add_argument("--comparison-time", type=float)
     parser.add_argument("--stabilization", type=float, default=0.0)
     parser.add_argument("--reuse", action="store_true")
-    parser.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR)
-    parser.add_argument("--output-dir", type=Path, default=DEFAULT_PLOT_DIR)
+    parser.add_argument(
+        "--output-root", type=Path, default=DEFAULT_OUTPUT_ROOT,
+        help="Root containing benchmark, experiment, run, and verification bundles",
+    )
+    parser.add_argument("--name", default="default", help="Execution label")
+    parser.add_argument("--no-render", action="store_true")
+    parser.add_argument(
+        "--output-dir", type=Path,
+        help="Explicit flat directory (legacy compatibility override)",
+    )
     parser.add_argument("--worker-core", choices=("sisl", "split-explicit"), help=argparse.SUPPRESS)
     parser.add_argument("--worker-output", type=Path, help=argparse.SUPPRESS)
     return parser.parse_args()
@@ -449,9 +456,22 @@ def main():
         )
         return
 
+    if args.output_dir is None:
+        layout = ArtifactLayout(
+            kind="benchmarks",
+            case="schaer_mountain_3d",
+            execution=args.name,
+            output_root=args.output_root,
+        ).create()
+        data_dir = layout.data
+        figure_dir = layout.figures
+    else:
+        data_dir = args.output_dir
+        figure_dir = args.output_dir
+
     paths = {
         core: result_path(
-            args.data_dir, core, args.dx, args.dz, args.dt, args.t_end,
+            data_dir, core, args.dx, args.dz, args.dt, args.t_end,
             args.stabilization, args.snapshot_interval,
         )
         for core in ("sisl", "split-explicit")
@@ -475,9 +495,6 @@ def main():
         ]
         subprocess.run(command, check=True, env=environment)
 
-    comparison_time = args.t_end if args.comparison_time is None else args.comparison_time
-    plot_comparison(paths["sisl"], paths["split-explicit"], args.output_dir, comparison_time)
-    plot_evolution(paths["sisl"], paths["split-explicit"], args.output_dir)
     sisl, split = load_pair(paths["sisl"], paths["split-explicit"])
     dataset = xr.Dataset(
         data_vars={
@@ -513,13 +530,19 @@ def main():
     )
     artifact = save_plot_dataset(
         dataset,
-        args.data_dir / (
-            f"schaer_mountain_dual_core_dx{args.dx:g}_dz{args.dz:g}_"
-            f"dt{args.dt:g}_t{args.t_end:g}.nc"
-        ),
+        data_dir / "artifact.nc",
         experiment="schaer_mountain_dual_core_3d",
     )
     print(f"Saved plot-ready dual-core artifact to {artifact}")
+    if not args.no_render:
+        comparison_time = (
+            args.t_end if args.comparison_time is None else args.comparison_time
+        )
+        plot_comparison(
+            paths["sisl"], paths["split-explicit"],
+            figure_dir, comparison_time,
+        )
+        plot_evolution(paths["sisl"], paths["split-explicit"], figure_dir)
 
 
 if __name__ == "__main__":

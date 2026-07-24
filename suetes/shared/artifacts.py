@@ -12,6 +12,97 @@ import xarray as xr
 
 
 SCHEMA = "suetes-plot-data-v1"
+ARTIFACT_KINDS = frozenset({"benchmarks", "experiments", "runs", "verification"})
+
+
+class ArtifactLayout:
+    """Paths for one self-contained model execution.
+
+    The bundle root is ``<output_root>/<kind>/<case>/<execution>``. Numerical
+    artifacts and rendered figures are deliberately separated inside the
+    bundle while remaining easy to archive together.
+    """
+
+    def __init__(
+        self,
+        *,
+        kind: str,
+        case: str,
+        execution: str = "default",
+        output_root: str | Path = "output",
+    ) -> None:
+        if kind not in ARTIFACT_KINDS:
+            choices = ", ".join(sorted(ARTIFACT_KINDS))
+            raise ValueError(f"Unknown artifact kind {kind!r}; expected one of {choices}")
+        for label, value in (("case", case), ("execution", execution)):
+            path = Path(value)
+            if not value or path.is_absolute() or len(path.parts) != 1 or value in {".", ".."}:
+                raise ValueError(f"{label} must be a single non-empty path component")
+        self.kind = kind
+        self.case = case
+        self.execution = execution
+        self.output_root = Path(output_root)
+
+    @property
+    def root(self) -> Path:
+        return self.output_root / self.kind / self.case / self.execution
+
+    @property
+    def data(self) -> Path:
+        return self.root / "data"
+
+    @property
+    def figures(self) -> Path:
+        return self.root / "figures"
+
+    def create(self) -> "ArtifactLayout":
+        self.data.mkdir(parents=True, exist_ok=True)
+        self.figures.mkdir(parents=True, exist_ok=True)
+        return self
+
+
+def resolve_data_dir(
+    *,
+    kind: str,
+    case: str,
+    execution: str = "default",
+    output_root: str | Path = "output",
+    output_dir: str | Path | None = None,
+) -> Path:
+    """Return an explicit legacy directory or create a standard data directory."""
+    if output_dir is not None:
+        path = Path(output_dir)
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+    return ArtifactLayout(
+        kind=kind,
+        case=case,
+        execution=execution,
+        output_root=output_root,
+    ).create().data
+
+
+def figure_dir_for(artifact: str | Path) -> Path:
+    """Return the conventional figure directory for an artifact path."""
+    artifact = Path(artifact)
+    if artifact.parent.name == "data":
+        return artifact.parent.parent / "figures"
+    return artifact.parent
+
+
+def artifact_from_bundle(source: str | Path, pattern: str = "artifact.nc") -> Path:
+    """Resolve one artifact from a bundle, data directory, or explicit file."""
+    source = Path(source)
+    if source.is_file():
+        return source
+    data_dir = source / "data" if (source / "data").is_dir() else source
+    matches = sorted(data_dir.glob(pattern))
+    if len(matches) != 1:
+        raise ValueError(
+            f"Expected exactly one {pattern!r} artifact in {data_dir}, "
+            f"found {len(matches)}"
+        )
+    return matches[0]
 
 
 def _git_commit() -> str:

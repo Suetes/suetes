@@ -1,10 +1,11 @@
 import os
 import gc
+import argparse
+import json
+from pathlib import Path
 os.environ["XLA_PYTHON_CLIENT_ALLOCATOR"] = "platform"
 os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
 
-import matplotlib.pyplot as plt
-from convergence_plotting import save_four_panel_convergence
 import numpy as np
 import jax
 import jax.numpy as jnp
@@ -16,10 +17,8 @@ from suetes.regional3d.geometry import RegionalGrid3D
 from suetes.regional3d.operators import CGridOperator3D
 from suetes.regional3d.euler import Euler3D
 from suetes.regional3d.steppers import build_dynamical_core
+from suetes.shared.artifacts import ArtifactLayout
 from suetes.shared.driver import Simulation
-
-output_dir = "output/plots/benchmarks"
-os.makedirs(output_dir, exist_ok=True)
 
 T_END = 24.0
 RESOLUTIONS = [250.0, 125.0, 62.5, 31.25]
@@ -213,13 +212,14 @@ def run_study(core_type, alpha=0.55, dt_mode="constant"):
             rates[k].append(rate)
             print(f"  Rate {k:2s}: {rate:.2f}")
 
-    return errors, slices
+    return errors, rates, slices
 
 
 def report_cross_core_convergence(sisl_slices, split_slices):
     """Check that both discretizations approach the same continuum solution."""
     keys = ['u', 'w', 'pi', 'th_v']
     differences = {key: [] for key in keys}
+    rates = {key: [] for key in keys}
 
     print("\n--- Cross-Core Differences and Convergence Rates ---")
     for dx, sisl, split in zip(RESOLUTIONS, sisl_slices, split_slices):
@@ -243,93 +243,59 @@ def report_cross_core_convergence(sisl_slices, split_slices):
             coarse = differences[key][i]
             fine = differences[key][i + 1]
             rate = np.log2(coarse / fine) if coarse > 0.0 and fine > 0.0 else np.nan
+            rates[key].append(rate)
             print(f"  Rate {key:4s}: {rate:.2f}")
 
-    return differences
+    return differences, rates
+
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="Run the 24 s rising-bubble self/cross convergence audit."
+    )
+    parser.add_argument("--output-root", type=Path, default=Path("output"))
+    parser.add_argument("--name", default="t24")
+    return parser.parse_args()
+
+
+def main():
+    args = parse_args()
+    errors_sisl, rates_sisl, slices_sisl = run_study(
+        "sisl", alpha=0.5, dt_mode="scaling"
+    )
+    errors_se, rates_se, slices_se = run_study(
+        "split-explicit", alpha=0.5, dt_mode="scaling"
+    )
+    cross_differences, cross_rates = report_cross_core_convergence(
+        slices_sisl, slices_se
+    )
+    summary = {
+        "test": "rising_bubble_core_convergence",
+        "t_end_s": T_END,
+        "resolutions_m": RESOLUTIONS,
+        "dt_at_250m_s": DT_AT_250M,
+        "dt_mode": "scaling",
+        "split_explicit_ns": SPLIT_EXPLICIT_NS,
+        "cores": {
+            "sisl": {
+                "self_errors": errors_sisl, "self_orders": rates_sisl
+            },
+            "split-explicit": {
+                "self_errors": errors_se, "self_orders": rates_se
+            },
+        },
+        "cross_core": {
+            "differences": cross_differences, "orders": cross_rates
+        },
+    }
+    layout = ArtifactLayout(
+        kind="verification", case="rising_bubble_core_convergence",
+        execution=args.name, output_root=args.output_root,
+    ).create()
+    path = layout.data / "summary.json"
+    with path.open("w", encoding="utf-8") as stream:
+        json.dump(summary, stream, indent=2)
+    print(f"Saved 24 s bubble convergence artifact to {path}")
+
 
 if __name__ == "__main__":
-
-    errors_sisl, slices_sisl = run_study("sisl", alpha=0.5, dt_mode="scaling")
-    errors_se, slices_se = run_study("split-explicit", alpha=0.5, dt_mode="scaling")
-    cross_differences = report_cross_core_convergence(slices_sisl, slices_se)
-
-    # Plotting setup
-    dx_vals = np.array(RESOLUTIONS[:-1])
-
-    # --- Plot 1: Potential Temperature (theta_v) Convergence ---
-    plt.figure(figsize=(10, 8))
-    plt.loglog(dx_vals, errors_sisl['th_v'], 'o-', label='SISL', linewidth=2, markersize=8)
-    plt.loglog(dx_vals, errors_se['th_v'], 's-', label='Split-explicit', linewidth=2, markersize=8)
-
-    ref_start_th = max(errors_sisl['th_v'][0], errors_se['th_v'][0]) * 1.5
-    ref_line_th = ref_start_th * (dx_vals / dx_vals[0])**2
-    plt.loglog(dx_vals, ref_line_th, 'k--', label='Theoretical 2nd Order', alpha=0.7)
-
-    plt.xlabel('Grid Spacing dx (m)', fontsize=12)
-    plt.ylabel('L2 Error in theta_v (K)', fontsize=12)
-    plt.title('Combined space-time convergence: Rising bubble (theta_v)', fontsize=14)
-    plt.grid(True, which="both", ls="--", alpha=0.5)
-    plt.legend(fontsize=10, loc='lower right')
-
-    out_path_th = f'{output_dir}/dual_core_bubble_convergence_study.png'
-    out_path_th_alt = f'{output_dir}/dual_core_bubble_convergence_study_theta.png'
-    os.makedirs(os.path.dirname(out_path_th), exist_ok=True)
-    plt.savefig(out_path_th, dpi=300, bbox_inches='tight')
-    plt.savefig(out_path_th_alt, dpi=300, bbox_inches='tight')
-    plt.close()
-    print(f"Saved bubble theta-convergence plot to {out_path_th} and {out_path_th_alt}")
-
-    # --- Plot 2: Momentum (u) Convergence ---
-    plt.figure(figsize=(10, 8))
-    plt.loglog(dx_vals, errors_sisl['u'], 'o-', label='SISL', linewidth=2, markersize=8)
-    plt.loglog(dx_vals, errors_se['u'], 's-', label='Split-explicit', linewidth=2, markersize=8)
-
-    ref_start_u = max(errors_sisl['u'][0], errors_se['u'][0]) * 1.5
-    ref_line_u = ref_start_u * (dx_vals / dx_vals[0])**2
-    plt.loglog(dx_vals, ref_line_u, 'k--', label='Theoretical 2nd Order', alpha=0.7)
-
-    plt.xlabel('Grid Spacing dx (m)', fontsize=12)
-    plt.ylabel('L2 Error in u (m/s)', fontsize=12)
-    plt.title('Combined space-time convergence: Rising bubble (u momentum)', fontsize=14)
-    plt.grid(True, which="both", ls="--", alpha=0.5)
-    plt.legend(fontsize=10, loc='lower right')
-
-    out_path_u = f'{output_dir}/dual_core_bubble_convergence_study_u.png'
-    plt.savefig(out_path_u, dpi=300, bbox_inches='tight')
-    plt.close()
-    print(f"Saved bubble u-convergence plot to {out_path_u}")
-
-    # --- Plot 3: All-variable bubble self-convergence ---
-    out_path_all = f'{output_dir}/dual_core_bubble_convergence_study_all.png'
-    save_four_panel_convergence(
-        dx_vals,
-        [('SISL', errors_sisl), ('Split-explicit', errors_se)],
-        {
-            'u': r'$L_2$ difference (m s$^{-1}$)',
-            'w': r'$L_2$ difference (m s$^{-1}$)',
-            'pi': r'$L_2$ difference',
-            'th_v': r'$L_2$ difference (K)',
-        },
-        r'Grid spacing $\Delta x$ (m)',
-        'Combined space--time self-convergence: rising thermal bubble',
-        out_path_all,
-    )
-    print(f"Saved all-variable bubble convergence plot to {out_path_all}")
-
-    # --- Plot 4: Cross-core convergence for all prognostic variables ---
-    cross_dx = np.array(RESOLUTIONS)
-    out_path_cross = f'{output_dir}/cross_core_bubble_convergence_study.png'
-    save_four_panel_convergence(
-        cross_dx,
-        [('SISL minus Split-explicit', cross_differences)],
-        {
-            'u': r'$L_2$ difference (m s$^{-1}$)',
-            'w': r'$L_2$ difference (m s$^{-1}$)',
-            'pi': r'$L_2$ difference',
-            'th_v': r'$L_2$ difference (K)',
-        },
-        r'Grid spacing $\Delta x$ (m)',
-        'Cross-core convergence: rising thermal bubble',
-        out_path_cross,
-    )
-    print(f"Saved cross-core convergence plot to {out_path_cross}")
+    main()

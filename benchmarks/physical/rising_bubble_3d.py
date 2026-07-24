@@ -29,11 +29,10 @@ from suetes.regional3d.euler import Euler3D
 from suetes.regional3d.geometry import RegionalGrid3D
 from suetes.regional3d.operators import CGridOperator3D
 from suetes.regional3d.steppers import build_dynamical_core
-from suetes.shared.artifacts import save_plot_dataset
+from suetes.shared.artifacts import ArtifactLayout, save_plot_dataset
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_DATA_DIR = REPO_ROOT / "output" / "benchmark_data"
-DEFAULT_PLOT_DIR = REPO_ROOT / "output" / "plots" / "benchmarks"
+DEFAULT_OUTPUT_ROOT = REPO_ROOT / "output"
 DOMAIN_WIDTH = 10_000.0
 DOMAIN_HEIGHT = 10_000.0
 CONSTANTS = {
@@ -43,7 +42,7 @@ CONSTANTS = {
 
 
 def result_path(
-    data_dir: Path,
+    output_dir: Path,
     core: str,
     dx: float,
     dt: float,
@@ -55,7 +54,7 @@ def result_path(
     stabilization_suffix = (
         "" if stabilization == 0.0 else f"_nu{stabilization:g}"
     )
-    return data_dir / (
+    return output_dir / (
         f"rising_bubble_{core_name}_dx{dx:g}_dt{dt:g}_t{t_end:g}"
         f"{stabilization_suffix}_snap{snapshot_interval:g}.npz"
     )
@@ -535,8 +534,20 @@ def parse_args() -> argparse.Namespace:
         help="Common nu_h_factor and nu_div_factor for both cores",
     )
     parser.add_argument("--reuse", action="store_true", help="Reuse matching NPZ files")
-    parser.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR)
-    parser.add_argument("--output-dir", type=Path, default=DEFAULT_PLOT_DIR)
+    parser.add_argument(
+        "--output-root", type=Path, default=DEFAULT_OUTPUT_ROOT,
+        help="Root containing benchmark, experiment, run, and verification bundles",
+    )
+    parser.add_argument("--name", default="default", help="Execution label")
+    parser.add_argument(
+        "--no-render",
+        action="store_true",
+        help="Only produce numerical artifacts; render them in a separate command",
+    )
+    parser.add_argument(
+        "--output-dir", type=Path,
+        help="Explicit bundle directory (legacy override of --output-root and --name)",
+    )
     parser.add_argument("--worker-core", choices=("sisl", "split-explicit"), help=argparse.SUPPRESS)
     parser.add_argument("--worker-output", type=Path, help=argparse.SUPPRESS)
     return parser.parse_args()
@@ -555,9 +566,23 @@ def main() -> None:
         )
         return
 
+    if args.output_dir is None:
+        layout = ArtifactLayout(
+            kind="benchmarks",
+            case="rising_bubble_3d",
+            execution=args.name,
+            output_root=args.output_root,
+        ).create()
+        data_dir = layout.data
+        figure_dir = layout.figures
+    else:
+        # Preserve the old flat --output-dir contract during the pilot.
+        data_dir = args.output_dir
+        figure_dir = args.output_dir
+
     paths = {
         core: result_path(
-            args.data_dir, core, args.dx, dt, args.t_end,
+            data_dir, core, args.dx, dt, args.t_end,
             args.stabilization, args.snapshot_interval,
         )
         for core in ("sisl", "split-explicit")
@@ -583,14 +608,6 @@ def main() -> None:
         ]
         subprocess.run(command, check=True, env=worker_environment)
 
-    comparison_time = (
-        args.t_end if args.comparison_time is None else args.comparison_time
-    )
-    plot_comparison(
-        paths["sisl"], paths["split-explicit"],
-        args.output_dir, comparison_time,
-    )
-    plot_evolution(paths["sisl"], paths["split-explicit"], args.output_dir)
     with np.load(paths["sisl"]) as source:
         sisl = {key: source[key] for key in source.files}
     with np.load(paths["split-explicit"]) as source:
@@ -628,13 +645,19 @@ def main() -> None:
     )
     artifact = save_plot_dataset(
         dataset,
-        args.data_dir / (
-            f"rising_bubble_dual_core_dx{args.dx:g}_dt{dt:g}_"
-            f"t{args.t_end:g}.nc"
-        ),
+        data_dir / "artifact.nc",
         experiment="rising_bubble_dual_core_3d",
     )
     print(f"Saved plot-ready dual-core artifact to {artifact}")
+    if not args.no_render:
+        comparison_time = (
+            args.t_end if args.comparison_time is None else args.comparison_time
+        )
+        plot_comparison(
+            paths["sisl"], paths["split-explicit"],
+            figure_dir, comparison_time,
+        )
+        plot_evolution(paths["sisl"], paths["split-explicit"], figure_dir)
 
 
 if __name__ == "__main__":

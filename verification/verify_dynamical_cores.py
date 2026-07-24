@@ -14,9 +14,8 @@ Full gate (``--profile full``) additionally runs:
   4. SISL component/operator convergence.
   5. Conservation, balance, terrain, solver, and autodiff diagnostics.
 
-The convergence programs remain quantitative diagnostics: inspect their rates
-in the logs.  A zero process exit status means execution/assertions succeeded;
-it does not turn a poor printed convergence rate into a pass.
+Long-horizon gate (``--profile long``) runs the quick gate plus an explicitly
+quantitative 1000 s, three-resolution cross-core rising-bubble audit.
 """
 
 from __future__ import annotations
@@ -37,19 +36,19 @@ STAGES = {
         "title": "Equation-level manufactured tendency audit",
         "script": "verification/equation_tendency_convergence.py",
         "purpose": "Checks the discrete Euler RHS and its spatial order.",
-        "profiles": {"quick", "full"},
+        "profiles": {"quick", "full", "long", "smooth"},
     },
     "temporal": {
         "title": "Pure temporal convergence",
         "script": "verification/temporal_core_convergence.py",
         "purpose": "Checks SISL and split-explicit time integration at fixed dx.",
-        "profiles": {"quick", "full"},
+        "profiles": {"quick", "full", "long", "smooth"},
     },
     "bubble": {
         "title": "Combined rising-bubble convergence",
         "script": "verification/rising_bubble_core_convergence.py",
         "purpose": "Checks nonlinear combined space-time convergence of both cores.",
-        "profiles": {"quick", "full"},
+        "profiles": {"quick", "full", "long", "smooth"},
     },
     "components": {
         "title": "SISL component and operator convergence",
@@ -62,6 +61,23 @@ STAGES = {
         "script": "tests/test_dynamical_core_3d.py",
         "purpose": "Checks closed-box mass, balance, boundaries, terrain, and AD.",
         "profiles": {"full"},
+    },
+    "long_horizon": {
+        "title": "Long-horizon cross-core refinement audit",
+        "script": "verification/long_horizon_core_audit.py",
+        "args": ["--run", "--reuse"],
+        "purpose": (
+            "Checks refinement, bulk plume agreement, and conservation to 1000 s."
+        ),
+        "profiles": {"long"},
+    },
+    "smooth_modes": {
+        "title": "Smooth tracer, gravity-wave, and acoustic-mode convergence",
+        "script": "verification/smooth_mode_core_convergence.py",
+        "purpose": (
+            "Checks temporal order without nonlinear bubble filamentation."
+        ),
+        "profiles": {"smooth"},
     },
 }
 
@@ -87,14 +103,18 @@ def run_stage(name: str, log_dir: Path) -> tuple[bool, float, Path]:
     print(f"\n{'=' * 78}")
     print(f"[{name}] {cfg['title']}")
     print(f"Purpose: {cfg['purpose']}")
-    print(f"Command: {sys.executable} {script.relative_to(REPO_ROOT)}")
+    stage_args = cfg.get("args", [])
+    print(
+        f"Command: {sys.executable} {script.relative_to(REPO_ROOT)} "
+        f"{' '.join(stage_args)}"
+    )
     print(f"Log: {log_path.relative_to(REPO_ROOT)}")
     print(f"{'=' * 78}")
 
     start = time.monotonic()
     with log_path.open("w", encoding="utf-8") as log_file:
         process = subprocess.Popen(
-            [sys.executable, str(script)],
+            [sys.executable, str(script), *stage_args],
             cwd=REPO_ROOT,
             env=env,
             stdout=subprocess.PIPE,
@@ -122,8 +142,12 @@ def parse_args() -> argparse.Namespace:
         description="Run SUETES core verification stages in isolated processes."
     )
     parser.add_argument(
-        "--profile", choices=("quick", "full"), default="quick",
-        help="quick runs the main convergence gate; full adds expensive audits.",
+        "--profile", choices=("quick", "full", "long", "smooth"), default="quick",
+        help=(
+            "quick runs the main convergence gate; full adds component audits; "
+            "long adds the expensive 1000 s refinement audit; smooth runs "
+            "the isolated tracer and linear-wave tests."
+        ),
     )
     parser.add_argument(
         "--only", nargs="+", choices=tuple(STAGES),

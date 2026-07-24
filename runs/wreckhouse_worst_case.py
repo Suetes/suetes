@@ -10,6 +10,7 @@ Wreckhouse Worst-Case Scenario Experiment.
 import os
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 
+import argparse
 import time
 import math
 import jax
@@ -52,9 +53,16 @@ def main():
     # =====================================================================
     # 0. CONFIGURATION & GEOMETRY
     # =====================================================================
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--output-dir", default="output/wreckhouse_worst_case",
+        help="Flat directory for diagnostics, plot data, metadata, and figures",
+    )
+    args = parser.parse_args()
+
     ACTIVE_DOMAIN = "wreckhouse"
     RUN_NAME = f"{ACTIVE_DOMAIN}_worst_case_feb2025"
-    output_dir = "output/plots/wreckhouse_worst_case"
+    output_dir = args.output_dir
     os.makedirs(output_dir, exist_ok=True)
 
     lat_c, lon_c = 47.71, -59.31

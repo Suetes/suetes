@@ -1,5 +1,6 @@
 import jax
 import jax.numpy as jnp
+import numpy as np
 jax.config.update("jax_enable_x64", True)
 
 import os
@@ -228,7 +229,10 @@ def test_5_hydrostatic_balance(grid, physics, nx, ny, nz):
 
 def test_6_semi_implicit_solver(physics, dt, nx, ny, nz):
     print("\n--- 6. SEMI-IMPLICIT SOLVER CONVERGENCE ---")
-    solver = SemiImplicitSolver3D(physics, dt)
+    solver = SemiImplicitSolver3D(
+        physics, dt, solver_tol=1.0e-8,
+        solver_maxiter=100, solver_restart=100,
+    )
 
     # Build a resting, hydrostatically balanced background state
     bg_ref = {
@@ -239,18 +243,30 @@ def test_6_semi_implicit_solver(physics, dt, nx, ny, nz):
     }
     bg_precomputed = physics.precompute_bg(bg_ref)
 
-    # Create a random right-hand side (representing the explicit advection output)
+    # Manufacture a consistent right-hand side from a known state. Arbitrary
+    # random RHS values can violate the coupled kinematic constraints and do
+    # not provide a meaningful inversion test.
     key = jax.random.PRNGKey(42)
-    rhs_dummy = {
+    known_solution = {
         'u': jax.random.uniform(key, (nx+1, ny, nz)) * 0.1,
         'v': jax.random.uniform(key, (nx, ny+1, nz)) * 0.1,
         'w': jax.random.uniform(key, (nx, ny, nz+1)) * 0.01,
         'pi': jax.random.uniform(key, (nx, ny, nz)) * 0.001,
         'eta_dot': jax.random.uniform(key, (nx, ny, nz+1)) * 0.001
     }
+    known_solution['w'] = known_solution['w'].at[:, :, 0].set(0.0)
+    known_solution['w'] = known_solution['w'].at[:, :, -1].set(0.0)
+    known_solution['eta_dot'] = known_solution['eta_dot'].at[:, :, 0].set(0.0)
+    known_solution['eta_dot'] = known_solution['eta_dot'].at[:, :, -1].set(0.0)
+    rhs_dummy = physics.linear_operator(
+        known_solution, bg_precomputed, dt=dt, alpha=solver.alpha
+    )
 
     # Run the solver
     sol = solver.solve(rhs_dummy, bg_precomputed)
+    relative_residual = float(
+        solver.relative_residual(sol, rhs_dummy, bg_precomputed)
+    )
 
     # Quick sanity check on outputs
     is_valid = jnp.all(jnp.isfinite(sol['u'])) and jnp.all(jnp.isfinite(sol['pi']))
@@ -258,7 +274,10 @@ def test_6_semi_implicit_solver(physics, dt, nx, ny, nz):
 
     print(f"Solver output contains only finite numbers: {is_valid}")
     print(f"Max U in solved state: {max_u_sol:.4f} m/s")
+    print(f"Relative implicit-system residual: {relative_residual:.3e}")
     assert is_valid, "Solver diverged and produced NaNs!"
+    assert np.isfinite(relative_residual)
+    assert relative_residual < 1.0e-6
 
 def test_7_davies_sponge(grid, op, nx, ny, nz):
     print("\n--- 7. DAVIES SPONGE BOUNDARY TEST ---")

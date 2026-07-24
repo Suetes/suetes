@@ -478,6 +478,37 @@ class SemiImplicitSolver3D:
             'eta_dot': x_sol_scaled['eta_dot'] / bg_precomputed['dz_w_full']
         }
 
+    def relative_residual(self, solution, rhs_prime, bg_precomputed):
+        r"""Return ``||A x - b||_2 / ||b||_2`` for a completed solve.
+
+        This is deliberately evaluated from the physical solution rather than
+        from GMRES's status value.  It therefore catches non-finite solutions,
+        premature iteration limits, and scaling mistakes at the interface to
+        the Krylov solver.
+        """
+        applied = self.physics.linear_operator(
+            solution, bg_precomputed, self.dt, alpha=self.alpha
+        )
+        # Match the norm seen by GMRES. Pressure is scaled before entering the
+        # Krylov solve; an unscaled mixed-unit norm can be dominated by a
+        # physically small pressure residual and is not its stopping metric.
+        applied = {
+            key: value * self.pi_scale if key == 'pi' else value
+            for key, value in applied.items()
+        }
+        rhs_scaled = {
+            key: value * self.pi_scale if key == 'pi' else value
+            for key, value in rhs_prime.items()
+        }
+        residual_leaves = jax.tree_util.tree_leaves(
+            jax.tree_util.tree_map(lambda lhs, rhs: lhs - rhs, applied, rhs_scaled)
+        )
+        rhs_leaves = jax.tree_util.tree_leaves(rhs_scaled)
+        residual_sq = sum(jnp.vdot(value, value).real for value in residual_leaves)
+        rhs_sq = sum(jnp.vdot(value, value).real for value in rhs_leaves)
+        tiny = jnp.finfo(jnp.result_type(*rhs_leaves)).tiny
+        return jnp.sqrt(residual_sq / jnp.maximum(rhs_sq, tiny))
+
 
 class FluxFormAdvector:
     r"""
@@ -986,7 +1017,9 @@ class SISLStepper3D:
         state_next['tend_th_v_prev'] = tends_n['th_v']
         
         for key in self.tracer_keys:
-            state_next[f'tend_{key}_prev'] = tends_n.get(key, 0.0)
+            state_next[f'tend_{key}_prev'] = tends_n.get(
+                key, jnp.zeros_like(state_next[key])
+            )
         state_next['is_first_step'] = 0.0
 
         return state_next

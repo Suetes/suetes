@@ -59,18 +59,33 @@ def main():
                  label="Thermal shift [K]")
 
     x = data.x.values / 1000.0
-    z = data.physical_height.values / 1000.0
-    x2d = np.broadcast_to(x[:, None], z.shape)
+    terrain = data.terrain_height.values / 1000.0
+    z_mass = data.physical_height.values / 1000.0
+
+    def padded_mass_section(field):
+        """Match ``plot_cross_section`` mass-level plotting geometry."""
+        z_plot = np.concatenate([terrain[:, None], z_mass], axis=1)
+        field_plot = np.concatenate([field[:, :1], field], axis=1)
+        x_plot = np.broadcast_to(x[:, None], z_plot.shape)
+        return x_plot, z_plot, field_plot
+
     axis = fig.add_subplot(grid[1, 0])
-    image = axis.pcolormesh(
-        x2d, z, data.baseline_zonal_wind, shading="auto",
-        cmap="RdBu_r", vmin=-50, vmax=150,
+    x_plot, z_plot, baseline_plot = padded_mass_section(
+        data.baseline_zonal_wind.values
     )
+    image = axis.contourf(
+        x_plot, z_plot, baseline_plot,
+        levels=np.linspace(-50.0, 150.0, 31),
+        cmap="RdBu_r", vmin=-50.0, vmax=150.0, extend="both",
+    )
+    theta = data.baseline_virtual_potential_temperature.values
+    _, _, theta_plot = padded_mass_section(theta)
+    theta_levels = np.arange(np.floor(theta.min()), np.ceil(theta.max()), 2.0)
     axis.contour(
-        x2d, z, data.baseline_virtual_potential_temperature,
-        colors="black", linewidths=.7, alpha=.7,
+        x_plot, z_plot, theta_plot, levels=theta_levels,
+        colors="black", linewidths=1.0, alpha=.7,
     )
-    axis.fill_between(x, 0, data.terrain_height.values / 1000.0, color="0.35")
+    axis.fill_between(x, 0, terrain, color="dimgray")
     axis.set(title="Baseline zonal wind [km/h] across terrain",
              xlabel="Distance [km]", ylabel="Height [km]", ylim=(0, 4))
     fig.colorbar(image, ax=axis, orientation="horizontal", pad=.15,
@@ -81,11 +96,13 @@ def main():
     depth = int(data.attrs["sponge_depth"])
     interior = anomaly[depth:-depth] if depth else anomaly
     limit = max(float(np.max(np.abs(interior))), 1.0)
-    image = axis.pcolormesh(
-        x2d, z, anomaly, shading="auto", cmap="seismic",
-        vmin=-limit, vmax=limit,
+    x_plot, z_plot, anomaly_plot = padded_mass_section(anomaly)
+    image = axis.contourf(
+        x_plot, z_plot, anomaly_plot,
+        levels=np.linspace(-limit, limit, 31), cmap="seismic",
+        vmin=-limit, vmax=limit, extend="both",
     )
-    axis.fill_between(x, 0, data.terrain_height.values / 1000.0, color="0.35")
+    axis.fill_between(x, 0, terrain, color="dimgray")
     axis.set(title=r"Zonal wind anomaly induced by adjoint",
              xlabel="Distance [km]", ylabel="Height [km]", ylim=(0, 4))
     fig.colorbar(image, ax=axis, orientation="horizontal", pad=.15,

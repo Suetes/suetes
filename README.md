@@ -56,7 +56,7 @@ python runs/preprocess.py --config configs/wreckhouse25_config.yaml
 ```bash
 python runs/run_simulation.py --config configs/wreckhouse25_config.yaml
 ```
-* **Render output fields** (generate diagnostic figures in `output/plots`):
+* **Render output fields** (generate figures beside the run artifact):
 ```bash
 python runs/render.py --config configs/wreckhouse25_config.yaml
 ```
@@ -64,14 +64,14 @@ python runs/render.py --config configs/wreckhouse25_config.yaml
 ### 2. Adjoint Sensitivity Analysis
 Calculate the sensitivity of 3D wave energy with respect to the initial wind perturbation at $t=0$. This demonstrates the core's ability to propagate gradients backward through the solver.
 ```bash
-python experiments/run_simulation_adjoint.py
-python experiments/schaer_mountain_optimal_perturbation_3d.py
+python experiments/simulation_adjoint/run.py
+python experiments/schaer_optimal_perturbation/run.py
 ```
 
 ### 3. Inverse Topography Optimization
 Optimize a 3D terrain profile to maximize the generation of gravity waves downstream, illustrating how the core can be used for "Atmospheric Engineering" and inverse modeling.
 ```bash
-python experiments/gravity_wave_optimal_topography_3d.py
+python experiments/gravity_wave_optimal_topography/run.py
 ```
 
 ## Repository organization
@@ -81,3 +81,20 @@ python experiments/gravity_wave_optimal_topography_3d.py
 - `benchmarks/`: reusable physical cases and performance measurements.
 - `verification/`: numerical consistency and convergence programs.
 - `tests/`: automated pytest regression tests.
+
+## Artifact and rendering contract
+
+Benchmarks, experiments, operational runs, and numerical verification use the
+same execution-bundle structure:
+
+```text
+output/<kind>/<case>/<execution>/
+├── data/
+└── figures/
+```
+
+Model and optimization entry points support data-only execution, normally via
+`--no-render`. Standalone renderers consume the saved artifact and write to the
+sibling `figures/` directory, so plots can be regenerated without rerunning an
+expensive model. Some older entry points still render by default for command
+compatibility; the case READMEs document those flags.
