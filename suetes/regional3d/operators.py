@@ -13,14 +13,20 @@ class CGridOperator3D:
     """
     Finite-difference and averaging operators for staggered C-grid variables.
     """
-    def __init__(self, grid):
+    def __init__(self, grid, periodic_axes=()):
         """
         Initializes the C-grid operators.
 
         Args:
             grid (RegionalGrid3D): The computational grid geometry.
         """
+        invalid_axes = set(periodic_axes) - {0, 1}
+        if invalid_axes:
+            raise ValueError(
+                "Only horizontal axes 0 (x) and 1 (y) may be periodic"
+            )
         self.grid = grid
+        self.periodic_axes = frozenset(periodic_axes)
         self.use_stop_grad = True
         # Pre-broadcast the mass weighting factors for use in derivatives
         self.m_factors = {
@@ -76,7 +82,21 @@ class CGridOperator3D:
         """
         delta = self.grid.delta[axis]
         derivative = jnp.diff(f, axis=axis) / delta
-        derivative = self._apply_padding(derivative, axis, from_loc, to_loc)
+        if (
+            axis in self.periodic_axes
+            and from_loc == 'm'
+            and to_loc in ['u', 'v']
+        ):
+            first = jnp.take(f, 0, axis=axis)
+            last = jnp.take(f, -1, axis=axis)
+            boundary = jnp.expand_dims((first - last) / delta, axis=axis)
+            derivative = jnp.concatenate(
+                [boundary, derivative, boundary], axis=axis
+            )
+        else:
+            derivative = self._apply_padding(
+                derivative, axis, from_loc, to_loc
+            )
         
         if axis in [0, 1]: 
             derivative = derivative * self.m_factors[to_loc]
@@ -100,6 +120,15 @@ class CGridOperator3D:
         avg_val = 0.5 * (f[:-1] + f[1:]) if axis == 0 else \
                   0.5 * (f[:, :-1] + f[:, 1:]) if axis == 1 else \
                   0.5 * (f[:, :, :-1] + f[:, :, 1:])
+        if (
+            axis in self.periodic_axes
+            and from_loc == 'm'
+            and to_loc in ['u', 'v']
+        ):
+            first = jnp.take(f, 0, axis=axis)
+            last = jnp.take(f, -1, axis=axis)
+            boundary = jnp.expand_dims(0.5 * (first + last), axis=axis)
+            return jnp.concatenate([boundary, avg_val, boundary], axis=axis)
         return self._apply_padding(avg_val, axis, from_loc, to_loc)
 
 def cubic_weight(p0, p1, p2, p3, t):

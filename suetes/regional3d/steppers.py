@@ -42,13 +42,19 @@ def build_dynamical_core(core_type, grid, operators, constants, initial_state,
             "solver_tol": 1e-12,
             "solver_maxiter": 100,
             "solver_restart": 100,
+            "background_state": None,
         }
         # Apply any explicit user overrides passed via kwargs
         params.update(kwargs)
         
+        reference_state = (
+            params["background_state"]
+            if params["background_state"] is not None
+            else initial_state
+        )
         physics = Euler3D(
             grid, operators, constants, dt=params["dt"],
-            initial_era5_state=initial_state,
+            initial_era5_state=reference_state,
             damp_height=params["damp_height"], max_damp=params["max_damp"],
             nu_div_factor=params["nu_div_factor"], nu_h_factor=params["nu_h_factor"],
             N_bv=params["N_bv"],
@@ -87,12 +93,18 @@ def build_dynamical_core(core_type, grid, operators, constants, initial_state,
             "nu_h_factor": 0.03,
             "N_bv": 0.01,
             "alpha": 0.55,
+            "background_state": None,
         }
         params.update(kwargs)
         
+        reference_state = (
+            params["background_state"]
+            if params["background_state"] is not None
+            else initial_state
+        )
         physics = Euler3D(
             grid, operators, constants, dt=params["dt"],
-            initial_era5_state=initial_state,
+            initial_era5_state=reference_state,
             damp_height=params["damp_height"], max_damp=params["max_damp"],
             nu_div_factor=params["nu_div_factor"], nu_h_factor=params["nu_h_factor"],
             N_bv=params["N_bv"],
@@ -520,7 +532,7 @@ class FluxFormAdvector:
     
     $$ \frac{\partial \rho}{\partial t} + \nabla \cdot (\rho \mathbf{v}) = 0 $$
     """
-    def __init__(self, grid, dt):
+    def __init__(self, grid, dt, periodic_axes=()):
         r"""
         Initializes the FFSL advector.
 
@@ -530,8 +542,9 @@ class FluxFormAdvector:
         """
         self.grid = grid
         self.dt = dt
+        self.periodic_axes = frozenset(periodic_axes)
 
-    def advect_1d(self, scalar_1d, cfl_inter_1d):
+    def advect_1d(self, scalar_1d, cfl_inter_1d, periodic=False):
         r"""
         Advects a 1D scalar column using interface Courant numbers.
 
@@ -548,6 +561,21 @@ class FluxFormAdvector:
         N = scalar_1d.shape[0]
         
         # scalar_1d acts as the logical mass in the grid cell
+        if periodic:
+            # Three tiled copies provide a continuous periodic cumulative-mass
+            # function around the central domain. Departure points therefore
+            # wrap conservatively instead of being clamped at the edge.
+            scalar_extended = jnp.tile(scalar_1d, 3)
+            M_inter = jnp.pad(jnp.cumsum(scalar_extended), (1, 0))
+            idx_inter = (
+                jnp.arange(N + 1, dtype=scalar_1d.dtype) + N
+            )
+            idx_dep = idx_inter - cfl_inter_1d
+            M_dep = jnd.map_coordinates(
+                M_inter, [idx_dep], order=1, mode='nearest'
+            )
+            return M_dep[1:] - M_dep[:-1]
+
         M_inter = jnp.pad(jnp.cumsum(scalar_1d), (1, 0))
         
         # Use the dtype of the scalar to maintain consistency
@@ -590,12 +618,18 @@ class FluxFormAdvector:
         cell_mass = field * cell_volumes
         
         # X-advection
-        vmap_x_inner = jax.vmap(self.advect_1d, in_axes=(1, 1), out_axes=1)
+        advect_x = lambda scalar, cfl: self.advect_1d(
+            scalar, cfl, periodic=0 in self.periodic_axes
+        )
+        vmap_x_inner = jax.vmap(advect_x, in_axes=(1, 1), out_axes=1)
         vmap_x = jax.vmap(vmap_x_inner, in_axes=(2, 2), out_axes=2)
         mass_x = vmap_x(cell_mass, cfl_x)
         
         # Y-advection
-        vmap_y_inner = jax.vmap(self.advect_1d, in_axes=(0, 0), out_axes=0)
+        advect_y = lambda scalar, cfl: self.advect_1d(
+            scalar, cfl, periodic=1 in self.periodic_axes
+        )
+        vmap_y_inner = jax.vmap(advect_y, in_axes=(0, 0), out_axes=0)
         vmap_y = jax.vmap(vmap_y_inner, in_axes=(2, 2), out_axes=2)
         mass_y = vmap_y(mass_x, cfl_y)
         
@@ -639,7 +673,9 @@ class SISLStepper3D:
         self.alpha = alpha
         self.use_limiter = use_limiter
         self.advector = SemiLagrangianAdvector3D(physics.grid, physics, dt)
-        self.ffsl_advector = FluxFormAdvector(physics.grid, dt)
+        self.ffsl_advector = FluxFormAdvector(
+            physics.grid, dt, periodic_axes=physics.op.periodic_axes
+        )
         self.implicit_solver = SemiImplicitSolver3D(
             physics, dt, alpha=alpha, solver_tol=solver_tol, solver_maxiter=solver_maxiter, solver_restart=solver_restart
         )
@@ -814,11 +850,18 @@ class SISLStepper3D:
         rhs_u = cp_advect_cubic(u_in, coords_u, self.use_limiter)
         rhs_v = cp_advect_cubic(v_in, coords_v, self.use_limiter)
         
-        # Enforce lateral boundary conditions on RHS to prevent advection boundary drift
-        rhs_u = rhs_u.at[0, :, :].set(state['u'][0, :, :])
-        rhs_u = rhs_u.at[-1, :, :].set(state['u'][-1, :, :])
-        rhs_v = rhs_v.at[:, 0, :].set(state['v'][:, 0, :])
-        rhs_v = rhs_v.at[:, -1, :].set(state['v'][:, -1, :])
+        # Enforce lateral boundary conditions on RHS to prevent advection
+        # boundary drift while identifying duplicate periodic face endpoints.
+        if 0 in self.physics.op.periodic_axes:
+            rhs_u = rhs_u.at[-1, :, :].set(rhs_u[0, :, :])
+        else:
+            rhs_u = rhs_u.at[0, :, :].set(state['u'][0, :, :])
+            rhs_u = rhs_u.at[-1, :, :].set(state['u'][-1, :, :])
+        if 1 in self.physics.op.periodic_axes:
+            rhs_v = rhs_v.at[:, -1, :].set(rhs_v[:, 0, :])
+        else:
+            rhs_v = rhs_v.at[:, 0, :].set(state['v'][:, 0, :])
+            rhs_v = rhs_v.at[:, -1, :].set(state['v'][:, -1, :])
 
         rhs_w = cp_advect_cubic(w_in, coords_w, self.use_limiter)
         rhs_pi_prime = cp_advect_cubic(pi_prime_in, coords_m, self.use_limiter)
@@ -1062,7 +1105,9 @@ class SplitExplicitStepper3D:
         self.dtau_stage2 = (self.dt / 2.0) / float(self.ns_stage2)
         self.dtau_stage3 = self.dt / float(self.ns_stage3)
         
-        self.ffsl_advector = FluxFormAdvector(physics.grid, dt)
+        self.ffsl_advector = FluxFormAdvector(
+            physics.grid, dt, periodic_axes=physics.op.periodic_axes
+        )
 
     def step(self, state, t, forcing, bc_fn, ml_params=None):
         r"""
@@ -1280,7 +1325,10 @@ class SplitExplicitStepper3D:
         """
         pad_width = [(0, 0)] * 3
         pad_width[axis] = (2, 2)
-        q = jnp.pad(field, pad_width, mode='edge')
+        padding_mode = (
+            'wrap' if axis in self.physics.op.periodic_axes else 'edge'
+        )
+        q = jnp.pad(field, pad_width, mode=padding_mode)
         
         s_idx = lambda start, end: tuple(
             slice(start, end) if i == axis else slice(None)
@@ -1493,10 +1541,16 @@ class SplitExplicitStepper3D:
         def enforce_horizontal_boundaries(u_pp, v_pp):
             u_boundary = state_init['u'] - state_current['u']
             v_boundary = state_init['v'] - state_current['v']
-            u_pp = u_pp.at[0, :, :].set(u_boundary[0, :, :])
-            u_pp = u_pp.at[-1, :, :].set(u_boundary[-1, :, :])
-            v_pp = v_pp.at[:, 0, :].set(v_boundary[:, 0, :])
-            v_pp = v_pp.at[:, -1, :].set(v_boundary[:, -1, :])
+            if 0 in self.physics.op.periodic_axes:
+                u_pp = u_pp.at[-1, :, :].set(u_pp[0, :, :])
+            else:
+                u_pp = u_pp.at[0, :, :].set(u_boundary[0, :, :])
+                u_pp = u_pp.at[-1, :, :].set(u_boundary[-1, :, :])
+            if 1 in self.physics.op.periodic_axes:
+                v_pp = v_pp.at[:, -1, :].set(v_pp[:, 0, :])
+            else:
+                v_pp = v_pp.at[:, 0, :].set(v_boundary[:, 0, :])
+                v_pp = v_pp.at[:, -1, :].set(v_boundary[:, -1, :])
             return u_pp, v_pp
 
         for _ in range(num_steps):

@@ -406,11 +406,18 @@ class Euler3D:
         v_m = self.op.avg(state_prime['v'], axis=1, from_loc='v', to_loc='m')
         v_w = self.op.avg(v_m, axis=2, from_loc='m', to_loc='w')
 
-        # Lock u and v at the lateral boundaries for GMRES
-        L_u = L_u.at[0, :, :].set(state_prime['u'][0, :, :])
-        L_u = L_u.at[-1, :, :].set(state_prime['u'][-1, :, :])
-        L_v = L_v.at[:, 0, :].set(state_prime['v'][:, 0, :])
-        L_v = L_v.at[:, -1, :].set(state_prime['v'][:, -1, :])
+        # Lock open lateral boundaries for GMRES. Periodic face endpoints are
+        # the same physical face and therefore share one residual value.
+        if 0 in self.op.periodic_axes:
+            L_u = L_u.at[-1, :, :].set(L_u[0, :, :])
+        else:
+            L_u = L_u.at[0, :, :].set(state_prime['u'][0, :, :])
+            L_u = L_u.at[-1, :, :].set(state_prime['u'][-1, :, :])
+        if 1 in self.op.periodic_axes:
+            L_v = L_v.at[:, -1, :].set(L_v[:, 0, :])
+        else:
+            L_v = L_v.at[:, 0, :].set(state_prime['v'][:, 0, :])
+            L_v = L_v.at[:, -1, :].set(state_prime['v'][:, -1, :])
 
         # Override L_w at vertical boundaries only (this is mathematically correct)
         m_w = jnp.expand_dims(self.grid.m_factors['w'], axis=-1)

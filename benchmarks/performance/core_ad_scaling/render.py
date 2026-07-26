@@ -13,6 +13,21 @@ import pandas as pd
 
 from suetes.shared.artifacts import figure_dir_for
 
+plt.rcParams.update({
+    'font.size': 16,
+    'axes.labelsize': 18,
+    'xtick.labelsize': 16,
+    'ytick.labelsize': 16,
+    'figure.dpi': 300,
+    'savefig.dpi': 300,
+    'axes.linewidth': 1.5,
+    'xtick.major.width': 1.5,
+    'ytick.major.width': 1.5,
+    'xtick.major.size': 6,
+    'ytick.major.size': 6,
+    'font.family': 'sans-serif'
+})
+
 
 def render(source: Path, output_dir: Path | None = None) -> Path:
     csv_path = (
@@ -32,29 +47,36 @@ def render(source: Path, output_dir: Path | None = None) -> Path:
     if missing:
         raise ValueError(f"CSV is missing columns: {sorted(missing)}")
 
-    fig, axes = plt.subplots(1, 4, figsize=(24, 5.5))
-    for mode, group in data.groupby("mode", sort=False):
+    fig, axes = plt.subplots(1, 4, figsize=(24, 6.0))
+    line_styles = ['-', '--', '-.', ':']
+    for mode_idx, (mode, group) in enumerate(data.groupby("mode", sort=False)):
+        ls = line_styles[mode_idx % len(line_styles)]
         group = group.sort_values("grid_cells")
         x = group["grid_cells"]
-        axes[0].plot(x, group["value_and_grad_time_ms"], "o-", label=mode)
-        axes[0].plot(x, group["forward_time_ms"], "--", alpha=0.65)
-        axes[1].plot(x, group["adjoint_to_forward_ratio"], "o-", label=mode)
-        axes[2].plot(x, group["value_and_grad_peak_mib"], "o-", label=mode)
-        axes[2].plot(x, group["forward_peak_mib"], "--", alpha=0.65)
-        axes[3].plot(x, group["peak_difference_mib"], "o-", label=mode)
+        axes[0].plot(x, group["value_and_grad_time_ms"], marker="o", ls=ls, linewidth=2.0, ms=8, label=mode)
+        axes[0].plot(x, group["forward_time_ms"], marker="", ls=":", color='grey', alpha=0.65, label=f"Forward ({mode})")
+        axes[1].plot(x, group["adjoint_to_forward_ratio"], marker="o", ls=ls, linewidth=2.0, ms=8, label=mode)
+        axes[2].plot(x, group["value_and_grad_peak_mib"], marker="o", ls=ls, linewidth=2.0, ms=8, label=mode)
+        axes[2].plot(x, group["forward_peak_mib"], marker="", ls=":", color='grey', alpha=0.65, label=f"Forward ({mode})")
+        axes[3].plot(x, group["peak_difference_mib"], marker="o", ls=ls, linewidth=2.0, ms=8, label=mode)
     labels = (
         ("Execution time", "Time (ms)"),
         ("Adjoint-to-forward cost", "Ratio"),
         ("Absolute peak allocation", "MiB"),
         ("Peak-allocation difference", "MiB"),
     )
-    for axis, (title, ylabel) in zip(axes, labels):
-        axis.set(xlabel="Grid cells", ylabel=ylabel, title=title)
+    props = dict(boxstyle='square,pad=0.3', facecolor='white', alpha=0.9, edgecolor='none')
+    for i, (axis, (title, ylabel)) in enumerate(zip(axes, labels)):
+        axis.set(xlabel="Grid cells", ylabel=ylabel)
+        axis.text(0.05, 0.95, f"({chr(97+i)}) {title}", transform=axis.transAxes, fontsize=16, verticalalignment='top', bbox=props)
         axis.grid(True, ls="--", alpha=0.4)
-        axis.legend(fontsize=8)
+        
+    handles, legend_labels = axes[0].get_legend_handles_labels()
+    fig.legend(handles, legend_labels, loc='lower center', bbox_to_anchor=(0.5, 0.0), ncol=len(legend_labels))
+    
     output = output_dir / "single_gpu_domain_scaling.png"
-    fig.tight_layout()
-    fig.savefig(output, dpi=300, bbox_inches="tight")
+    fig.tight_layout(rect=[0, 0.15, 1, 1])
+    fig.savefig(output, dpi=300)
     plt.close(fig)
     return output
 

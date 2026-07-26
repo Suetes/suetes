@@ -8,8 +8,25 @@ import json
 from pathlib import Path
 import re
 
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
+
+plt.rcParams.update({
+    'font.size': 16,
+    'axes.labelsize': 18,
+    'xtick.labelsize': 16,
+    'ytick.labelsize': 16,
+    'figure.dpi': 300,
+    'savefig.dpi': 300,
+    'axes.linewidth': 1.5,
+    'xtick.major.width': 1.5,
+    'ytick.major.width': 1.5,
+    'xtick.major.size': 6,
+    'ytick.major.size': 6,
+    'font.family': 'sans-serif'
+})
 
 from convergence_plotting import save_four_panel_convergence
 from suetes.shared.artifacts import artifact_from_bundle, figure_dir_for
@@ -127,10 +144,11 @@ def render(source: Path, output_dir: Path | None = None) -> list[Path]:
     axis.set_xlabel(r"Coarse-grid spacing $\Delta x$ (m)")
     axis.set_ylabel(r"Successive-grid $L_2$ difference in $\theta_v$ (K)")
     axis.grid(True, which="both", ls="--", alpha=0.4)
-    axis.legend()
-    fig.tight_layout()
+    handles, labels = axis.get_legend_handles_labels()
+    fig.legend(handles, labels, loc="lower center", bbox_to_anchor=(0.5, -0.05), ncol=len(labels))
+    fig.tight_layout(rect=(0, 0.15, 1, 1))
     theta_path = output_dir / f"bubble_t{time_label}_theta_self_convergence.png"
-    fig.savefig(theta_path, dpi=300, bbox_inches="tight")
+    fig.savefig(theta_path, dpi=300)
     plt.close(fig)
 
     outputs = [self_path, cross_path, theta_path]

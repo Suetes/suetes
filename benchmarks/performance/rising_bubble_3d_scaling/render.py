@@ -6,11 +6,28 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
 from suetes.shared.artifacts import ArtifactLayout
+
+plt.rcParams.update({
+    'font.size': 16,
+    'axes.labelsize': 18,
+    'xtick.labelsize': 16,
+    'ytick.labelsize': 16,
+    'figure.dpi': 300,
+    'savefig.dpi': 300,
+    'axes.linewidth': 1.5,
+    'xtick.major.width': 1.5,
+    'ytick.major.width': 1.5,
+    'xtick.major.size': 6,
+    'ytick.major.size': 6,
+    'font.family': 'sans-serif'
+})
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_OUTPUT_ROOT = REPO_ROOT / "output"
@@ -107,7 +124,7 @@ def main():
         ("sisl", 10.0, "SISL ($10\\times\\Delta t$)", "s", "#377eb8"),
     ]
 
-    fig, axes = plt.subplots(1, 3, figsize=(18, 5.5), constrained_layout=True)
+    fig, axes = plt.subplots(1, 3, figsize=(18, 5.5))
     marker_size = 8
     line_width = 2.2
     grid_style = {"ls": "--", "alpha": 0.5, "which": "both"}
@@ -167,32 +184,34 @@ def main():
             label=r"Ideal $\mathcal{O}(N^3)$",
         )
 
-    axes[0].set_title("(a) Dynamical-core kernel throughput", fontsize=14)
-    axes[0].set_ylabel("Kernel throughput (SYPD)", fontsize=12)
-    axes[1].set_title("(b) Operational step latency", fontsize=14)
-    axes[1].set_ylabel("Median execution time (ms/step)", fontsize=12)
+    props = dict(boxstyle='square,pad=0.3', facecolor='white', alpha=0.9, edgecolor='none')
+    axes[0].text(0.05, 0.95, "(a) Kernel throughput", transform=axes[0].transAxes, fontsize=16, verticalalignment='top', bbox=props)
+    axes[0].set_ylabel("Kernel throughput (SYPD)")
+    
+    axes[1].text(0.05, 0.95, "(b) Step latency", transform=axes[1].transAxes, fontsize=16, verticalalignment='top', bbox=props)
+    axes[1].set_ylabel("Median execution time (ms/step)")
     axes[1].set_xscale("log")
     axes[1].set_yscale("log")
-    axes[2].set_title("(c) Isolated peak VRAM allocation", fontsize=14)
-    axes[2].set_ylabel("Peak allocation above baseline (MiB)", fontsize=12)
+    
+    axes[2].text(0.05, 0.95, "(c) Peak VRAM", transform=axes[2].transAxes, fontsize=16, verticalalignment='top', bbox=props)
+    axes[2].set_ylabel("Peak allocation above baseline (MiB)")
 
     ticks = sorted(data["N"].unique())
     for axis in axes:
-        axis.set_xlabel(r"Grid dimension ($N\times N\times N$)", fontsize=12)
+        axis.set_xlabel(r"Grid dimension ($N\times N\times N$)")
         axis.set_xticks(ticks)
         axis.get_xaxis().set_major_formatter(plt.ScalarFormatter())
         axis.minorticks_off()
         axis.grid(True, **grid_style)
-        axis.legend(fontsize=9)
 
-    precisions = data["precision"].astype(str).unique() if "precision" in data else []
-    precision_suffix = f" ({precisions[0]})" if len(precisions) == 1 else ""
-    fig.suptitle(f"Rising-bubble kernel scaling{precision_suffix}", fontsize=14)
-
+    handles, labels = axes[1].get_legend_handles_labels()
+    fig.legend(handles, labels, loc='lower center', bbox_to_anchor=(0.5, 0.0), ncol=4)
+    
     output_dir = args.output_dir or layout.figures
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / "suetes_scaling_metrics.png"
-    fig.savefig(output_path, dpi=300, bbox_inches="tight")
+    fig.tight_layout(rect=[0, 0.15, 1, 1])
+    fig.savefig(output_path, dpi=300)
     plt.close(fig)
     print(f"Figure saved to {output_path}")
 

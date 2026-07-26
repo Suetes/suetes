@@ -7,10 +7,27 @@ import argparse
 import json
 from pathlib import Path
 
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
 from suetes.shared.artifacts import artifact_from_bundle, figure_dir_for
+
+plt.rcParams.update({
+    'font.size': 16,
+    'axes.labelsize': 18,
+    'xtick.labelsize': 16,
+    'ytick.labelsize': 16,
+    'figure.dpi': 300,
+    'savefig.dpi': 300,
+    'axes.linewidth': 1.5,
+    'xtick.major.width': 1.5,
+    'ytick.major.width': 1.5,
+    'xtick.major.size': 6,
+    'ytick.major.size': 6,
+    'font.family': 'sans-serif'
+})
 
 
 LABELS = {
@@ -62,19 +79,30 @@ def render(summary_path: Path, output_dir: Path | None = None) -> list[Path]:
                 label=f"Order {reference_order}",
             )
             axis.invert_xaxis()
+            
+            props = dict(boxstyle='square,pad=0.3', facecolor='white', alpha=0.9, edgecolor='none')
             if len(fields) > 1:
-                axis.set_title(LABELS.get(field, field))
+                label_text = LABELS.get(field, field)
+                axis.text(0.05, 0.95, label_text, transform=axis.transAxes, fontsize=16, verticalalignment='top', bbox=props)
+                
             axis.set_xlabel(r"Outer timestep $\Delta t$ (s)")
-            axis.set_ylabel("Successive-refinement relative $L_2$ error")
+            if axis == axes[0]:
+                axis.set_ylabel("Successive-refinement relative $L_2$ error")
             axis.grid(True, which="both", ls="--", alpha=0.4)
+            import matplotlib.ticker as ticker
+            axis.xaxis.set_minor_formatter(ticker.NullFormatter())
+            ticks = sorted(list(set([dt[0], dt[len(dt)//2], dt[-1]])))
+            axis.set_xticks(ticks)
+            axis.xaxis.set_major_formatter(ticker.ScalarFormatter())
+            axis.tick_params(axis="x", which="both", rotation=0)
         handles, labels = axes[0].get_legend_handles_labels()
         fig.legend(
-            handles, labels, loc="upper center", ncol=len(labels),
-            frameon=False, bbox_to_anchor=(0.5, 1.02),
+            handles, labels, loc="lower center", ncol=len(labels),
+            frameon=False, bbox_to_anchor=(0.5, 0.0),
         )
-        fig.tight_layout(rect=(0, 0, 1, 0.93))
+        fig.tight_layout(rect=(0, 0.15, 1, 1))
         output = output_dir / f"{case}_temporal_self_convergence.png"
-        fig.savefig(output, dpi=300, bbox_inches="tight")
+        fig.savefig(output, dpi=300)
         plt.close(fig)
         outputs.append(output)
         print(f"Saved {output}")

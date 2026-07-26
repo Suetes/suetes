@@ -4,8 +4,25 @@ from __future__ import annotations
 
 import os
 
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
+
+plt.rcParams.update({
+    'font.size': 16,
+    'axes.labelsize': 18,
+    'xtick.labelsize': 16,
+    'ytick.labelsize': 16,
+    'figure.dpi': 300,
+    'savefig.dpi': 300,
+    'axes.linewidth': 1.5,
+    'xtick.major.width': 1.5,
+    'ytick.major.width': 1.5,
+    'xtick.major.size': 6,
+    'ytick.major.size': 6,
+    'font.family': 'sans-serif'
+})
 
 
 VARIABLES = ("u", "w", "pi", "th_v")
@@ -70,11 +87,17 @@ def save_four_panel_convergence(
             label=f"Order {reference_order}",
         )
 
-        ax.set_title(VARIABLE_TITLES[key], fontsize=13)
-        ax.set_xlabel(xlabel, fontsize=10)
-        ax.set_ylabel(ylabels[key], fontsize=9)
-        ax.grid(True, which="both", linestyle="--", alpha=0.45)
-        ax.tick_params(axis="both", which="major", labelsize=9)
+        props = dict(boxstyle='square,pad=0.3', facecolor='white', alpha=0.9, edgecolor='none')
+        ax.text(0.05, 0.95, VARIABLE_TITLES[key], transform=ax.transAxes, fontsize=16, verticalalignment='top', bbox=props)
+        ax.set_xlabel(xlabel)
+        ax.set_ylabel(ylabels[key])
+        ax.grid(True, which="both", linestyle="--", alpha=0.4)
+        import matplotlib.ticker as ticker
+        ax.xaxis.set_minor_formatter(ticker.NullFormatter())
+        ticks = sorted(list(set([x_values[0], x_values[len(x_values)//2], x_values[-1]])))
+        ax.set_xticks(ticks)
+        ax.xaxis.set_major_formatter(ticker.ScalarFormatter())
+        ax.tick_params(axis="x", which="both", rotation=0)
 
     # Axes share x limits, so invert once to present refinement from coarse
     # (left) to fine (right).
@@ -84,16 +107,15 @@ def save_four_panel_convergence(
     fig.legend(
         handles,
         legend_labels,
-        loc="upper center",
-        bbox_to_anchor=(0.5, 1.03),
+        loc="lower center",
+        bbox_to_anchor=(0.5, 0.0),
         ncol=len(legend_labels),
         frameon=False,
-        fontsize=10,
     )
     # The manuscript caption supplies the figure-level title.  Keeping only
     # variable/panel labels here saves vertical space and avoids duplicating it.
-    fig.tight_layout(w_pad=1.8, rect=(0, 0, 1, 0.94))
+    fig.tight_layout(w_pad=1.8, rect=(0, 0.15, 1, 1))
 
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
-    fig.savefig(output_path, dpi=300, bbox_inches="tight")
+    fig.savefig(output_path, dpi=300)
     plt.close(fig)

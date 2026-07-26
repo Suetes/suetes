@@ -15,6 +15,21 @@ import xarray as xr
 
 from suetes.shared.artifacts import figure_dir_for
 
+plt.rcParams.update({
+    'font.size': 16,
+    'axes.labelsize': 18,
+    'xtick.labelsize': 16,
+    'ytick.labelsize': 16,
+    'figure.dpi': 300,
+    'savefig.dpi': 300,
+    'axes.linewidth': 1.5,
+    'xtick.major.width': 1.5,
+    'ytick.major.width': 1.5,
+    'xtick.major.size': 6,
+    'ytick.major.size': 6,
+    'font.family': 'sans-serif'
+})
+
 
 def render(source: Path, output_dir: Path | None = None) -> Path:
     artifact = source / "data" / "artifact.nc" if source.is_dir() else source
@@ -40,8 +55,9 @@ def render(source: Path, output_dir: Path | None = None) -> Path:
             gradient.sel(core=core).values.T,
             cmap="RdBu_r", vmin=-limit, vmax=limit, shading="auto",
         )
+        props = dict(boxstyle='square,pad=0.3', facecolor='white', alpha=0.9, edgecolor='none')
+        axis.text(0.05, 0.95, panel_titles.get(core_name, core_name), transform=axis.transAxes, fontsize=16, verticalalignment='top', bbox=props)
         axis.set(
-            title=panel_titles.get(core_name, core_name),
             xlabel="x (km)", ylabel="z (km)",
         )
     z_index = int(np.argmin(abs(data["z"].values - data.attrs["profile_height_m"])))
@@ -53,15 +69,18 @@ def render(source: Path, output_dir: Path | None = None) -> Path:
             color=core_colors.get(core_name),
             label="Split-Explicit" if core_name == "split-explicit" else "SISL",
         )
+    axes[2].text(0.05, 0.95, "(c) Sensitivity profile", transform=axes[2].transAxes, fontsize=16, verticalalignment='top', bbox=props)
     axes[2].set(
-        title="(c) Sensitivity profile",
         xlabel="x (km)", ylabel="Adjoint sensitivity",
     )
-    axes[2].grid(True, ls="--", alpha=0.5)
-    axes[2].legend()
+    axes[2].grid(True, ls="--", alpha=0.4)
+    
+    # Attach legend to axes[2] with bbox_to_anchor so constrained_layout makes space for it.
+    axes[2].legend(loc="lower center", bbox_to_anchor=(0.5, -0.3), ncol=2)
     fig.colorbar(image, ax=axes[:2], label="Adjoint gradient")
+    
     output = output_dir / "adjoint_gradient_field_comparison.png"
-    fig.savefig(output, dpi=300, bbox_inches="tight")
+    fig.savefig(output, dpi=300)
     plt.close(fig)
     return output
 

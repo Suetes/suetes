@@ -126,10 +126,10 @@ class KesslerWarmRain:
             self.nfall = 0
 
     def _fall_speed(self, rho, qr):
-        """Marshall-Palmer terminal velocity [m/s]: 36.34*(rho*qr [g/cm3])^0.1364
+        """Marshall-Palmer terminal velocity [m/s]: 36.34*(rho*qr [g/cm3])^0.1346
         with the sqrt(rho_sfc/rho) density correction, capped at v_t_max."""
         rho_g = 1e-3 * rho                      # kg/m3 -> g/cm3
-        vt = 36.34 * jnp.maximum(rho_g * qr, 0.0) ** 0.1364 * jnp.sqrt(rho[:, :, 0:1] / rho)
+        vt = 36.34 * jnp.maximum(rho_g * qr, 0.0) ** 0.1346 * jnp.sqrt(rho[:, :, 0:1] / rho)
         return jnp.minimum(vt, self.v_t_max)
 
     def _sediment(self, qr, rho):
@@ -183,7 +183,7 @@ class KesslerWarmRain:
         e_s = 611.2 * jnp.exp(17.67 * (T - 273.15) / (T - 29.65))
         q_s = (self.epsilon * e_s) / (p - (1.0 - self.epsilon) * e_s)
         prod = (qv - q_s) / (1.0 + (self.Lv**2 * q_s) / (self.c['cp'] * self.Rv * T**2))
-        product = jnp.maximum(prod, -qc)       # evaporation limited by available qc
+        product = jnp.maximum(prod, -qc)       # cloud evaporation limited by available qc
 
         # 4. RAIN EVAPORATION in sub-saturated air (WRF ventilation formula, p in Pa)
         rho_g = 1e-3 * rho                     # g/cm3
@@ -191,7 +191,11 @@ class KesslerWarmRain:
         ern = (dt * ((1.6 + 124.9 * rqr ** 0.2046) * rqr ** 0.525)
                / (2.55e8 / (p * q_s) + 5.4e5)
                * jnp.maximum(q_s - qv, 0.0) / jnp.clip(rho_g * q_s, self.c.get('eps', 1e-20), None))
-        ern = jnp.minimum(ern, jnp.maximum(-product - qc, 0.0))
+        # `prod` is the unconstrained saturation-adjustment amount.  Once all
+        # available cloud water has evaporated, rain may fill the remaining
+        # vapor deficit.  Using the cloud-limited `product` here would make
+        # -product-qc identically zero and disable rain evaporation entirely.
+        ern = jnp.minimum(ern, jnp.maximum(-prod - qc, 0.0))
         ern = jnp.minimum(ern, qr)
 
         # 5. FINAL UPDATE: latent heating, re-encode virtual potential temperature

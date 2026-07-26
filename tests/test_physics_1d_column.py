@@ -83,6 +83,27 @@ def test_microphysics_saturation():
     assert jnp.all(updated_state['th_v'] > state['th_v']) # Latent heating warming
     assert jnp.all(updated_state['q_c'] >= 0)            # Valid positive cloud space
 
+
+def test_kessler_rain_evaporates_and_cools_unsaturated_air():
+    grid, _, _ = create_mock_environment(nx=1, ny=1)
+    shape_m = (grid.nx, grid.ny, grid.nz)
+    state = {
+        'th_v': jnp.full(shape_m, 300.0),
+        'q': jnp.full(shape_m, 0.002),
+        'q_c': jnp.zeros(shape_m),
+        'q_r': jnp.full(shape_m, 0.001),
+        'pi': jnp.full(shape_m, 1.0),
+        'rho': jnp.full(shape_m, 1.15),
+    }
+
+    micro = KesslerWarmRain(CONSTANTS, dt=1.0, grid=grid)
+    updated = micro.apply_update(state)
+
+    assert jnp.all(updated['q_r'] < state['q_r'])
+    assert jnp.all(updated['q'] > state['q'])
+    assert jnp.all(updated['th_v'] < state['th_v'])
+
+
 def test_vertical_diffusion_stability():
     grid, operators, bg = create_mock_environment(nx=3, ny=3)
     shape_m = (grid.nx, grid.ny, grid.nz)

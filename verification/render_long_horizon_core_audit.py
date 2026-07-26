@@ -7,10 +7,27 @@ import argparse
 import csv
 from pathlib import Path
 
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
 from suetes.shared.artifacts import artifact_from_bundle, figure_dir_for
+
+plt.rcParams.update({
+    'font.size': 16,
+    'axes.labelsize': 18,
+    'xtick.labelsize': 16,
+    'ytick.labelsize': 16,
+    'figure.dpi': 300,
+    'savefig.dpi': 300,
+    'axes.linewidth': 1.5,
+    'xtick.major.width': 1.5,
+    'ytick.major.width': 1.5,
+    'xtick.major.size': 6,
+    'ytick.major.size': 6,
+    'font.family': 'sans-serif'
+})
 
 
 def _read(path: Path) -> list[dict]:
@@ -52,11 +69,12 @@ def render(metrics_path: Path, output_dir: Path | None = None) -> list[Path]:
     reference = np.asarray(dx_values) ** 2
     reference *= axes[0].lines[0].get_ydata()[0] / reference[0]
     axes[0].loglog(dx_values, reference, "k--", alpha=0.7, label="Order 2")
-    axes[0].set_title("(a) Cross-core refinement")
+    props = dict(boxstyle='square,pad=0.3', facecolor='white', alpha=0.9, edgecolor='none')
+    axes[0].text(0.05, 0.95, "(a) Cross-core refinement", transform=axes[0].transAxes, fontsize=16, verticalalignment='top', bbox=props)
     axes[0].set_xlabel(r"Grid spacing $\Delta x$ (m)")
     axes[0].set_ylabel("SISL–Split relative $L_2$ difference")
     axes[0].invert_xaxis()
-    axes[0].legend()
+    handles0, labels0 = axes[0].get_legend_handles_labels()
 
     final_time = times[-1]
     styles = {
@@ -77,16 +95,30 @@ def render(metrics_path: Path, output_dir: Path | None = None) -> list[Path]:
             [row["value"] for row in selected],
             marker=marker, color=color, lw=2, label=label,
         )
-    axes[1].set_title(f"(b) Self-convergence at {final_time:g} s")
+    axes[1].text(0.05, 0.95, f"(b) Self-convergence at {final_time:g} s", transform=axes[1].transAxes, fontsize=16, verticalalignment='top', bbox=props)
     axes[1].set_xlabel(r"Coarse-grid spacing $\Delta x$ (m)")
     axes[1].set_ylabel("Successive-grid relative $L_2$ error")
     axes[1].invert_xaxis()
-    axes[1].legend()
+    handles1, labels1 = axes[1].get_legend_handles_labels()
+    import matplotlib.ticker as ticker
     for axis in axes:
         axis.grid(True, which="both", ls="--", alpha=0.4)
-    fig.tight_layout()
+        axis.xaxis.set_minor_formatter(ticker.NullFormatter())
+        axis.tick_params(axis="x", which="both", rotation=0)
+        
+    ticks0 = sorted(list(set([dx_values[0], dx_values[len(dx_values)//2], dx_values[-1]])))
+    axes[0].set_xticks(ticks0)
+    axes[0].xaxis.set_major_formatter(ticker.ScalarFormatter())
+    
+    dx_self = sorted(list({row["coarse_dx_m"] for row in self_rows}), reverse=True)
+    ticks1 = sorted(list(set([dx_self[0], dx_self[len(dx_self)//2], dx_self[-1]])))
+    axes[1].set_xticks(ticks1)
+    axes[1].xaxis.set_major_formatter(ticker.ScalarFormatter())
+        
+    fig.legend(handles0 + handles1, labels0 + labels1, loc="lower center", bbox_to_anchor=(0.5, 0.0), ncol=len(labels0) + len(labels1))
+    fig.tight_layout(rect=(0, 0.15, 1, 1))
     convergence_path = output_dir / "long_horizon_convergence.png"
-    fig.savefig(convergence_path, dpi=300, bbox_inches="tight")
+    fig.savefig(convergence_path, dpi=300)
     plt.close(fig)
 
     fig, axis = plt.subplots(figsize=(7.2, 4.8))
@@ -103,10 +135,13 @@ def render(metrics_path: Path, output_dir: Path | None = None) -> list[Path]:
     axis.set_xlabel("Simulation time (s)")
     axis.set_ylabel("SISL–Split relative $L_2$ difference")
     axis.grid(True, ls="--", alpha=0.4)
-    axis.legend()
-    fig.tight_layout()
+    axis.xaxis.set_major_locator(ticker.MaxNLocator(5))
+    axis.tick_params(axis="x", which="both", rotation=0)
+    handles, labels = axis.get_legend_handles_labels()
+    fig.legend(handles, labels, loc="lower center", bbox_to_anchor=(0.5, 0.0), ncol=len(labels))
+    fig.tight_layout(rect=(0, 0.2, 1, 1))
     evolution_path = output_dir / "cross_core_error_evolution.png"
-    fig.savefig(evolution_path, dpi=300, bbox_inches="tight")
+    fig.savefig(evolution_path, dpi=300)
     plt.close(fig)
 
     for path in (convergence_path, evolution_path):

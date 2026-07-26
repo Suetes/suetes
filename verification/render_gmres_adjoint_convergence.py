@@ -6,10 +6,26 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
-
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 from suetes.shared.artifacts import artifact_from_bundle, figure_dir_for
+
+plt.rcParams.update({
+    'font.size': 16,
+    'axes.labelsize': 18,
+    'xtick.labelsize': 16,
+    'ytick.labelsize': 16,
+    'figure.dpi': 300,
+    'savefig.dpi': 300,
+    'axes.linewidth': 1.5,
+    'xtick.major.width': 1.5,
+    'ytick.major.width': 1.5,
+    'xtick.major.size': 6,
+    'ytick.major.size': 6,
+    'font.family': 'sans-serif'
+})
 
 
 def main() -> None:
@@ -43,11 +59,13 @@ def main() -> None:
     )
     axis.set_xlabel("GMRES iterations per timestep")
     axis.set_ylabel("Relative adjoint $L_2$ error")
-    axis.grid(True, which="both", ls="--", alpha=0.5)
-    axis.legend(fontsize=10, loc="upper right")
-    fig.tight_layout()
+    axis.grid(True, which="both", ls="--", alpha=0.4)
+    
+    handles, labels = axis.get_legend_handles_labels()
+    fig.legend(handles, labels, loc="lower center", bbox_to_anchor=(0.5, -0.05), ncol=2)
+    fig.tight_layout(rect=(0, 0.15, 1, 1))
     output = output_dir / "gmres_adjoint_convergence.png"
-    fig.savefig(output, dpi=300, bbox_inches="tight")
+    fig.savefig(output, dpi=300)
     plt.close(fig)
     print(f"Saved {output}")
 

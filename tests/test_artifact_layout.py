@@ -68,6 +68,22 @@ def test_artifact_from_bundle_resolves_data_file(tmp_path: Path) -> None:
     assert artifact_from_bundle(artifact) == artifact
 
 
+def test_save_plot_dataset_accepts_boolean_attributes(tmp_path: Path) -> None:
+    artifact = save_plot_dataset(
+        xr.Dataset(
+            {"value": ("x", [1.0, 2.0])},
+            attrs={"periodic_x": True},
+        ),
+        tmp_path / "artifact.nc",
+        experiment="boolean_attribute_test",
+    )
+
+    with xr.open_dataset(artifact) as dataset:
+        assert dataset.attrs["periodic_x"] == 1
+        np.testing.assert_allclose(dataset["value"], [1.0, 2.0])
+    assert not (tmp_path / ".artifact.nc.tmp").exists()
+
+
 def test_rising_bubble_renderer_consumes_artifact(tmp_path: Path) -> None:
     layout = ArtifactLayout(
         kind="benchmarks",

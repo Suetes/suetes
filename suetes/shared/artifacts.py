@@ -134,8 +134,21 @@ def save_plot_dataset(
         **metadata,
     }
     dataset = dataset.copy()
+    def netcdf_attribute(value):
+        # NetCDF4 attributes do not support booleans. Store them as 0/1 while
+        # preserving ordinary numeric and string attributes without conversion.
+        if isinstance(value, (bool, np.bool_)):
+            return int(value)
+        if isinstance(value, (str, int, float, np.number)):
+            return value
+        return json.dumps(value)
+
+    dataset.attrs = {
+        key: netcdf_attribute(value)
+        for key, value in dataset.attrs.items()
+    }
     dataset.attrs.update({
-        key: value if isinstance(value, (str, int, float, np.number)) else json.dumps(value)
+        key: netcdf_attribute(value)
         for key, value in provenance.items()
     })
     encoding = {
@@ -143,7 +156,14 @@ def save_plot_dataset(
         for name, variable in dataset.data_vars.items()
         if variable.ndim and np.issubdtype(variable.dtype, np.number)
     }
-    dataset.to_netcdf(path, engine="netcdf4", encoding=encoding)
+    temporary_path = path.with_name(f".{path.name}.tmp")
+    try:
+        dataset.to_netcdf(
+            temporary_path, engine="netcdf4", encoding=encoding
+        )
+        temporary_path.replace(path)
+    finally:
+        temporary_path.unlink(missing_ok=True)
     with path.with_suffix(".json").open("w") as stream:
         json.dump(provenance, stream, indent=2)
     return path
