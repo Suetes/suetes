@@ -9,11 +9,19 @@ from pathlib import Path
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from matplotlib.colors import LinearSegmentedColormap
+import matplotlib.ticker as ticker
+from mpl_toolkits.axes_grid1 import make_axes_locatable
 import numpy as np
 import xarray as xr
 
 from suetes.shared.artifacts import SCHEMA
 
+
+def format_sci(value: float) -> str:
+    """Format a float into LaTeX scientific notation, e.g., 1.23 \times 10^{-4}."""
+    base, exp = f"{value:.2e}".split("e")
+    return f"{base} \\times 10^{{{int(exp)}}}"
 
 def render(artifact: Path, output_dir: Path | None = None) -> list[Path]:
     """Render figures without importing JAX or rerunning either core."""
@@ -38,63 +46,140 @@ def render(artifact: Path, output_dir: Path | None = None) -> list[Path]:
     if cores != ["sisl", "split-explicit"]:
         raise ValueError(f"Expected SISL and Split-Explicit data, found {cores}")
 
+    plt.rcParams.update({
+        'font.size': 16,
+        'axes.labelsize': 18,
+        'xtick.labelsize': 16,
+        'ytick.labelsize': 16,
+        'figure.dpi': 300,
+        'savefig.dpi': 300,
+        'axes.linewidth': 1.5,
+        'xtick.major.width': 1.5,
+        'ytick.major.width': 1.5,
+        'xtick.major.size': 6,
+        'ytick.major.size': 6,
+        'font.family': 'sans-serif'
+    })
+
     final = theta.isel(time=-1)
-    difference = final.sel(core="sisl") - final.sel(core="split-explicit")
-    field_limit = max(float(abs(final.min())), float(abs(final.max())))
-    difference_limit = max(
-        float(abs(difference.min())), float(abs(difference.max())),
-        np.finfo(float).eps,
-    )
+    theta_prime_sisl = final.sel(core="sisl").values.T
+    theta_prime_split = final.sel(core="split-explicit").values.T
+    theta_diff = theta_prime_sisl - theta_prime_split
+    
     x_km = dataset["x"].values / 1000.0
     z_km = dataset["z"].values / 1000.0
+    
+    cmap_field = 'RdBu_r'
+    field_limit = max(float(abs(final.min())), float(abs(final.max())))
+    vmin_field, vmax_field = -field_limit, field_limit
+    
+    cmap_diff = 'PRGn'
+    diff_limit = max(float(abs(theta_diff.min())), float(abs(theta_diff.max())))
+    vmin_diff, vmax_diff = -diff_limit, diff_limit
+    
+    saved_paths = []
 
-    fig, axes = plt.subplots(
-        1, 3, figsize=(18, 5.4), sharex=True, sharey=True,
-        constrained_layout=True,
-    )
-    for axis, core, title in zip(
-        axes[:2], cores, ("(a) SISL", "(b) Split-Explicit")
-    ):
-        image = axis.contourf(
-            x_km, z_km, final.sel(core=core).values.T,
-            levels=np.linspace(-field_limit, field_limit, 61),
-            cmap="RdBu_r", extend="both",
-        )
-        axis.set_title(title)
-    difference_image = axes[2].contourf(
-        x_km, z_km, difference.values.T,
-        levels=np.linspace(-difference_limit, difference_limit, 61),
-        cmap="coolwarm", extend="both",
-    )
-    axes[2].set_title("(c) SISL $-$ Split-Explicit")
-    for axis in axes:
-        axis.set_xlabel("Horizontal distance (km)")
-        axis.set_aspect("equal")
-    axes[0].set_ylabel("Height (km)")
-    fig.colorbar(image, ax=axes[:2], label=r"$\theta_v'$ (K)")
-    fig.colorbar(difference_image, ax=axes[2], label=r"Difference (K)")
-    comparison_path = output_dir / "comparison.png"
-    fig.savefig(comparison_path, dpi=300, bbox_inches="tight")
-    plt.close(fig)
+    # --- 2. Process and save the SISL plot (Panel a) ---
+    fig_sisl, ax_sisl = plt.subplots()
+    im_sisl = ax_sisl.pcolormesh(x_km, z_km, theta_prime_sisl, shading='gouraud', cmap=cmap_field, vmin=vmin_field, vmax=vmax_field)
+    ax_sisl.set_xlabel('Horizontal distance (km)')
+    ax_sisl.set_ylabel('Height (km)')
+    ax_sisl.set_aspect('equal')
+    
+    # Add an invisible colorbar axis to perfectly match the width reduction of panels B and C
+    divider_sisl = make_axes_locatable(ax_sisl)
+    cax_sisl = divider_sisl.append_axes("right", size="5%", pad=0.1)
+    cax_sisl.axis('off')
+    
+    plt.tight_layout()
+    path_sisl = output_dir / 'rising_bubble_sisl_main.png'
+    plt.savefig(path_sisl, bbox_inches='tight', transparent=False)
+    plt.close(fig_sisl)
+    saved_paths.append(path_sisl)
 
-    difference_series = (
-        theta.sel(core="sisl") - theta.sel(core="split-explicit")
-    )
+    # --- 3. Process and save the Split-Explicit plot (Panel b) ---
+    fig_split, ax_split = plt.subplots()
+    im_split = ax_split.pcolormesh(x_km, z_km, theta_prime_split, shading='gouraud', cmap=cmap_field, vmin=vmin_field, vmax=vmax_field)
+    ax_split.set_xlabel('Horizontal distance (km)')
+    
+    # Apply transparent y-labels to maintain left-side bounding box padding
+    ax_split.set_ylabel('Height (km)', color=(0, 0, 0, 0))
+    ax_split.tick_params(axis='y', labelcolor=(0, 0, 0, 0))
+    ax_split.set_aspect('equal')
+    
+    # Add vertical colorbar
+    divider_split = make_axes_locatable(ax_split)
+    cax_split = divider_split.append_axes("right", size="5%", pad=0.1)
+    cbar_split = fig_split.colorbar(im_split, cax=cax_split)
+    cbar_split.locator = ticker.MaxNLocator(nbins=4)
+    cbar_split.formatter = ticker.ScalarFormatter(useMathText=True)
+    cbar_split.formatter.set_powerlimits((-2, 3))
+    cbar_split.update_ticks()
+    cbar_split.set_label(r'$\theta_v^\prime$ (K)', labelpad=10)
+    cbar_split.outline.set_linewidth(1.5)
+    
+    plt.tight_layout()
+    path_split = output_dir / 'rising_bubble_split_explicit_main.png'
+    plt.savefig(path_split, bbox_inches='tight', transparent=False)
+    plt.close(fig_split)
+    saved_paths.append(path_split)
+
+    # --- 4. Process and save the Difference plot (Panel c) ---
     spatial_dims = ("x", "z")
-    relative_l2 = np.sqrt((difference_series**2).sum(spatial_dims)) / np.sqrt(
+    difference_series = (theta.sel(core="sisl") - theta.sel(core="split-explicit"))
+    relative_l2_series = np.sqrt((difference_series**2).sum(spatial_dims)) / np.sqrt(
         ((0.5 * theta.sum("core")) ** 2).sum(spatial_dims)
     ).clip(min=np.finfo(float).tiny)
-    maximum = abs(difference_series).max(spatial_dims)
-    fig, axis = plt.subplots(figsize=(7.2, 4.6), constrained_layout=True)
-    axis.plot(dataset["time"], relative_l2, "o-", label=r"relative $L_2$")
-    axis.plot(dataset["time"], maximum, "s--", label=r"$L_\infty$ (K)")
-    axis.set(xlabel="Simulation time (s)", ylabel="Difference metric")
-    axis.grid(True, ls="--", alpha=0.4)
-    axis.legend()
-    evolution_path = output_dir / "evolution.png"
-    fig.savefig(evolution_path, dpi=300, bbox_inches="tight")
-    plt.close(fig)
-    return [comparison_path, evolution_path]
+    maximum_series = abs(difference_series).max(spatial_dims)
+    
+    l2_rel = float(relative_l2_series.isel(time=-1))
+    l_inf = float(maximum_series.isel(time=-1))
+
+    fig_diff, ax_diff = plt.subplots()
+    im_diff = ax_diff.pcolormesh(x_km, z_km, theta_diff, shading='gouraud', cmap=cmap_diff, vmin=vmin_diff, vmax=vmax_diff)
+    
+    ax_diff.set_xlabel('Horizontal distance (km)')
+    ax_diff.set_ylabel('Height (km)')
+    ax_diff.set_aspect('equal')
+
+    # Add vertical colorbar
+    divider_diff = make_axes_locatable(ax_diff)
+    cax_diff = divider_diff.append_axes("right", size="5%", pad=0.1)
+    cbar_diff = fig_diff.colorbar(im_diff, cax=cax_diff)
+    cbar_diff.locator = ticker.MaxNLocator(nbins=4)
+    cbar_diff.formatter = ticker.ScalarFormatter(useMathText=True)
+    cbar_diff.formatter.set_powerlimits((0, 0))
+    cbar_diff.update_ticks()
+    cbar_diff.set_label(r'$\Delta\theta_v^\prime$ (K)', labelpad=10)
+    cbar_diff.outline.set_linewidth(1.5)
+
+    # Add text box for error metrics
+    textstr = f'relative $L_2 = {format_sci(l2_rel)}$\n$L_\\infty = {format_sci(l_inf)}$ K'
+    props = dict(boxstyle='square,pad=0.5', facecolor='white', alpha=0.9, edgecolor='none')
+    ax_diff.text(0.05, 0.95, textstr, transform=ax_diff.transAxes, fontsize=14,
+                 verticalalignment='top', bbox=props)
+
+    plt.tight_layout()
+    path_diff = output_dir / 'rising_bubble_difference_main.png'
+    plt.savefig(path_diff, bbox_inches='tight', transparent=False)
+    plt.close(fig_diff)
+    saved_paths.append(path_diff)
+    
+    # --- 5. Process and save Evolution plot ---
+    fig_evol, ax_evol = plt.subplots(figsize=(7.2, 4.6), constrained_layout=True)
+    ax_evol.plot(dataset["time"], relative_l2_series, "o-", label=r"relative $L_2$")
+    ax_evol.plot(dataset["time"], maximum_series, "s--", label=r"$L_\infty$ (K)")
+    ax_evol.set_xlabel("Simulation time (s)")
+    ax_evol.set_ylabel("Difference metric")
+    ax_evol.grid(True, ls="--", alpha=0.4)
+    # Move legend outside the plot
+    ax_evol.legend(loc='center left', bbox_to_anchor=(1, 0.5))
+    path_evol = output_dir / "evolution.png"
+    fig_evol.savefig(path_evol, dpi=300, bbox_inches="tight")
+    plt.close(fig_evol)
+    saved_paths.append(path_evol)
+
+    return saved_paths
 
 
 def main() -> None:
@@ -112,3 +197,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
