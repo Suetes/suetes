@@ -18,6 +18,8 @@ import xarray as xr
 
 QC_THRESHOLD = 1.0e-5
 QR_THRESHOLD = 1.0e-4
+VISUAL_QC_THRESHOLD = QC_THRESHOLD
+CLOUD_COLOR = "#b8b8b8"
 
 
 def add_isosurface(
@@ -86,6 +88,8 @@ def render(
     azimuth: float,
     requested_time: float | None,
     boundary_mask_km: float,
+    cloud_threshold: float,
+    cloud_alpha: float,
 ):
     with xr.open_dataset(artifact) as source:
         dataset = source.load()
@@ -172,8 +176,8 @@ def render(
         color="#b2182b", alpha=0.70, step_size=mesh_step,
     )
     add_isosurface(
-        axis, cloud, QC_THRESHOLD, origin, spacing,
-        color="#f2f2f2", alpha=0.68, step_size=mesh_step,
+        axis, cloud, cloud_threshold, origin, spacing,
+        color=CLOUD_COLOR, alpha=cloud_alpha, step_size=mesh_step,
     )
 
     axis.set_xlim(float(x.min()), float(x.max()))
@@ -197,8 +201,12 @@ def render(
     legend = axis.legend(
         handles=[
             Patch(
-                facecolor="#f2f2f2", edgecolor="#aaaaaa", alpha=0.90,
-                label=r"$q_c=10^{-5}$ kg kg$^{-1}$",
+                facecolor=CLOUD_COLOR, edgecolor="#777777",
+                alpha=cloud_alpha,
+                label=(
+                    rf"$q_c={cloud_threshold / 1.0e-5:g}"
+                    r"\times10^{-5}$ kg kg$^{-1}$"
+                ),
             ),
             Patch(
                 facecolor="#b2182b", alpha=0.65,
@@ -317,6 +325,21 @@ def main():
             "disabled by default and never applied to cloud or rain fields"
         ),
     )
+    parser.add_argument(
+        "--cloud-threshold",
+        type=float,
+        default=VISUAL_QC_THRESHOLD,
+        help=(
+            "cloud-water isosurface used only for visualization (kg kg-1); "
+            "ERF diagnostics retain the canonical 1e-5 threshold"
+        ),
+    )
+    parser.add_argument(
+        "--cloud-alpha",
+        type=float,
+        default=0.32,
+        help="opacity of the visual cloud-water isosurface",
+    )
     args = parser.parse_args()
     if not args.artifact.is_file():
         raise FileNotFoundError(
@@ -325,6 +348,10 @@ def main():
         )
     if args.mesh_step < 1:
         raise ValueError("--mesh-step must be positive")
+    if args.cloud_threshold <= 0.0:
+        raise ValueError("--cloud-threshold must be positive")
+    if not 0.0 <= args.cloud_alpha <= 1.0:
+        raise ValueError("--cloud-alpha must lie in [0, 1]")
     render(
         args.artifact,
         args.output,
@@ -333,6 +360,8 @@ def main():
         args.azimuth,
         args.time,
         args.boundary_mask_km,
+        args.cloud_threshold,
+        args.cloud_alpha,
     )
     if args.rain_output is not None:
         render_rain_top_view(args.artifact, args.rain_output)

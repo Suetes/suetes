@@ -1,5 +1,18 @@
 import jax.numpy as jnp
 
+
+def _nonnegative_power(value, exponent):
+    """Return ``max(value, 0)**exponent`` with a finite derivative at zero.
+
+    Fractional powers have a singular mathematical derivative at zero. The
+    associated warm-rain processes are inactive on the dry branch, so their
+    appropriate algorithmic derivative there is zero.
+    """
+    positive = value > 0.0
+    safe_value = jnp.where(positive, value, 1.0)
+    return jnp.where(positive, safe_value**exponent, 0.0)
+
+
 class SimpleMicrophysics:
     r"""
     A fast saturation adjustment microphysics scheme.
@@ -129,7 +142,11 @@ class KesslerWarmRain:
         """Marshall-Palmer terminal velocity [m/s]: 36.34*(rho*qr [g/cm3])^0.1346
         with the sqrt(rho_sfc/rho) density correction, capped at v_t_max."""
         rho_g = 1e-3 * rho                      # kg/m3 -> g/cm3
-        vt = 36.34 * jnp.maximum(rho_g * qr, 0.0) ** 0.1346 * jnp.sqrt(rho[:, :, 0:1] / rho)
+        vt = (
+            36.34
+            * _nonnegative_power(rho_g * qr, 0.1346)
+            * jnp.sqrt(rho[:, :, 0:1] / rho)
+        )
         return jnp.minimum(vt, self.v_t_max)
 
     def _sediment(self, qr, rho):
@@ -173,7 +190,9 @@ class KesslerWarmRain:
             qr, precip_step = self._sediment(qr, rho)
 
         # 2. AUTOCONVERSION + ACCRETION (WRF implicit-in-qr form, x dt)
-        factorn = 1.0 / (1.0 + self.k2 * dt * jnp.maximum(qr, 0.0) ** 0.875)
+        factorn = 1.0 / (
+            1.0 + self.k2 * dt * _nonnegative_power(qr, 0.875)
+        )
         qrprod = qc * (1.0 - factorn) + factorn * self.k1 * dt * jnp.maximum(qc - self.qc0, 0.0)
         qrprod = jnp.minimum(qrprod, qc)
         qc = qc - qrprod
@@ -188,9 +207,17 @@ class KesslerWarmRain:
         # 4. RAIN EVAPORATION in sub-saturated air (WRF ventilation formula, p in Pa)
         rho_g = 1e-3 * rho                     # g/cm3
         rqr = jnp.maximum(rho_g * qr, 0.0)
-        ern = (dt * ((1.6 + 124.9 * rqr ** 0.2046) * rqr ** 0.525)
+        ern = (
+               dt * (
+                   (1.6 + 124.9 * _nonnegative_power(rqr, 0.2046))
+                   * _nonnegative_power(rqr, 0.525)
+               )
                / (2.55e8 / (p * q_s) + 5.4e5)
-               * jnp.maximum(q_s - qv, 0.0) / jnp.clip(rho_g * q_s, self.c.get('eps', 1e-20), None))
+               * jnp.maximum(q_s - qv, 0.0)
+               / jnp.clip(
+                   rho_g * q_s, self.c.get('eps', 1e-20), None
+               )
+        )
         # `prod` is the unconstrained saturation-adjustment amount.  Once all
         # available cloud water has evaporated, rain may fill the remaining
         # vapor deficit.  Using the cloud-limited `product` here would make

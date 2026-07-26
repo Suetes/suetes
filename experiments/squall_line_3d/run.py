@@ -121,9 +121,13 @@ class ConstantLaplacianDiffusion:
         diffusivity: float,
         dt: float,
         periodic_axes=(),
+        tracer_diffusivity: float | None = None,
     ):
         self.grid = grid
         self.diffusivity = float(diffusivity)
+        self.tracer_diffusivity = float(
+            diffusivity if tracer_diffusivity is None else tracer_diffusivity
+        )
         self.dt = float(dt)
         self.periodic_axes = frozenset(periodic_axes)
 
@@ -161,7 +165,10 @@ class ConstantLaplacianDiffusion:
     def apply_update(self, state):
         return {
             key: jnp.maximum(
-                state[key] + self.dt * self.diffusivity * self._laplacian(state[key]),
+                state[key]
+                + self.dt
+                * self.tracer_diffusivity
+                * self._laplacian(state[key]),
                 0.0,
             )
             for key in ("q", "q_c", "q_r")
@@ -176,6 +183,8 @@ def parse_snapshots(value: str) -> tuple[float, ...]:
 
 
 def validate(args):
+    if args.diffusivity < 0.0 or args.tracer_diffusivity < 0.0:
+        raise ValueError("diffusivities must be non-negative")
     dimensions = (
         round(DOMAIN_X / args.dx),
         round(DOMAIN_Y / args.dx),
@@ -308,7 +317,11 @@ def run(args):
 
     physics = PhysicsSuite()
     diffusion = ConstantLaplacianDiffusion(
-        grid, args.diffusivity, args.dt, periodic_axes=(0,)
+        grid,
+        args.diffusivity,
+        args.dt,
+        periodic_axes=(0,),
+        tracer_diffusivity=args.tracer_diffusivity,
     )
     physics.add_tendency_scheme(diffusion)
     physics.add_update_scheme(diffusion)
@@ -484,6 +497,7 @@ def run(args):
             "dt_s": args.dt,
             "precision": "float32",
             "diffusivity_m2_s": args.diffusivity,
+            "tracer_diffusivity_m2_s": args.tracer_diffusivity,
             "acoustic_substeps": args.acoustic_substeps,
             "periodic_x": 1,
             "relaxation_cells_y": args.relaxation_cells,
@@ -527,6 +541,15 @@ def main():
         help="snapshot times for which full 3-D cloud/rain fields are retained",
     )
     parser.add_argument("--diffusivity", type=float, default=33.33)
+    parser.add_argument(
+        "--tracer-diffusivity",
+        type=float,
+        default=33.33,
+        help=(
+            "Laplacian diffusivity for q_v, q_c, and q_r (m2 s-1); "
+            "set to zero for the controlled no-tracer-diffusion experiment"
+        ),
+    )
     parser.add_argument("--acoustic-substeps", type=int, default=2)
     parser.add_argument("--divergence-damping", type=float, default=0.03)
     parser.add_argument("--relaxation-cells", type=int, default=10)

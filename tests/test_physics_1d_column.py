@@ -104,6 +104,37 @@ def test_kessler_rain_evaporates_and_cools_unsaturated_air():
     assert jnp.all(updated['th_v'] < state['th_v'])
 
 
+def test_kessler_dry_state_has_finite_reverse_derivatives():
+    grid, _, _ = create_mock_environment(nx=1, ny=1)
+    shape_m = (grid.nx, grid.ny, grid.nz)
+    micro = KesslerWarmRain(CONSTANTS, dt=1.0, grid=grid)
+
+    def precipitation_and_state_sum(th_v, q_r):
+        state = {
+            'th_v': th_v,
+            'q': jnp.full(shape_m, 0.002),
+            'q_c': jnp.zeros(shape_m),
+            'q_r': q_r,
+            'pi': jnp.ones(shape_m),
+            'rho': jnp.full(shape_m, 1.15),
+        }
+        updated = micro.apply_update(state)
+        return (
+            jnp.sum(updated['precip_step'])
+            + jnp.sum(updated['th_v'])
+            + jnp.sum(updated['q_r'])
+        )
+
+    gradients = jax.grad(
+        precipitation_and_state_sum, argnums=(0, 1)
+    )(
+        jnp.full(shape_m, 300.0),
+        jnp.zeros(shape_m),
+    )
+
+    assert all(jnp.all(jnp.isfinite(value)) for value in gradients)
+
+
 def test_vertical_diffusion_stability():
     grid, operators, bg = create_mock_environment(nx=3, ny=3)
     shape_m = (grid.nx, grid.ny, grid.nz)
