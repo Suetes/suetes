@@ -105,10 +105,10 @@ def render(source: Path, output_dir: Path | None = None) -> list[Path]:
     output_dir = output_dir or figure_dir_for(source)
     output_dir.mkdir(parents=True, exist_ok=True)
     ylabels = {
-        "u": r"$L_2$ difference (m s$^{-1}$)",
-        "w": r"$L_2$ difference (m s$^{-1}$)",
-        "pi": r"$L_2$ difference",
-        "th_v": r"$L_2$ difference (K)",
+        "u": r"$\|\Delta u\|_2$ [m s$^{-1}$]",
+        "w": r"$\|\Delta w\|_2$ [m s$^{-1}$]",
+        "pi": r"$\|\Delta\pi\|_2$ [1]",
+        "th_v": r"$\|\Delta\theta_v\|_2$ [K]",
     }
     time_label = f"{t_end:g}"
     self_path = output_dir / f"bubble_t{time_label}_self_convergence.png"
@@ -116,7 +116,7 @@ def render(source: Path, output_dir: Path | None = None) -> list[Path]:
         dx,
         [("SISL", sisl), ("Split-Explicit", split)],
         ylabels,
-        r"Coarse-grid spacing $\Delta x$ (m)",
+        r"Coarse-grid spacing $\Delta x$ [m]",
         rf"Rising bubble self-convergence at $t={time_label}$ s",
         self_path,
         reference_order=2,
@@ -126,7 +126,7 @@ def render(source: Path, output_dir: Path | None = None) -> list[Path]:
         cross_dx,
         [("SISL minus Split-Explicit", cross)],
         ylabels,
-        r"Grid spacing $\Delta x$ (m)",
+        r"Grid spacing $\Delta x$ [m]",
         rf"Rising bubble cross-core convergence at $t={time_label}$ s",
         cross_path,
         reference_order=2,
@@ -141,8 +141,8 @@ def render(source: Path, output_dir: Path | None = None) -> list[Path]:
     ) ** 2
     axis.loglog(dx, reference, "k--", alpha=0.7, label="Order 2")
     axis.invert_xaxis()
-    axis.set_xlabel(r"Coarse-grid spacing $\Delta x$ (m)")
-    axis.set_ylabel(r"Successive-grid $L_2$ difference in $\theta_v$ (K)")
+    axis.set_xlabel(r"Coarse-grid spacing $\Delta x$ [m]")
+    axis.set_ylabel(r"$\|\Delta\theta_v\|_2$ [K]")
     axis.grid(True, which="both", ls="--", alpha=0.4)
     handles, labels = axis.get_legend_handles_labels()
     fig.legend(handles, labels, loc="lower center", bbox_to_anchor=(0.5, -0.05), ncol=len(labels))

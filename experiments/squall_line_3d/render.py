@@ -28,8 +28,13 @@ plt.rcParams.update(
 
 def panel_label(axis, label):
     axis.text(
-        0.015, 0.97, label, transform=axis.transAxes,
-        ha="left", va="top", fontweight="bold",
+        0.015,
+        0.97,
+        label,
+        transform=axis.transAxes,
+        ha="left",
+        va="top",
+        fontweight="bold",
         bbox={"facecolor": "white", "edgecolor": "none", "alpha": 0.75},
     )
 
@@ -43,29 +48,12 @@ def draw_cross_section(axis, dataset, index, colorbar=False):
     rain = 1000.0 * dataset.rain_water_xz.values[index]
     xx, zz = np.meshgrid(x, z, indexing="ij")
 
-    theta_prime = np.ma.masked_where(
-        np.abs(theta - environment) < 0.5, theta - environment
-    )
-    axis.contourf(
-        xx, zz, theta_prime,
-        levels=np.linspace(-8.0, 8.0, 33),
-        cmap="Greys", extend="both", alpha=0.55,
-    )
-    rain_levels = np.linspace(
-        1000.0 * QR_THRESHOLD,
-        max(0.2, float(np.nanmax(rain))),
-        16,
-    )
-    rain_plot = axis.contourf(
-        xx, zz, rain, levels=rain_levels, cmap="turbo", extend="max"
-    )
+    theta_prime = np.ma.masked_where(np.abs(theta - environment) < 0.5, theta - environment)
+    axis.contourf(xx, zz, theta_prime, levels=np.linspace(-8.0, 8.0, 33), cmap="Greys", extend="both", alpha=0.55)
+    rain_levels = np.linspace(1000.0 * QR_THRESHOLD, max(0.2, float(np.nanmax(rain))), 16)
+    rain_plot = axis.contourf(xx, zz, rain, levels=rain_levels, cmap="turbo", extend="max")
     if np.nanmax(cloud) >= 1000.0 * QC_THRESHOLD:
-        axis.contour(
-            xx, zz, cloud,
-            levels=[1000.0 * QC_THRESHOLD],
-            colors="#ef8a00",
-            linewidths=1.15,
-        )
+        axis.contour(xx, zz, cloud, levels=[1000.0 * QC_THRESHOLD], colors="#ef8a00", linewidths=1.15)
     axis.set_xlim(x.min(), x.max())
     axis.set_ylim(0.0, z.max() + 0.25)
     axis.set_title(f"$t={dataset.time.values[index] / 3600.0:g}$ h")
@@ -105,60 +93,30 @@ def render_final(dataset, output):
     panel_label(axes[0], "(a)")
 
     levels = np.linspace(1.0, max(2.0, float(np.nanmax(rain))), 20)
-    filled = axes[1].contourf(
-        xx, yy, rain, levels=levels, cmap="turbo", extend="max"
-    )
+    filled = axes[1].contourf(xx, yy, rain, levels=levels, cmap="turbo", extend="max")
     cold_pool = surface_theta - theta_initial
-    cold_levels = [
-        level for level in (-6.0, -4.0, -2.0, -1.0)
-        if np.nanmin(cold_pool) <= level <= np.nanmax(cold_pool)
-    ]
+    cold_levels = [level for level in (-6.0, -4.0, -2.0, -1.0) if np.nanmin(cold_pool) <= level <= np.nanmax(cold_pool)]
     if cold_levels:
         cold_contours = axes[1].contour(
-            xx, yy, cold_pool, levels=cold_levels,
-            colors="white", linewidths=0.75, linestyles="dashed",
+            xx, yy, cold_pool, levels=cold_levels, colors="white", linewidths=0.75, linestyles="dashed"
         )
-        axes[1].clabel(
-            cold_contours, fmt=lambda value: f"{value:g} K",
-            fontsize=7, inline_spacing=2,
-        )
+        axes[1].clabel(cold_contours, fmt=lambda value: f"{value:g} K", fontsize=7, inline_spacing=2)
     if np.nanmax(cloud_envelope) >= QC_THRESHOLD:
-        axes[1].contour(
-            xx, yy, cloud_envelope,
-            levels=[QC_THRESHOLD],
-            colors="#444444", linewidths=1.15,
-        )
+        axes[1].contour(xx, yy, cloud_envelope, levels=[QC_THRESHOLD], colors="#444444", linewidths=1.15)
     if np.nanmax(rain_envelope) >= QR_THRESHOLD:
-        axes[1].contour(
-            xx, yy, rain_envelope,
-            levels=[QR_THRESHOLD],
-            colors="#d7301f", linewidths=1.3,
-        )
+        axes[1].contour(xx, yy, rain_envelope, levels=[QR_THRESHOLD], colors="#d7301f", linewidths=1.3)
     bar = fig.colorbar(filled, ax=axes[1], pad=0.015)
     bar.set_label("Accumulated rain (mm)")
     axes[1].set_xlim(x.min(), x.max())
     axes[1].set_ylim(y.min(), y.max())
     axes[1].set_xlabel("$x$ (km)")
     axes[1].set_ylabel("$y$ (km)")
-    axes[1].set_title(
-        f"Surface accumulation at $t={dataset.time.values[index] / 3600.0:g}$ h"
-    )
+    axes[1].set_title(f"Surface accumulation at $t={dataset.time.values[index] / 3600.0:g}$ h")
     panel_label(axes[1], "(b)")
-    axes[1].plot(
-        [], [], color="#444444", linewidth=1.15,
-        label=r"$q_c=10^{-5}$ kg kg$^{-1}$",
-    )
-    axes[1].plot(
-        [], [], color="#d7301f", linewidth=1.3,
-        label=r"$q_r=10^{-4}$ kg kg$^{-1}$",
-    )
-    axes[1].plot(
-        [], [], color="white", linestyle="dashed", linewidth=0.9,
-        label=r"surface $\theta_d'$",
-    )
-    legend = axes[1].legend(
-        loc="upper right", frameon=True, framealpha=0.9, fontsize=8
-    )
+    axes[1].plot([], [], color="#444444", linewidth=1.15, label=r"$q_c=10^{-5}$ kg kg$^{-1}$")
+    axes[1].plot([], [], color="#d7301f", linewidth=1.3, label=r"$q_r=10^{-4}$ kg kg$^{-1}$")
+    axes[1].plot([], [], color="white", linestyle="dashed", linewidth=0.9, label=r"surface $\theta_d'$")
+    legend = axes[1].legend(loc="upper right", frameon=True, framealpha=0.9, fontsize=8)
     # The white cold-pool key needs a dark legend background to remain visible.
     legend.get_frame().set_facecolor("#eeeeee")
     fig.subplots_adjust(hspace=0.32)
@@ -191,39 +149,23 @@ def print_erf_diagnostics(dataset):
     cloud_x, cloud_y, cloud_top = extents(cloud, QC_THRESHOLD)
     rain_x, rain_y, rain_top = extents(rain, QR_THRESHOLD)
     print("\nERF-style diagnostics at the final time")
-    print(
-        f"  q_c >= 1e-5 kg/kg: {cloud_x:.1f} x {cloud_y:.1f} km, "
-        f"top={cloud_top:.1f} km"
-    )
-    print(
-        f"  q_r >= 1e-4 kg/kg: {rain_x:.1f} x {rain_y:.1f} km, "
-        f"top={rain_top:.1f} km"
-    )
+    print(f"  q_c >= 1e-5 kg/kg: {cloud_x:.1f} x {cloud_y:.1f} km, top={cloud_top:.1f} km")
+    print(f"  q_r >= 1e-4 kg/kg: {rain_x:.1f} x {rain_y:.1f} km, top={rain_top:.1f} km")
     print(f"  peak accumulated rain: {np.nanmax(accumulation):.1f} mm")
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "artifact", nargs="?", type=Path,
-        default=Path("output/squall_line_3d/artifact.nc"),
-    )
-    parser.add_argument(
-        "--output-dir", type=Path, default=Path("output/squall_line_3d")
-    )
+    parser.add_argument("artifact", nargs="?", type=Path, default=Path("output/squall_line_3d/artifact.nc"))
+    parser.add_argument("--output-dir", type=Path, default=Path("output/squall_line_3d"))
     args = parser.parse_args()
     if not args.artifact.exists():
-        raise FileNotFoundError(
-            f"{args.artifact} does not exist; run run.py first"
-        )
+        raise FileNotFoundError(f"{args.artifact} does not exist; run run.py first")
     args.output_dir.mkdir(parents=True, exist_ok=True)
     with xr.open_dataset(args.artifact) as source:
         dataset = source.load()
     print_erf_diagnostics(dataset)
-    outputs = (
-        args.output_dir / "squall_line_3d_evolution.png",
-        args.output_dir / "squall_line_3d.png",
-    )
+    outputs = (args.output_dir / "squall_line_3d_evolution.png", args.output_dir / "squall_line_3d.png")
     render_evolution(dataset, outputs[0])
     render_final(dataset, outputs[1])
     for output in outputs:

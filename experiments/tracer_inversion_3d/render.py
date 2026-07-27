@@ -8,6 +8,7 @@ import argparse
 from pathlib import Path
 
 import matplotlib
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
@@ -28,13 +29,9 @@ def render(source: Path, output_dir: Path | None = None) -> list[Path]:
     x = np.broadcast_to(data["x"].values[:, None], data["physical_height"].shape)
     for index, axis in enumerate(axes[:, 0]):
         image = axis.contourf(
-            x / 1000.0, data["physical_height"] / 1000.0,
-            snapshots.isel(time=index), levels=50, cmap="Blues",
+            x / 1000.0, data["physical_height"] / 1000.0, snapshots.isel(time=index), levels=50, cmap="Blues"
         )
-        axis.fill_between(
-            data["x"] / 1000.0, 0.0, data["terrain_height"] / 1000.0,
-            color="black",
-        )
+        axis.fill_between(data["x"] / 1000.0, 0.0, data["terrain_height"] / 1000.0, color="black")
         axis.set_title(f"t={float(data['time'][index]) / 60.0:g} min")
     fig.colorbar(image, ax=axes[:, 0], label="Tracer concentration")
     snapshot_path = output_dir / "tracer_snapshots.png"
@@ -43,10 +40,7 @@ def render(source: Path, output_dir: Path | None = None) -> list[Path]:
 
     parameters = data["optimization_parameters"]
     fig, axes = plt.subplots(1, 2, figsize=(14, 5))
-    axes[0].plot(
-        parameters.sel(parameter="x"),
-        parameters.sel(parameter="z"), "o-",
-    )
+    axes[0].plot(parameters.sel(parameter="x"), parameters.sel(parameter="z"), "o-")
     axes[0].set(xlabel="Source x", ylabel="Source z", title="Optimization trajectory")
     axes[1].plot(data["target_sensor_profile"], label="target")
     axes[1].plot(data["recovered_sensor_profile"], "--", label="recovered")

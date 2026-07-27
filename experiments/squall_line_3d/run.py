@@ -26,14 +26,7 @@ from suetes.regional3d.steppers import build_dynamical_core
 from suetes.shared.artifacts import save_plot_dataset
 
 
-CONSTANTS = {
-    "g": 9.81,
-    "cp": 1004.0,
-    "Rd": 287.0,
-    "cvd": 717.0,
-    "p0": 100_000.0,
-    "epsilon": 0.622,
-}
+CONSTANTS = {"g": 9.81, "cp": 1004.0, "Rd": 287.0, "cvd": 717.0, "p0": 100_000.0, "epsilon": 0.622}
 DOMAIN_X = 150_000.0
 DOMAIN_Y = 100_000.0
 DOMAIN_Z = 24_000.0
@@ -43,13 +36,8 @@ DEFAULT_SNAPSHOTS = (1800.0, 3600.0, 5400.0, 7200.0)
 def saturation_mixing_ratio(theta: float, exner: float) -> float:
     temperature = theta * exner
     pressure = CONSTANTS["p0"] * exner ** (CONSTANTS["cp"] / CONSTANTS["Rd"])
-    saturation_pressure = 611.2 * np.exp(
-        17.67 * (temperature - 273.15) / (temperature - 29.65)
-    )
-    return (
-        CONSTANTS["epsilon"] * saturation_pressure
-        / (pressure - (1.0 - CONSTANTS["epsilon"]) * saturation_pressure)
-    )
+    saturation_pressure = 611.2 * np.exp(17.67 * (temperature - 273.15) / (temperature - 29.65))
+    return CONSTANTS["epsilon"] * saturation_pressure / (pressure - (1.0 - CONSTANTS["epsilon"]) * saturation_pressure)
 
 
 def generate_wk_sounding(z_mass: np.ndarray) -> tuple[np.ndarray, ...]:
@@ -63,19 +51,11 @@ def generate_wk_sounding(z_mass: np.ndarray) -> tuple[np.ndarray, ...]:
         return np.where(
             height <= z_tr,
             theta_0 + (theta_tr - theta_0) * (height / z_tr) ** 1.25,
-            theta_tr
-            * np.exp(
-                CONSTANTS["g"] * (height - z_tr)
-                / (CONSTANTS["cp"] * temperature_tr)
-            ),
+            theta_tr * np.exp(CONSTANTS["g"] * (height - z_tr) / (CONSTANTS["cp"] * temperature_tr)),
         )
 
     def relative_humidity(height):
-        return np.where(
-            height <= z_tr,
-            1.0 - 0.75 * (height / z_tr) ** 1.25,
-            0.25,
-        )
+        return np.where(height <= z_tr, 1.0 - 0.75 * (height / z_tr) ** 1.25, 0.25)
 
     levels = np.concatenate([[0.0], np.asarray(z_mass, dtype=np.float32)])
     theta = dry_theta(levels)
@@ -88,28 +68,15 @@ def generate_wk_sounding(z_mass: np.ndarray) -> tuple[np.ndarray, ...]:
     for k in range(levels.size):
         if k:
             dz = levels[k] - levels[k - 1]
-            exner[k] = (
-                exner[k - 1]
-                - CONSTANTS["g"] * dz
-                / (CONSTANTS["cp"] * theta_v[k - 1])
-            )
+            exner[k] = exner[k - 1] - CONSTANTS["g"] * dz / (CONSTANTS["cp"] * theta_v[k - 1])
         for _ in range(8):
-            vapor[k] = min(
-                rh[k] * saturation_mixing_ratio(theta[k], exner[k]), 0.014
-            )
+            vapor[k] = min(rh[k] * saturation_mixing_ratio(theta[k], exner[k]), 0.014)
             theta_v[k] = theta[k] * (1.0 + 0.61 * vapor[k])
             if k:
                 theta_v_mean = 0.5 * (theta_v[k - 1] + theta_v[k])
-                exner[k] = (
-                    exner[k - 1]
-                    - CONSTANTS["g"] * dz
-                    / (CONSTANTS["cp"] * theta_v_mean)
-                )
+                exner[k] = exner[k - 1] - CONSTANTS["g"] * dz / (CONSTANTS["cp"] * theta_v_mean)
 
-    return tuple(
-        values[1:].astype(np.float32)
-        for values in (theta, theta_v, exner, vapor)
-    )
+    return tuple(values[1:].astype(np.float32) for values in (theta, theta_v, exner, vapor))
 
 
 class ConstantLaplacianDiffusion:
@@ -125,9 +92,7 @@ class ConstantLaplacianDiffusion:
     ):
         self.grid = grid
         self.diffusivity = float(diffusivity)
-        self.tracer_diffusivity = float(
-            diffusivity if tracer_diffusivity is None else tracer_diffusivity
-        )
+        self.tracer_diffusivity = float(diffusivity if tracer_diffusivity is None else tracer_diffusivity)
         self.dt = float(dt)
         self.periodic_axes = frozenset(periodic_axes)
 
@@ -155,22 +120,13 @@ class ConstantLaplacianDiffusion:
         tendencies = {}
         for key in ("u", "v", "w", "th_v"):
             if key in state:
-                field = (
-                    state[key] - background["th_v"]
-                    if key == "th_v" else state[key]
-                )
+                field = state[key] - background["th_v"] if key == "th_v" else state[key]
                 tendencies[key] = self.diffusivity * self._laplacian(field)
         return tendencies
 
     def apply_update(self, state):
         return {
-            key: jnp.maximum(
-                state[key]
-                + self.dt
-                * self.tracer_diffusivity
-                * self._laplacian(state[key]),
-                0.0,
-            )
+            key: jnp.maximum(state[key] + self.dt * self.tracer_diffusivity * self._laplacian(state[key]), 0.0)
             for key in ("q", "q_c", "q_r")
         }
 
@@ -185,74 +141,44 @@ def parse_snapshots(value: str) -> tuple[float, ...]:
 def validate(args):
     if args.diffusivity < 0.0 or args.tracer_diffusivity < 0.0:
         raise ValueError("diffusivities must be non-negative")
-    dimensions = (
-        round(DOMAIN_X / args.dx),
-        round(DOMAIN_Y / args.dx),
-        round(DOMAIN_Z / args.dz),
-    )
+    dimensions = (round(DOMAIN_X / args.dx), round(DOMAIN_Y / args.dx), round(DOMAIN_Z / args.dz))
     for cells, spacing, length, name in zip(
-        dimensions,
-        (args.dx, args.dx, args.dz),
-        (DOMAIN_X, DOMAIN_Y, DOMAIN_Z),
-        ("x", "y", "z"),
+        dimensions, (args.dx, args.dx, args.dz), (DOMAIN_X, DOMAIN_Y, DOMAIN_Z), ("x", "y", "z")
     ):
         if not np.isclose(cells * spacing, length):
             raise ValueError(f"spacing must divide the {name}-domain exactly")
     if args.snapshots[-1] > args.t_end:
         raise ValueError("snapshot time exceeds t_end")
-    if any(
-        not any(np.isclose(value, snapshot) for snapshot in args.snapshots)
-        for value in args.volume_times
-    ):
+    if any(not any(np.isclose(value, snapshot) for snapshot in args.snapshots) for value in args.volume_times):
         raise ValueError("volume-times must also appear in snapshots")
     for value in (*args.snapshots, args.chunk_seconds, args.t_end):
         if not np.isclose(round(value / args.dt) * args.dt, value):
             raise ValueError(f"{value:g} s must be an integer multiple of dt")
-    if any(
-        not np.isclose(round(value / args.chunk_seconds) * args.chunk_seconds, value)
-        for value in args.snapshots
-    ):
+    if any(not np.isclose(round(value / args.chunk_seconds) * args.chunk_seconds, value) for value in args.snapshots):
         raise ValueError("snapshot times must be multiples of chunk-seconds")
     return dimensions
 
 
 def run(args):
     nx, ny, nz = validate(args)
-    grid = RegionalGrid3D(
-        nx, ny, nz, args.dx, args.dx, args.dz,
-        lat_center=0.0, lon_center=0.0,
-    )
+    grid = RegionalGrid3D(nx, ny, nz, args.dx, args.dx, args.dz, lat_center=0.0, lon_center=0.0)
     operators = CGridOperator3D(grid, periodic_axes=(0,))
-    dry_theta_1d, theta_v_1d, exner_1d, vapor_1d = generate_wk_sounding(
-        np.asarray(grid.z_m)
-    )
+    dry_theta_1d, theta_v_1d, exner_1d, vapor_1d = generate_wk_sounding(np.asarray(grid.z_m))
 
     theta_v_bg = jnp.broadcast_to(theta_v_1d, (nx, ny, nz))
     exner_bg = jnp.broadcast_to(exner_1d, (nx, ny, nz))
     vapor_bg = jnp.broadcast_to(vapor_1d, (nx, ny, nz))
-    rho_bg = (
-        CONSTANTS["p0"] / (CONSTANTS["Rd"] * theta_v_bg)
-        * exner_bg ** (CONSTANTS["cvd"] / CONSTANTS["Rd"])
-    )
+    rho_bg = CONSTANTS["p0"] / (CONSTANTS["Rd"] * theta_v_bg) * exner_bg ** (CONSTANTS["cvd"] / CONSTANTS["Rd"])
     u_profile = -12.0 + 4.8e-3 * jnp.minimum(grid.z_m, 2500.0)
     u_bg = jnp.broadcast_to(u_profile, (nx + 1, ny, nz))
 
     x, y, z = jnp.meshgrid(grid.x_m, grid.y_m, grid.z_m, indexing="ij")
-    radius = jnp.sqrt(
-        (x / 10_000.0) ** 2
-        + (y / 10_000.0) ** 2
-        + ((z - 2000.0) / 2000.0) ** 2
-    )
-    bubble = jnp.where(
-        radius <= 1.0,
-        3.0 * jnp.cos(0.5 * jnp.pi * radius) ** 2,
-        0.0,
-    )
+    radius = jnp.sqrt((x / 10_000.0) ** 2 + (y / 10_000.0) ** 2 + ((z - 2000.0) / 2000.0) ** 2)
+    bubble = jnp.where(radius <= 1.0, 3.0 * jnp.cos(0.5 * jnp.pi * radius) ** 2, 0.0)
     dry_theta = jnp.broadcast_to(dry_theta_1d, (nx, ny, nz)) + bubble
     theta_v_initial = dry_theta * (1.0 + 0.61 * vapor_bg)
     rho_initial = (
-        CONSTANTS["p0"] / (CONSTANTS["Rd"] * theta_v_initial)
-        * exner_bg ** (CONSTANTS["cvd"] / CONSTANTS["Rd"])
+        CONSTANTS["p0"] / (CONSTANTS["Rd"] * theta_v_initial) * exner_bg ** (CONSTANTS["cvd"] / CONSTANTS["Rd"])
     )
     state = {
         "u": u_bg,
@@ -267,11 +193,7 @@ def run(args):
         "q_r": jnp.zeros((nx, ny, nz), dtype=jnp.float32),
         "precip_step": jnp.zeros((nx, ny), dtype=jnp.float32),
     }
-    background_state = {
-        "th_v": theta_v_bg,
-        "pi": exner_bg,
-        "rho": rho_bg,
-    }
+    background_state = {"th_v": theta_v_bg, "pi": exner_bg, "rho": rho_bg}
 
     # ERF is periodic in x and open in y. Suetes currently has neither exact
     # boundary type, so only the remote y edges are weakly relaxed; the x
@@ -280,11 +202,7 @@ def run(args):
         index = jnp.arange(ny)
         distance = jnp.minimum(index, ny - 1 - index)
         mask_y = jnp.where(
-            distance < args.relaxation_cells,
-            jnp.cos(
-                0.5 * jnp.pi * distance / args.relaxation_cells
-            ) ** 2,
-            0.0,
+            distance < args.relaxation_cells, jnp.cos(0.5 * jnp.pi * distance / args.relaxation_cells) ** 2, 0.0
         )[None, :, None]
     else:
         mask_y = jnp.zeros((1, ny, 1), dtype=jnp.float32)
@@ -306,10 +224,7 @@ def run(args):
             if key not in references:
                 output[key] = value
                 continue
-            mask = (
-                jnp.pad(mask_y, ((0, 0), (0, 1), (0, 0)), mode="edge")
-                if key == "v" else mask_y
-            )
+            mask = jnp.pad(mask_y, ((0, 0), (0, 1), (0, 0)), mode="edge") if key == "v" else mask_y
             output[key] = (1.0 - mask) * value + mask * references[key]
         # The two x-face endpoints represent the same periodic u face.
         output["u"] = output["u"].at[-1, :, :].set(output["u"][0, :, :])
@@ -317,17 +232,11 @@ def run(args):
 
     physics = PhysicsSuite()
     diffusion = ConstantLaplacianDiffusion(
-        grid,
-        args.diffusivity,
-        args.dt,
-        periodic_axes=(0,),
-        tracer_diffusivity=args.tracer_diffusivity,
+        grid, args.diffusivity, args.dt, periodic_axes=(0,), tracer_diffusivity=args.tracer_diffusivity
     )
     physics.add_tendency_scheme(diffusion)
     physics.add_update_scheme(diffusion)
-    physics.add_update_scheme(
-        KesslerWarmRain(CONSTANTS, dt=args.dt, grid=grid)
-    )
+    physics.add_update_scheme(KesslerWarmRain(CONSTANTS, dt=args.dt, grid=grid))
     for tracer in ("q", "q_c", "q_r"):
         physics.register_tracer(tracer)
 
@@ -355,15 +264,8 @@ def run(args):
 
     def advance_chunk(current_state, start_step):
         def scan_step(carry, offset):
-            next_state = stepper.step(
-                carry,
-                (start_step + offset) * actual_dt,
-                forcing=None,
-                bc_fn=boundary_conditions,
-            )
-            next_state["accumulated_rain"] = (
-                carry["accumulated_rain"] + next_state["precip_step"]
-            )
+            next_state = stepper.step(carry, (start_step + offset) * actual_dt, forcing=None, bc_fn=boundary_conditions)
+            next_state["accumulated_rain"] = carry["accumulated_rain"] + next_state["precip_step"]
             return next_state, jnp.max(jnp.abs(next_state["w"]))
 
         return jax.lax.scan(scan_step, current_state, jnp.arange(chunk_steps))
@@ -373,19 +275,11 @@ def run(args):
         f"({nx * ny * nz:,} cells), dx={args.dx:g} m, "
         f"dz={args.dz:g} m, dt={actual_dt:g} s"
     )
-    print(
-        f"Compiling {args.chunk_seconds:g}-s chunk "
-        f"({chunk_steps} timesteps)..."
-    )
+    print(f"Compiling {args.chunk_seconds:g}-s chunk ({chunk_steps} timesteps)...")
     compiled = jax.jit(advance_chunk).lower(state, 0).compile()
 
     def physical_dry_theta(current):
-        moisture_factor = (
-            1.0
-            + (1.0 / CONSTANTS["epsilon"] - 1.0) * current["q"]
-            - current["q_c"]
-            - current["q_r"]
-        )
+        moisture_factor = 1.0 + (1.0 / CONSTANTS["epsilon"] - 1.0) * current["q"] - current["q_c"] - current["q_r"]
         return current["th_v"] / moisture_factor
 
     y_mid = ny // 2
@@ -413,15 +307,9 @@ def run(args):
         current_step += chunk_steps
         simulation_time = current_step * actual_dt
         maximum_w = max(maximum_w, float(jnp.max(chunk_w)))
-        bad_fields = [
-            key for key in current
-            if not bool(jnp.all(jnp.isfinite(current[key])))
-        ]
+        bad_fields = [key for key in current if not bool(jnp.all(jnp.isfinite(current[key])))]
         if bad_fields:
-            raise FloatingPointError(
-                f"Non-finite state by t={simulation_time:g} s in "
-                + ", ".join(bad_fields)
-            )
+            raise FloatingPointError(f"Non-finite state by t={simulation_time:g} s in " + ", ".join(bad_fields))
         if simulation_time + 1.0e-9 >= target:
             dry = physical_dry_theta(current)
             times.append(target)
@@ -448,36 +336,16 @@ def run(args):
 
     dataset = xr.Dataset(
         data_vars={
-            "dry_potential_temperature_xz": (
-                ("time", "x", "z"), np.stack(theta_xz)
-            ),
-            "environment_dry_potential_temperature": (
-                ("x", "z"), np.broadcast_to(dry_theta_1d, (nx, nz))
-            ),
-            "cloud_water_xz": (
-                ("time", "x", "z"), np.stack(cloud_xz)
-            ),
-            "rain_water_xz": (
-                ("time", "x", "z"), np.stack(rain_xz)
-            ),
-            "surface_dry_potential_temperature": (
-                ("time", "x", "y"), np.stack(surface_theta)
-            ),
-            "accumulated_rain": (
-                ("time", "x", "y"), np.stack(accumulated_rain)
-            ),
-            "column_maximum_cloud_water": (
-                ("time", "x", "y"), np.stack(maximum_cloud)
-            ),
-            "column_maximum_rain_water": (
-                ("time", "x", "y"), np.stack(maximum_rain)
-            ),
-            "cloud_water_3d": (
-                ("volume_time", "x", "y", "z"), np.stack(volume_cloud)
-            ),
-            "rain_water_3d": (
-                ("volume_time", "x", "y", "z"), np.stack(volume_rain)
-            ),
+            "dry_potential_temperature_xz": (("time", "x", "z"), np.stack(theta_xz)),
+            "environment_dry_potential_temperature": (("x", "z"), np.broadcast_to(dry_theta_1d, (nx, nz))),
+            "cloud_water_xz": (("time", "x", "z"), np.stack(cloud_xz)),
+            "rain_water_xz": (("time", "x", "z"), np.stack(rain_xz)),
+            "surface_dry_potential_temperature": (("time", "x", "y"), np.stack(surface_theta)),
+            "accumulated_rain": (("time", "x", "y"), np.stack(accumulated_rain)),
+            "column_maximum_cloud_water": (("time", "x", "y"), np.stack(maximum_cloud)),
+            "column_maximum_rain_water": (("time", "x", "y"), np.stack(maximum_rain)),
+            "cloud_water_3d": (("volume_time", "x", "y", "z"), np.stack(volume_cloud)),
+            "rain_water_3d": (("volume_time", "x", "y", "z"), np.stack(volume_rain)),
         },
         coords={
             "time": np.asarray(times, dtype=np.float32),
@@ -511,28 +379,19 @@ def run(args):
         },
     )
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    artifact = save_plot_dataset(
-        dataset,
-        args.output_dir / "artifact.nc",
-        experiment="erf_squall_line_3d_coarse",
-    )
+    artifact = save_plot_dataset(dataset, args.output_dir / "artifact.nc", experiment="erf_squall_line_3d_coarse")
     print(f"Saved {artifact}")
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--output-dir", type=Path, default=Path("output/squall_line_3d")
-    )
+    parser.add_argument("--output-dir", type=Path, default=Path("output/squall_line_3d"))
     parser.add_argument("--dx", type=float, default=500.0)
     parser.add_argument("--dz", type=float, default=500.0)
     parser.add_argument("--dt", type=float, default=0.5)
     parser.add_argument("--t-end", type=float, default=7200.0)
     parser.add_argument(
-        "--snapshots",
-        type=parse_snapshots,
-        default=DEFAULT_SNAPSHOTS,
-        help="comma-separated snapshot times in seconds",
+        "--snapshots", type=parse_snapshots, default=DEFAULT_SNAPSHOTS, help="comma-separated snapshot times in seconds"
     )
     parser.add_argument(
         "--volume-times",

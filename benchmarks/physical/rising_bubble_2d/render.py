@@ -7,6 +7,7 @@ import argparse
 from pathlib import Path
 
 import matplotlib
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import xarray as xr
@@ -21,10 +22,7 @@ def render(source: Path, output_dir: Path | None = None) -> Path:
     with xr.open_dataset(artifact) as dataset:
         field = dataset["theta_perturbation"].load()
     fig, axis = plt.subplots(figsize=(12, 5))
-    image = axis.contourf(
-        field["x"] / 1000.0, field["z"] / 1000.0, field.values.T,
-        levels=20, cmap="RdBu_r",
-    )
+    image = axis.contourf(field["x"] / 1000.0, field["z"] / 1000.0, field.values.T, levels=20, cmap="RdBu_r")
     axis.set(xlabel="x (km)", ylabel="z (km)", title="SISL rising bubble")
     fig.colorbar(image, ax=axis, label="Temperature perturbation (K)")
     output = output_dir / "rising_bubble_2d.png"

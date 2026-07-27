@@ -30,14 +30,7 @@ from suetes.regional3d.steppers import build_dynamical_core
 from suetes.shared.artifacts import save_plot_dataset
 
 
-CONSTANTS = {
-    "g": 9.81,
-    "cp": 1004.0,
-    "Rd": 287.0,
-    "cvd": 717.0,
-    "p0": 100_000.0,
-    "epsilon": 0.622,
-}
+CONSTANTS = {"g": 9.81, "cp": 1004.0, "Rd": 287.0, "cvd": 717.0, "p0": 100_000.0, "epsilon": 0.622}
 DOMAIN_X = 150_000.0
 DOMAIN_Z = 24_000.0
 SNAPSHOT_TIMES = (3000.0, 6000.0, 9000.0)
@@ -46,13 +39,8 @@ SNAPSHOT_TIMES = (3000.0, 6000.0, 9000.0)
 def saturation_mixing_ratio(theta: float, exner: float) -> float:
     temperature = theta * exner
     pressure = CONSTANTS["p0"] * exner ** (CONSTANTS["cp"] / CONSTANTS["Rd"])
-    saturation_pressure = 611.2 * np.exp(
-        17.67 * (temperature - 273.15) / (temperature - 29.65)
-    )
-    return (
-        CONSTANTS["epsilon"] * saturation_pressure
-        / (pressure - (1.0 - CONSTANTS["epsilon"]) * saturation_pressure)
-    )
+    saturation_pressure = 611.2 * np.exp(17.67 * (temperature - 273.15) / (temperature - 29.65))
+    return CONSTANTS["epsilon"] * saturation_pressure / (pressure - (1.0 - CONSTANTS["epsilon"]) * saturation_pressure)
 
 
 def generate_wk_sounding(z_mass: np.ndarray) -> tuple[np.ndarray, ...]:
@@ -66,19 +54,11 @@ def generate_wk_sounding(z_mass: np.ndarray) -> tuple[np.ndarray, ...]:
         return np.where(
             height <= z_tr,
             theta_0 + (theta_tr - theta_0) * (height / z_tr) ** 1.25,
-            theta_tr
-            * np.exp(
-                CONSTANTS["g"] * (height - z_tr)
-                / (CONSTANTS["cp"] * temperature_tr)
-            ),
+            theta_tr * np.exp(CONSTANTS["g"] * (height - z_tr) / (CONSTANTS["cp"] * temperature_tr)),
         )
 
     def relative_humidity(height):
-        return np.where(
-            height <= z_tr,
-            1.0 - 0.75 * (height / z_tr) ** 1.25,
-            0.25,
-        )
+        return np.where(height <= z_tr, 1.0 - 0.75 * (height / z_tr) ** 1.25, 0.25)
 
     # Include z=0 so Exner pressure is anchored at the physical surface,
     # rather than incorrectly assigning pi=1 at the first mass level.
@@ -93,27 +73,16 @@ def generate_wk_sounding(z_mass: np.ndarray) -> tuple[np.ndarray, ...]:
     for k in range(levels.size):
         if k:
             dz = levels[k] - levels[k - 1]
-            exner_all[k] = (
-                exner_all[k - 1]
-                - CONSTANTS["g"] * dz
-                / (CONSTANTS["cp"] * theta_v_all[k - 1])
-            )
+            exner_all[k] = exner_all[k - 1] - CONSTANTS["g"] * dz / (CONSTANTS["cp"] * theta_v_all[k - 1])
         for _ in range(8):
             q_sat = saturation_mixing_ratio(theta_all[k], exner_all[k])
             vapor_all[k] = min(rh_all[k] * q_sat, 0.014)
             theta_v_all[k] = theta_all[k] * (1.0 + 0.61 * vapor_all[k])
             if k:
                 theta_v_mean = 0.5 * (theta_v_all[k - 1] + theta_v_all[k])
-                exner_all[k] = (
-                    exner_all[k - 1]
-                    - CONSTANTS["g"] * dz
-                    / (CONSTANTS["cp"] * theta_v_mean)
-                )
+                exner_all[k] = exner_all[k - 1] - CONSTANTS["g"] * dz / (CONSTANTS["cp"] * theta_v_mean)
 
-    return tuple(
-        values[1:].astype(np.float32)
-        for values in (theta_all, theta_v_all, exner_all, vapor_all)
-    )
+    return tuple(values[1:].astype(np.float32) for values in (theta_all, theta_v_all, exner_all, vapor_all))
 
 
 class ConstantLaplacianDiffusion:
@@ -165,10 +134,7 @@ class ConstantLaplacianDiffusion:
                 + self._second_difference(field, 1, self.grid.dy)
                 + self._second_difference(field, 2, self.grid.dz)
             )
-            updates[key] = jnp.maximum(
-                field + self.dt * self.diffusivity * laplacian,
-                0.0,
-            )
+            updates[key] = jnp.maximum(field + self.dt * self.diffusivity * laplacian, 0.0)
         return updates
 
 
@@ -188,35 +154,24 @@ def validate_discretization(args):
 def run(args):
     nx, nz = validate_discretization(args)
     ny = args.ny
-    grid = RegionalGrid3D(
-        nx, ny, nz, args.dx, args.dx, args.dz,
-        lat_center=0.0, lon_center=0.0,
-    )
+    grid = RegionalGrid3D(nx, ny, nz, args.dx, args.dx, args.dz, lat_center=0.0, lon_center=0.0)
     operators = CGridOperator3D(grid)
     theta, theta_v, exner, vapor = generate_wk_sounding(np.asarray(grid.z_m))
 
     theta_bg = jnp.broadcast_to(theta_v, (nx, ny, nz))
     exner_bg = jnp.broadcast_to(exner, (nx, ny, nz))
     vapor_bg = jnp.broadcast_to(vapor, (nx, ny, nz))
-    rho_bg = (
-        CONSTANTS["p0"] / (CONSTANTS["Rd"] * theta_bg)
-        * exner_bg ** (CONSTANTS["cvd"] / CONSTANTS["Rd"])
-    )
+    rho_bg = CONSTANTS["p0"] / (CONSTANTS["Rd"] * theta_bg) * exner_bg ** (CONSTANTS["cvd"] / CONSTANTS["Rd"])
     u_profile = -12.0 + 4.8e-3 * jnp.minimum(grid.z_m, 2500.0)
     u_bg = jnp.broadcast_to(u_profile, (nx + 1, ny, nz))
 
     x, _, z = jnp.meshgrid(grid.x_m, grid.y_m, grid.z_m, indexing="ij")
     radius = jnp.sqrt((x / 10_000.0) ** 2 + ((z - 2000.0) / 1500.0) ** 2)
-    bubble = jnp.where(
-        radius < 1.0,
-        3.0 * jnp.cos(0.5 * jnp.pi * radius) ** 2,
-        0.0,
-    )
+    bubble = jnp.where(radius < 1.0, 3.0 * jnp.cos(0.5 * jnp.pi * radius) ** 2, 0.0)
     dry_theta = jnp.broadcast_to(theta, (nx, ny, nz)) + bubble
     initial_theta_v = dry_theta * (1.0 + 0.61 * vapor_bg)
     initial_rho = (
-        CONSTANTS["p0"] / (CONSTANTS["Rd"] * initial_theta_v)
-        * exner_bg ** (CONSTANTS["cvd"] / CONSTANTS["Rd"])
+        CONSTANTS["p0"] / (CONSTANTS["Rd"] * initial_theta_v) * exner_bg ** (CONSTANTS["cvd"] / CONSTANTS["Rd"])
     )
     state = {
         "u": u_bg,
@@ -231,21 +186,15 @@ def run(args):
         "q_r": jnp.zeros((nx, ny, nz)),
         "precip_step": jnp.zeros((nx, ny)),
     }
-    background_state = {
-        "th_v": theta_bg,
-        "pi": exner_bg,
-        "rho": rho_bg,
-    }
+    background_state = {"th_v": theta_bg, "pi": exner_bg, "rho": rho_bg}
 
     relaxation_cells = args.relaxation_cells
     if relaxation_cells:
         index = jnp.arange(nx)
         distance = jnp.minimum(index, nx - 1 - index)
-        mask_x = jnp.where(
-            distance < relaxation_cells,
-            jnp.cos(0.5 * jnp.pi * distance / relaxation_cells) ** 2,
-            0.0,
-        )[:, None, None]
+        mask_x = jnp.where(distance < relaxation_cells, jnp.cos(0.5 * jnp.pi * distance / relaxation_cells) ** 2, 0.0)[
+            :, None, None
+        ]
     else:
         mask_x = jnp.zeros((nx, 1, 1))
 
@@ -266,10 +215,7 @@ def run(args):
             if key not in references:
                 output[key] = value
                 continue
-            mask = (
-                jnp.pad(mask_x, ((0, 1), (0, 0), (0, 0)), mode="edge")
-                if key == "u" else mask_x
-            )
+            mask = jnp.pad(mask_x, ((0, 1), (0, 0), (0, 0)), mode="edge") if key == "u" else mask_x
             output[key] = (1.0 - mask) * value + mask * references[key]
         return output
 
@@ -277,9 +223,7 @@ def run(args):
     diffusion = ConstantLaplacianDiffusion(grid, args.diffusivity, args.dt)
     physics.add_tendency_scheme(diffusion)
     physics.add_update_scheme(diffusion)
-    physics.add_update_scheme(
-        KesslerWarmRain(CONSTANTS, dt=args.dt, grid=grid)
-    )
+    physics.add_update_scheme(KesslerWarmRain(CONSTANTS, dt=args.dt, grid=grid))
     for tracer in ("q", "q_c", "q_r"):
         physics.register_tracer(tracer)
 
@@ -307,49 +251,30 @@ def run(args):
 
     def advance_chunk(current_state, start_step):
         def scan_step(carry, offset):
-            next_state = stepper.step(
-                carry, (start_step + offset) * actual_dt,
-                forcing=None, bc_fn=boundary_conditions,
-            )
-            next_state["accumulated_rain"] = (
-                carry["accumulated_rain"] + next_state["precip_step"]
-            )
+            next_state = stepper.step(carry, (start_step + offset) * actual_dt, forcing=None, bc_fn=boundary_conditions)
+            next_state["accumulated_rain"] = carry["accumulated_rain"] + next_state["precip_step"]
             return next_state, jnp.max(jnp.abs(next_state["w"]))
 
-        return jax.lax.scan(
-            scan_step, current_state, jnp.arange(chunk_steps)
-        )
+        return jax.lax.scan(scan_step, current_state, jnp.arange(chunk_steps))
 
     advance_chunk = jax.jit(advance_chunk)
-    print(
-        f"ERF squall line: {nx}x{ny}x{nz}, "
-        f"dx={args.dx:g} m, dz={args.dz:g} m, dt={actual_dt:g} s"
-    )
-    print(
-        f"Compiling {args.chunk_seconds:g}-s chunk "
-        f"({chunk_steps} timesteps)..."
-    )
+    print(f"ERF squall line: {nx}x{ny}x{nz}, dx={args.dx:g} m, dz={args.dz:g} m, dt={actual_dt:g} s")
+    print(f"Compiling {args.chunk_seconds:g}-s chunk ({chunk_steps} timesteps)...")
     compiled = advance_chunk.lower(state, 0).compile()
 
     y_mid = ny // 2
+
     def dry_potential_temperature(current_state):
         moisture_factor = (
-            1.0
-            + (1.0 / CONSTANTS["epsilon"] - 1.0) * current_state["q"]
-            - current_state["q_c"]
-            - current_state["q_r"]
+            1.0 + (1.0 / CONSTANTS["epsilon"] - 1.0) * current_state["q"] - current_state["q_c"] - current_state["q_r"]
         )
         return current_state["th_v"] / moisture_factor
 
     times = [0.0]
-    theta_snapshots = [
-        np.asarray(dry_potential_temperature(state)[:, y_mid, :])
-    ]
+    theta_snapshots = [np.asarray(dry_potential_temperature(state)[:, y_mid, :])]
     cloud_snapshots = [np.asarray(state["q_c"][:, y_mid, :])]
     rain_snapshots = [np.asarray(state["q_r"][:, y_mid, :])]
-    accumulation_snapshots = [
-        np.asarray(jnp.mean(state["accumulated_rain"], axis=1))
-    ]
+    accumulation_snapshots = [np.asarray(jnp.mean(state["accumulated_rain"], axis=1))]
 
     current = state
     current_step = 0
@@ -364,15 +289,8 @@ def run(args):
         simulation_time = current_step * actual_dt
         chunk_max_w_value = float(jnp.max(chunk_max_w))
         field_names = tuple(current)
-        finite_flags = np.asarray(
-            jnp.stack(
-                [jnp.all(jnp.isfinite(current[key])) for key in field_names]
-            )
-        )
-        bad_fields = [
-            key for key, is_finite in zip(field_names, finite_flags)
-            if not is_finite
-        ]
+        finite_flags = np.asarray(jnp.stack([jnp.all(jnp.isfinite(current[key])) for key in field_names]))
+        bad_fields = [key for key, is_finite in zip(field_names, finite_flags) if not is_finite]
         if not np.isfinite(chunk_max_w_value) or bad_fields:
             fields = ", ".join(bad_fields) if bad_fields else "w"
             raise FloatingPointError(
@@ -382,14 +300,10 @@ def run(args):
         max_w_over_run = max(max_w_over_run, chunk_max_w_value)
         if simulation_time + 1.0e-9 >= target:
             times.append(target)
-            theta_snapshots.append(
-                np.asarray(dry_potential_temperature(current)[:, y_mid, :])
-            )
+            theta_snapshots.append(np.asarray(dry_potential_temperature(current)[:, y_mid, :]))
             cloud_snapshots.append(np.asarray(current["q_c"][:, y_mid, :]))
             rain_snapshots.append(np.asarray(current["q_r"][:, y_mid, :]))
-            accumulation_snapshots.append(
-                np.asarray(jnp.mean(current["accumulated_rain"], axis=1))
-            )
+            accumulation_snapshots.append(np.asarray(jnp.mean(current["accumulated_rain"], axis=1)))
             current_max_w = float(jnp.max(jnp.abs(current["w"])))
             print(
                 f"  t={target:6.0f} s | max|w|={current_max_w:7.3f} m/s "
@@ -400,41 +314,19 @@ def run(args):
             except StopIteration:
                 target = math.inf
 
-    finite = all(
-        np.all(np.isfinite(np.asarray(leaf)))
-        for leaf in jax.tree_util.tree_leaves(current)
-    )
+    finite = all(np.all(np.isfinite(np.asarray(leaf))) for leaf in jax.tree_util.tree_leaves(current))
     if not finite:
         raise FloatingPointError("ERF squall-line benchmark produced non-finite values")
 
     dataset = xr.Dataset(
         data_vars={
-            "dry_potential_temperature": (
-                ("time", "x", "z"),
-                np.stack(theta_snapshots),
-            ),
-            "environment_dry_potential_temperature": (
-                ("x", "z"),
-                np.broadcast_to(theta, (nx, nz)),
-            ),
-            "cloud_water": (
-                ("time", "x", "z"),
-                np.stack(cloud_snapshots),
-            ),
-            "rain_water": (
-                ("time", "x", "z"),
-                np.stack(rain_snapshots),
-            ),
-            "accumulated_rain": (
-                ("time", "x"),
-                np.stack(accumulation_snapshots),
-            ),
+            "dry_potential_temperature": (("time", "x", "z"), np.stack(theta_snapshots)),
+            "environment_dry_potential_temperature": (("x", "z"), np.broadcast_to(theta, (nx, nz))),
+            "cloud_water": (("time", "x", "z"), np.stack(cloud_snapshots)),
+            "rain_water": (("time", "x", "z"), np.stack(rain_snapshots)),
+            "accumulated_rain": (("time", "x"), np.stack(accumulation_snapshots)),
         },
-        coords={
-            "time": np.asarray(times),
-            "x": np.asarray(grid.x_m),
-            "z": np.asarray(grid.z_m),
-        },
+        coords={"time": np.asarray(times), "x": np.asarray(grid.x_m), "z": np.asarray(grid.z_m)},
         attrs={
             "benchmark": "ERF idealized two-dimensional squall line",
             "nx": nx,
@@ -452,21 +344,13 @@ def run(args):
         },
     )
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    artifact = save_plot_dataset(
-        dataset,
-        args.output_dir / "artifact.nc",
-        experiment="erf_squall_line_2d",
-    )
+    artifact = save_plot_dataset(dataset, args.output_dir / "artifact.nc", experiment="erf_squall_line_2d")
     print(f"Saved {artifact}")
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--output-dir",
-        type=Path,
-        default=Path("output/erf_squall_line_2d"),
-    )
+    parser.add_argument("--output-dir", type=Path, default=Path("output/erf_squall_line_2d"))
     parser.add_argument("--dx", type=float, default=100.0)
     parser.add_argument("--dz", type=float, default=100.0)
     parser.add_argument("--ny", type=int, default=3)

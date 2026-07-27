@@ -8,6 +8,7 @@ import argparse
 from pathlib import Path
 
 import matplotlib
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import xarray as xr
@@ -27,10 +28,7 @@ def render(source: Path, output_dir: Path | None = None) -> list[Path]:
         ("wind_sensitivity_magnitude", "adjoint_kinetic_sensitivity.png"),
     ):
         fig, axis = plt.subplots(figsize=(8, 6))
-        image = axis.pcolormesh(
-            data["x"] / 1000.0, data["y"] / 1000.0,
-            data[variable].values.T, shading="auto",
-        )
+        image = axis.pcolormesh(data["x"] / 1000.0, data["y"] / 1000.0, data[variable].values.T, shading="auto")
         axis.set(xlabel="x (km)", ylabel="y (km)", title=variable.replace("_", " "))
         fig.colorbar(image, ax=axis)
         output = output_dir / filename
@@ -43,8 +41,7 @@ def render(source: Path, output_dir: Path | None = None) -> list[Path]:
     ):
         fig, axis = plt.subplots(figsize=(10, 5))
         image = axis.pcolormesh(
-            data["x"] / 1000.0, range(data[variable].shape[1]),
-            data[variable].values.T, shading="auto", cmap="RdBu_r",
+            data["x"] / 1000.0, range(data[variable].shape[1]), data[variable].values.T, shading="auto", cmap="RdBu_r"
         )
         axis.set(xlabel="x (km)", ylabel="Model level", title=variable.replace("_", " "))
         fig.colorbar(image, ax=axis)

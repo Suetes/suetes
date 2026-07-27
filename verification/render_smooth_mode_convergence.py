@@ -85,9 +85,9 @@ def render(summary_path: Path, output_dir: Path | None = None) -> list[Path]:
                 label_text = LABELS.get(field, field)
                 axis.text(0.05, 0.95, label_text, transform=axis.transAxes, fontsize=16, verticalalignment='top', bbox=props)
                 
-            axis.set_xlabel(r"Outer timestep $\Delta t$ (s)")
+            axis.set_xlabel(r"Outer timestep $\Delta t$ [s]")
             if axis == axes[0]:
-                axis.set_ylabel("Successive-refinement relative $L_2$ error")
+                axis.set_ylabel(r"Relative $L_2$ difference")
             axis.grid(True, which="both", ls="--", alpha=0.4)
             import matplotlib.ticker as ticker
             axis.xaxis.set_minor_formatter(ticker.NullFormatter())

@@ -36,20 +36,14 @@ def storm_limits(coordinate, occupied, padding, domain_limit=None):
 def scientific_colorbar(fig, image, axis, label):
     formatter = ScalarFormatter(useMathText=True)
     formatter.set_powerlimits((-2, 2))
-    bar = fig.colorbar(
-        image, ax=axis, pad=0.02, fraction=0.047, format=formatter
-    )
+    bar = fig.colorbar(image, ax=axis, pad=0.02, fraction=0.047, format=formatter)
     bar.set_label(label)
     bar.update_ticks()
     return bar
 
 
 def render(
-    artifact: Path,
-    output_dir: Path,
-    theta_perturbation=0.1,
-    vapor_perturbation=1.0e-4,
-    boundary_layer_top=3000.0,
+    artifact: Path, output_dir: Path, theta_perturbation=0.1, vapor_perturbation=1.0e-4, boundary_layer_top=3000.0
 ):
     with xr.open_dataset(artifact) as source:
         dataset = source.load()
@@ -61,15 +55,9 @@ def render(
     rain = dataset.window_accumulated_rain.values
     target = dataset.target_mask.values.astype(bool)
     boundary_layer = dataset.z.values <= boundary_layer_top
-    theta_response = theta_perturbation * np.sum(
-        dataset.theta_sensitivity.values[:, :, boundary_layer], axis=2
-    )
-    vapor_response = vapor_perturbation * np.sum(
-        dataset.water_vapor_sensitivity.values[:, :, boundary_layer], axis=2
-    )
-    section_y = float(
-        dataset.attrs.get("section_y_m", dataset.y.values[len(y) // 2])
-    ) / 1000.0
+    theta_response = theta_perturbation * np.sum(dataset.theta_sensitivity.values[:, :, boundary_layer], axis=2)
+    vapor_response = vapor_perturbation * np.sum(dataset.water_vapor_sensitivity.values[:, :, boundary_layer], axis=2)
+    section_y = float(dataset.attrs.get("section_y_m", dataset.y.values[len(y) // 2])) / 1000.0
     x_limits = storm_limits(x, np.any(target, axis=1), 15.0)
     y_limits = storm_limits(y, np.any(target, axis=0), 15.0)
     panels = (
@@ -97,17 +85,10 @@ def render(
             norm = colors.Normalize(vmin=0.0, vmax=max(float(np.max(field)), 1e-6))
         else:
             norm = colors.TwoSlopeNorm(vmin=-limit, vcenter=0.0, vmax=limit)
-        image = axis.pcolormesh(
-            x, y, field.T, shading="auto", cmap=cmap, norm=norm
-        )
+        image = axis.pcolormesh(x, y, field.T, shading="auto", cmap=cmap, norm=norm)
         scientific_colorbar(fig, image, axis, label)
-        axis.contour(
-            x, y, target.T.astype(float), levels=[0.5],
-            colors="k", linewidths=0.65,
-        )
-        axis.axhline(
-            section_y, color="0.35", linewidth=0.65, linestyle="--"
-        )
+        axis.contour(x, y, target.T.astype(float), levels=[0.5], colors="k", linewidths=0.65)
+        axis.axhline(section_y, color="0.35", linewidth=0.65, linestyle="--")
         axis.set_xlabel("$x$ (km)")
         axis.set_xlim(x_limits)
         axis.set_ylim(y_limits)
@@ -144,28 +125,15 @@ def render(
     ):
         limit = symmetric_limit(field)
         image = axis.pcolormesh(
-            x,
-            z,
-            field.T,
-            shading="auto",
-            cmap="RdBu_r",
-            norm=colors.TwoSlopeNorm(
-                vmin=-limit, vcenter=0.0, vmax=limit
-            ),
+            x, z, field.T, shading="auto", cmap="RdBu_r", norm=colors.TwoSlopeNorm(vmin=-limit, vcenter=0.0, vmax=limit)
         )
         scientific_colorbar(fig, image, axis, label)
         cloud_level = 1.0e-4
         if float(np.nanmax(cloud)) >= cloud_level:
-            axis.contour(
-                x, z, cloud.T, levels=[cloud_level],
-                colors="#e69f00", linewidths=0.8,
-            )
+            axis.contour(x, z, cloud.T, levels=[cloud_level], colors="#e69f00", linewidths=0.8)
         updraft_level = 5.0
         if float(np.nanmax(vertical_velocity)) >= updraft_level:
-            axis.contour(
-                x, z, vertical_velocity.T, levels=[updraft_level],
-                colors="k", linewidths=0.7,
-            )
+            axis.contour(x, z, vertical_velocity.T, levels=[updraft_level], colors="k", linewidths=0.7)
         axis.set_ylabel("$z$ (km)")
         axis.set_xlim(x_limits)
         axis.set_ylim(0.0, min(15.0, float(z[-1])))
@@ -173,10 +141,8 @@ def render(
     axes[-1].set_xlabel("$x$ (km)")
     axes[0].legend(
         handles=[
-            Line2D([0], [0], color="#e69f00", lw=1.0,
-                   label=r"$q_c=0.1$ g kg$^{-1}$"),
-            Line2D([0], [0], color="k", lw=1.0,
-                   label=r"$w=5$ m s$^{-1}$"),
+            Line2D([0], [0], color="#e69f00", lw=1.0, label=r"$q_c=0.1$ g kg$^{-1}$"),
+            Line2D([0], [0], color="k", lw=1.0, label=r"$w=5$ m s$^{-1}$"),
         ],
         loc="upper right",
         frameon=False,
@@ -226,39 +192,20 @@ def render(
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "artifact",
-        nargs="?",
-        type=Path,
-        default=Path("output/squall_line_3d_sensitivity/sensitivity.nc"),
+        "artifact", nargs="?", type=Path, default=Path("output/squall_line_3d_sensitivity/sensitivity.nc")
     )
-    parser.add_argument(
-        "--output-dir",
-        type=Path,
-        default=Path("output/squall_line_3d_sensitivity"),
-    )
+    parser.add_argument("--output-dir", type=Path, default=Path("output/squall_line_3d_sensitivity"))
     parser.add_argument("--theta-perturbation", type=float, default=0.1)
     parser.add_argument(
-        "--vapor-perturbation",
-        type=float,
-        default=1.0e-4,
-        help="display perturbation in kg kg-1 (default: 0.1 g kg-1)",
+        "--vapor-perturbation", type=float, default=1.0e-4, help="display perturbation in kg kg-1 (default: 0.1 g kg-1)"
     )
     parser.add_argument(
-        "--boundary-layer-top",
-        type=float,
-        default=3000.0,
-        help="top of the layer included in column-response maps (m)",
+        "--boundary-layer-top", type=float, default=3000.0, help="top of the layer included in column-response maps (m)"
     )
     args = parser.parse_args()
     if not args.artifact.is_file():
         raise FileNotFoundError(args.artifact)
-    render(
-        args.artifact,
-        args.output_dir,
-        args.theta_perturbation,
-        args.vapor_perturbation,
-        args.boundary_layer_top,
-    )
+    render(args.artifact, args.output_dir, args.theta_perturbation, args.vapor_perturbation, args.boundary_layer_top)
 
 
 if __name__ == "__main__":

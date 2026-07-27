@@ -71,8 +71,8 @@ def render(metrics_path: Path, output_dir: Path | None = None) -> list[Path]:
     axes[0].loglog(dx_values, reference, "k--", alpha=0.7, label="Order 2")
     props = dict(boxstyle='square,pad=0.3', facecolor='white', alpha=0.9, edgecolor='none')
     axes[0].text(0.05, 0.95, "(a) Cross-core refinement", transform=axes[0].transAxes, fontsize=16, verticalalignment='top', bbox=props)
-    axes[0].set_xlabel(r"Grid spacing $\Delta x$ (m)")
-    axes[0].set_ylabel("SISL–Split relative $L_2$ difference")
+    axes[0].set_xlabel(r"Grid spacing $\Delta x$ [m]")
+    axes[0].set_ylabel(r"Relative $L_2$ difference")
     axes[0].invert_xaxis()
     handles0, labels0 = axes[0].get_legend_handles_labels()
 
@@ -96,8 +96,8 @@ def render(metrics_path: Path, output_dir: Path | None = None) -> list[Path]:
             marker=marker, color=color, lw=2, label=label,
         )
     axes[1].text(0.05, 0.95, f"(b) Self-convergence at {final_time:g} s", transform=axes[1].transAxes, fontsize=16, verticalalignment='top', bbox=props)
-    axes[1].set_xlabel(r"Coarse-grid spacing $\Delta x$ (m)")
-    axes[1].set_ylabel("Successive-grid relative $L_2$ error")
+    axes[1].set_xlabel(r"Coarse-grid spacing $\Delta x$ [m]")
+    axes[1].set_ylabel(r"Relative $L_2$ difference")
     axes[1].invert_xaxis()
     handles1, labels1 = axes[1].get_legend_handles_labels()
     import matplotlib.ticker as ticker
@@ -132,8 +132,8 @@ def render(metrics_path: Path, output_dir: Path | None = None) -> list[Path]:
             [row["value"] for row in selected],
             "o-", lw=2, label=rf"$\Delta x={dx:g}$ m",
         )
-    axis.set_xlabel("Simulation time (s)")
-    axis.set_ylabel("SISL–Split relative $L_2$ difference")
+    axis.set_xlabel("Simulation time [s]")
+    axis.set_ylabel(r"Relative $L_2$ difference")
     axis.grid(True, ls="--", alpha=0.4)
     axis.xaxis.set_major_locator(ticker.MaxNLocator(5))
     axis.tick_params(axis="x", which="both", rotation=0)

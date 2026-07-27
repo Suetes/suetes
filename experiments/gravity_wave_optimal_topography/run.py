@@ -4,6 +4,7 @@ import argparse
 import numpy as np
 
 import jax
+
 jax.config.update("jax_enable_x64", False)
 
 import jax.numpy as jnp
@@ -26,35 +27,34 @@ from suetes.shared.artifacts import figure_dir_for, resolve_data_dir, save_plot_
 # CONFIGURATION SWITCHES
 # =====================================================================
 parser = argparse.ArgumentParser(description="Optimize terrain for gravity-wave energy.")
+parser.add_argument("core", nargs="?", default="sisl", choices=("sisl", "split-explicit"))
 parser.add_argument(
-    "core", nargs="?", default="sisl", choices=("sisl", "split-explicit")
-)
-parser.add_argument(
-    "--output-root", default="output",
-    help="Root containing benchmark, experiment, run, and verification bundles",
+    "--output-root", default="output", help="Root containing benchmark, experiment, run, and verification bundles"
 )
 parser.add_argument("--name", default="default", help="Execution label")
 parser.add_argument("--output-dir", help="Explicit legacy output directory")
 args = parser.parse_args()
 CORE_TYPE = args.core
-output_dir = str(resolve_data_dir(
-    kind="experiments",
-    case="gravity_wave_optimal_topography",
-    execution=args.name,
-    output_root=args.output_root,
-    output_dir=args.output_dir,
-))
+output_dir = str(
+    resolve_data_dir(
+        kind="experiments",
+        case="gravity_wave_optimal_topography",
+        execution=args.name,
+        output_root=args.output_root,
+        output_dir=args.output_dir,
+    )
+)
 figure_dir = figure_dir_for(os.path.join(output_dir, "artifact.nc"))
 figure_dir.mkdir(parents=True, exist_ok=True)
 
 # --- 1. SETUP PARAMETERS ---
 nx, ny, nz = 300, 3, 50
-dx, dy, dz = 500.0, 500.0, 400.0  
+dx, dy, dz = 500.0, 500.0, 400.0
 dt = 15.0 if CORE_TYPE.lower() == "sisl" else 4.0
-t_end = 1800.0  
+t_end = 1800.0
 num_steps = int(t_end / dt)
 u_bg = 10.0
-constants = {'g': 9.81, 'cp': 1004.0, 'Rd': 287.0, 'cvd': 717.0, 'p0': 100000.0}
+constants = {"g": 9.81, "cp": 1004.0, "Rd": 287.0, "cvd": 717.0, "p0": 100000.0}
 
 # Pin the settings used by this experiment.  In particular, do not inherit the
 # much stricter production SISL defaults (100 GMRES vectors at 1e-12): tracing
@@ -65,13 +65,14 @@ SISL_SOLVER_MAXITER = 20
 SISL_SOLVER_RESTART = 20
 
 num_rbfs = 8
-mu_rbf = jnp.linspace(-15000.0, 10000.0, num_rbfs) 
+mu_rbf = jnp.linspace(-15000.0, 10000.0, num_rbfs)
 sigma_rbf = 2500.0
 
-x_sponge = BenchmarkSponge(nx=nx, sponge_depth=10, axes=('x',))
+x_sponge = BenchmarkSponge(nx=nx, sponge_depth=10, axes=("x",))
 
 # --- 2. THE OBJECTIVE FUNCTION ---
-total_dirt_budget = 1500.0  
+total_dirt_budget = 1500.0
+
 
 def objective_fn(z_params):
     weights = jax.nn.sigmoid(z_params)
@@ -80,35 +81,40 @@ def objective_fn(z_params):
     def h_func(x, y):
         h = jnp.zeros_like(x)
         for i in range(num_rbfs):
-            h += A_params[i] * jnp.exp(-((x - mu_rbf[i])**2) / (2 * sigma_rbf**2))
+            h += A_params[i] * jnp.exp(-((x - mu_rbf[i]) ** 2) / (2 * sigma_rbf**2))
         return jnp.maximum(h, 0.0)
 
     grid = RegionalGrid3D(nx, ny, nz, dx, dy, dz, lat_center=45.0, lon_center=0.0, h_func=h_func)
     op = CGridOperator3D(grid)
-    
+
     # Temporarily instantiate physics to establish the background reference state
     tmp_phys = Euler3D(grid, op, constants, dt=dt, N_bv=0.01)
     bg_ref = {
-        'rho': tmp_phys.c['p0'] / (tmp_phys.c['Rd'] * tmp_phys.theta_bg) * \
-               (tmp_phys.pi_bg ** (tmp_phys.c['cvd'] / tmp_phys.c['Rd'])),
-        'pi': tmp_phys.pi_bg,
-        'th_v': tmp_phys.theta_bg
+        "rho": tmp_phys.c["p0"]
+        / (tmp_phys.c["Rd"] * tmp_phys.theta_bg)
+        * (tmp_phys.pi_bg ** (tmp_phys.c["cvd"] / tmp_phys.c["Rd"])),
+        "pi": tmp_phys.pi_bg,
+        "th_v": tmp_phys.theta_bg,
     }
 
     state = {
-        'u': jnp.ones((nx+1, ny, nz)) * u_bg,
-        'v': jnp.zeros((nx, ny+1, nz)),
-        'w': jnp.zeros((nx, ny, nz+1)),
-        'pi': bg_ref['pi'],
-        'eta_dot': jnp.zeros((nx, ny, nz+1)),
-        'rho': bg_ref['rho'],
-        'th_v': bg_ref['th_v']
+        "u": jnp.ones((nx + 1, ny, nz)) * u_bg,
+        "v": jnp.zeros((nx, ny + 1, nz)),
+        "w": jnp.zeros((nx, ny, nz + 1)),
+        "pi": bg_ref["pi"],
+        "eta_dot": jnp.zeros((nx, ny, nz + 1)),
+        "rho": bg_ref["rho"],
+        "th_v": bg_ref["th_v"],
     }
 
     if CORE_TYPE.lower() == "sisl":
         core_kwargs = {
-            "dt": dt, "nu_div_factor": 0.0, "nu_h_factor": 0.0, 
-            "damp_height": 12000.0, "max_damp": 0.5, "N_bv": 0.01,
+            "dt": dt,
+            "nu_div_factor": 0.0,
+            "nu_h_factor": 0.0,
+            "damp_height": 12000.0,
+            "max_damp": 0.5,
+            "N_bv": 0.01,
             "solver_tol": SISL_SOLVER_TOL,
             "solver_maxiter": SISL_SOLVER_MAXITER,
             "solver_restart": SISL_SOLVER_RESTART,
@@ -116,33 +122,38 @@ def objective_fn(z_params):
         }
     elif CORE_TYPE.lower() == "split-explicit":
         core_kwargs = {
-            "dt": dt, "ns": 6, "nu_div_factor": 0.0, "nu_h_factor": 0.0, 
-            "damp_height": 12000.0, "max_damp": 0.5, "N_bv": 0.01
+            "dt": dt,
+            "ns": 6,
+            "nu_div_factor": 0.0,
+            "nu_h_factor": 0.0,
+            "damp_height": 12000.0,
+            "max_damp": 0.5,
+            "N_bv": 0.01,
         }
 
     stepper, _ = build_dynamical_core(
-        core_type=CORE_TYPE, grid=grid, operators=op, constants=constants,
-        initial_state=state, **core_kwargs
+        core_type=CORE_TYPE, grid=grid, operators=op, constants=constants, initial_state=state, **core_kwargs
     )
-    
+
     def bc_fn(state_in, forcing=None):
         ext_state = {
-            'u': jnp.ones_like(state_in['u']) * u_bg,
-            'v': jnp.zeros_like(state_in['v']),
-            'th_v': bg_ref['th_v'],
-            'rho': bg_ref['rho'],
-            'pi': bg_ref['pi']
+            "u": jnp.ones_like(state_in["u"]) * u_bg,
+            "v": jnp.zeros_like(state_in["v"]),
+            "th_v": bg_ref["th_v"],
+            "rho": bg_ref["rho"],
+            "pi": bg_ref["pi"],
         }
         return x_sponge.blend(state_in, ext_state)
 
     sim = Simulation(step_fn=stepper.step, dt=dt)
-    
+
     final_state = sim.run_differentiable(state, 0.0, t_end, bc_fn=bc_fn, chunk_steps=50)
-    
-    w_target = final_state['w'][180:200, 1, 8:20] 
-    J_energy = jnp.sum(w_target ** 2)
-    
-    return -J_energy, (final_state['w'], A_params)
+
+    w_target = final_state["w"][180:200, 1, 8:20]
+    J_energy = jnp.sum(w_target**2)
+
+    return -J_energy, (final_state["w"], A_params)
+
 
 # --- 3. THE OPTIMIZATION LOOP ---
 key = jax.random.PRNGKey(42)
@@ -151,10 +162,7 @@ total_steps = 20
 
 lr_schedule = optax.cosine_decay_schedule(init_value=0.5, decay_steps=total_steps, alpha=0.01)
 optimizer = optax.chain(
-    optax.clip_by_global_norm(1.0), 
-    optax.scale_by_adam(),           
-    optax.scale_by_schedule(lr_schedule), 
-    optax.scale(-1.0)                     
+    optax.clip_by_global_norm(1.0), optax.scale_by_adam(), optax.scale_by_schedule(lr_schedule), optax.scale(-1.0)
 )
 
 print(f"\n[OPTIMIZATION] Launching {CORE_TYPE.upper()} inverse topography optimization...")
@@ -165,26 +173,20 @@ if CORE_TYPE.lower() == "sisl":
         f"restart={SISL_SOLVER_RESTART}"
     )
 solver = OptaxSolver(objective_fn, optimizer, has_aux=True)
-optimal_z, history = solver.fit(
-    z_params, 
-    total_steps=total_steps, 
-    patience=2, 
-    metric_name="Energy", 
-    maximize=True
-)
+optimal_z, history = solver.fit(z_params, total_steps=total_steps, patience=2, metric_name="Energy", maximize=True)
 
 # Retrieve the best state from history since energy maximization can oscillate
-energies = [-loss for loss in history['loss']]
+energies = [-loss for loss in history["loss"]]
 best_idx = np.argmax(energies)
 best_energy = energies[best_idx]
-best_A = history['aux'][best_idx][1]
-history_A = [aux[1] for aux in history['aux']]
+best_A = history["aux"][best_idx][1]
+history_A = [aux[1] for aux in history["aux"]]
 
-print(f"\nOptimization complete. Best target energy: {best_energy:.2f} at step {best_idx+1}")
+print(f"\nOptimization complete. Best target energy: {best_energy:.2f} at step {best_idx + 1}")
 
 # --- 4. VISUALIZE THE GENERATED MOUNTAIN ---
 print("\n[PLOT] Saving optimal design...")
-x_1d = jnp.linspace(-nx*dx/2, nx*dx/2, nx) / 1000.0
+x_1d = jnp.linspace(-nx * dx / 2, nx * dx / 2, nx) / 1000.0
 
 plt.figure(figsize=(10, 5))
 plt.title(f"Evolution of optimal topography ({CORE_TYPE.capitalize()})")
@@ -193,17 +195,17 @@ plt.title(f"Evolution of optimal topography ({CORE_TYPE.capitalize()})")
 for i, A_step in enumerate(history_A):
     h = jnp.zeros_like(x_1d)
     for j in range(num_rbfs):
-        h += A_step[j] * jnp.exp(-((x_1d*1000.0 - mu_rbf[j])**2) / (2 * sigma_rbf**2))
+        h += A_step[j] * jnp.exp(-((x_1d * 1000.0 - mu_rbf[j]) ** 2) / (2 * sigma_rbf**2))
     h = jnp.maximum(h, 0.0)
     alpha = (i + 1) / len(history_A)
-    plt.plot(x_1d, h, color='blue', alpha=alpha*0.5)
+    plt.plot(x_1d, h, color="blue", alpha=alpha * 0.5)
 
 # Plot the best mountain in bold
 h_best = jnp.zeros_like(x_1d)
 for j in range(num_rbfs):
-    h_best += best_A[j] * jnp.exp(-((x_1d*1000.0 - mu_rbf[j])**2) / (2 * sigma_rbf**2))
+    h_best += best_A[j] * jnp.exp(-((x_1d * 1000.0 - mu_rbf[j]) ** 2) / (2 * sigma_rbf**2))
 h_best = jnp.maximum(h_best, 0.0)
-plt.plot(x_1d, h_best, color='red', linewidth=2, label=f'Best (E={best_energy:.1f}J)')
+plt.plot(x_1d, h_best, color="red", linewidth=2, label=f"Best (E={best_energy:.1f}J)")
 
 plt.xlabel("Distance (km)")
 plt.ylabel("Elevation (m)")
@@ -219,7 +221,7 @@ print("\n[VALIDATION] Running forward simulations for comparison...")
 configs_to_test = []
 
 # A. The Optimal Configuration
-optimal_A = best_A 
+optimal_A = best_A
 configs_to_test.append(("Optimal topography", optimal_A))
 
 # B. Generate 3 Random Configurations (enforcing the 1500m budget)
@@ -230,39 +232,45 @@ for i in range(1, 4):
     rand_A = total_dirt_budget * jax.nn.softmax(rand_z)
     configs_to_test.append((f"Random topography {i}", rand_A))
 
-# 2. Evaluation Wrapper 
+
+# 2. Evaluation Wrapper
 def evaluate_topography(A_params):
     def h_func(x, y):
         h = jnp.zeros_like(x)
         for i in range(num_rbfs):
-            h += A_params[i] * jnp.exp(-((x - mu_rbf[i])**2) / (2 * sigma_rbf**2))
+            h += A_params[i] * jnp.exp(-((x - mu_rbf[i]) ** 2) / (2 * sigma_rbf**2))
         return jnp.maximum(h, 0.0)
 
     grid = RegionalGrid3D(nx, ny, nz, dx, dy, dz, lat_center=45.0, lon_center=0.0, h_func=h_func)
     op = CGridOperator3D(grid)
-    
+
     tmp_phys = Euler3D(grid, op, constants, dt=dt, N_bv=0.01)
     bg_ref = {
-        'rho': tmp_phys.c['p0'] / (tmp_phys.c['Rd'] * tmp_phys.theta_bg) * \
-               (tmp_phys.pi_bg ** (tmp_phys.c['cvd'] / tmp_phys.c['Rd'])),
-        'pi': tmp_phys.pi_bg,
-        'th_v': tmp_phys.theta_bg
+        "rho": tmp_phys.c["p0"]
+        / (tmp_phys.c["Rd"] * tmp_phys.theta_bg)
+        * (tmp_phys.pi_bg ** (tmp_phys.c["cvd"] / tmp_phys.c["Rd"])),
+        "pi": tmp_phys.pi_bg,
+        "th_v": tmp_phys.theta_bg,
     }
 
     state = {
-        'u': jnp.ones((nx+1, ny, nz)) * u_bg,
-        'v': jnp.zeros((nx, ny+1, nz)),
-        'w': jnp.zeros((nx, ny, nz+1)),
-        'pi': bg_ref['pi'],
-        'eta_dot': jnp.zeros((nx, ny, nz+1)),
-        'rho': bg_ref['rho'],
-        'th_v': bg_ref['th_v']
+        "u": jnp.ones((nx + 1, ny, nz)) * u_bg,
+        "v": jnp.zeros((nx, ny + 1, nz)),
+        "w": jnp.zeros((nx, ny, nz + 1)),
+        "pi": bg_ref["pi"],
+        "eta_dot": jnp.zeros((nx, ny, nz + 1)),
+        "rho": bg_ref["rho"],
+        "th_v": bg_ref["th_v"],
     }
 
     if CORE_TYPE.lower() == "sisl":
         core_kwargs = {
-            "dt": dt, "nu_div_factor": 0.0, "nu_h_factor": 0.0, 
-            "damp_height": 12000.0, "max_damp": 0.5, "N_bv": 0.01,
+            "dt": dt,
+            "nu_div_factor": 0.0,
+            "nu_h_factor": 0.0,
+            "damp_height": 12000.0,
+            "max_damp": 0.5,
+            "N_bv": 0.01,
             "solver_tol": SISL_SOLVER_TOL,
             "solver_maxiter": SISL_SOLVER_MAXITER,
             "solver_restart": SISL_SOLVER_RESTART,
@@ -270,22 +278,26 @@ def evaluate_topography(A_params):
         }
     elif CORE_TYPE.lower() == "split-explicit":
         core_kwargs = {
-            "dt": dt, "ns": 6, "nu_div_factor": 0.0, "nu_h_factor": 0.0, 
-            "damp_height": 12000.0, "max_damp": 0.5, "N_bv": 0.01
+            "dt": dt,
+            "ns": 6,
+            "nu_div_factor": 0.0,
+            "nu_h_factor": 0.0,
+            "damp_height": 12000.0,
+            "max_damp": 0.5,
+            "N_bv": 0.01,
         }
 
     stepper, _ = build_dynamical_core(
-        core_type=CORE_TYPE, grid=grid, operators=op, constants=constants,
-        initial_state=state, **core_kwargs
+        core_type=CORE_TYPE, grid=grid, operators=op, constants=constants, initial_state=state, **core_kwargs
     )
-    
+
     def bc_fn(state_in, forcing=None):
         ext_state = {
-            'u': jnp.ones_like(state_in['u']) * u_bg,
-            'v': jnp.zeros_like(state_in['v']),
-            'th_v': bg_ref['th_v'],
-            'rho': bg_ref['rho'],
-            'pi': bg_ref['pi']
+            "u": jnp.ones_like(state_in["u"]) * u_bg,
+            "v": jnp.zeros_like(state_in["v"]),
+            "th_v": bg_ref["th_v"],
+            "rho": bg_ref["rho"],
+            "pi": bg_ref["pi"],
         }
         return x_sponge.blend(state_in, ext_state)
 
@@ -293,30 +305,32 @@ def evaluate_topography(A_params):
     def fast_forward(s):
         def scan_fn(state, _):
             return stepper.step(state, 0.0, None, bc_fn), None
+
         return jax.lax.scan(scan_fn, s, jnp.arange(num_steps))[0]
 
     final_state = fast_forward(state)
-    
-    w_target = final_state['w'][180:200, 1, 8:20] 
-    J_energy = jnp.sum(w_target ** 2)
-    
-    return float(J_energy), final_state['w'], grid
+
+    w_target = final_state["w"][180:200, 1, 8:20]
+    J_energy = jnp.sum(w_target**2)
+
+    return float(J_energy), final_state["w"], grid
+
 
 # 3. Run and Plot
 fig, axs = plt.subplots(2, 2, figsize=(20, 12))
 axs = axs.flatten()
 
-x_plot_1d = jnp.linspace(-nx*dx/2, nx*dx/2, nx) / 1000.0
+x_plot_1d = jnp.linspace(-nx * dx / 2, nx * dx / 2, nx) / 1000.0
 
 validation_energy, validation_w, validation_z, validation_terrain = [], [], [], []
 for idx, (title, A_params) in enumerate(configs_to_test):
     print(f"Evaluating {title}...")
     J_val, w_field, eval_grid = evaluate_topography(A_params)
-    
+
     # Reconstruct the terrain for plotting
     h_terrain = jnp.zeros_like(x_plot_1d)
     for j in range(num_rbfs):
-        h_terrain += A_params[j] * jnp.exp(-((x_plot_1d*1000.0 - mu_rbf[j])**2) / (2 * sigma_rbf**2))
+        h_terrain += A_params[j] * jnp.exp(-((x_plot_1d * 1000.0 - mu_rbf[j]) ** 2) / (2 * sigma_rbf**2))
     h_terrain = jnp.maximum(h_terrain, 0.0)
     validation_energy.append(J_val)
     validation_w.append(np.asarray(w_field[:, 1, :]))
@@ -326,57 +340,50 @@ for idx, (title, A_params) in enumerate(configs_to_test):
     # Plotting logic
     ax = axs[idx]
     w_slice = w_field[:, 1, :]
-    
+
     # Pad for Mass/W grid differences
     data_to_plot = w_slice
-    Z_plot_curr = eval_grid.Z_w[:, 1, :] / 1000.0  
-    X_plot_curr, _ = jnp.meshgrid(x_plot_1d, jnp.arange(nz + 1), indexing='ij')
+    Z_plot_curr = eval_grid.Z_w[:, 1, :] / 1000.0
+    X_plot_curr, _ = jnp.meshgrid(x_plot_1d, jnp.arange(nz + 1), indexing="ij")
 
-    vmax = 1.5 # Fixed color scale for fair visual comparison
-    contour = ax.contourf(X_plot_curr, Z_plot_curr, data_to_plot, levels=jnp.linspace(-vmax, vmax, 41), cmap='RdBu_r', extend='both')
-    
-    ax.fill_between(x_plot_1d, 0, h_terrain / 1000.0, color='black')
-    
+    vmax = 1.5  # Fixed color scale for fair visual comparison
+    contour = ax.contourf(
+        X_plot_curr, Z_plot_curr, data_to_plot, levels=jnp.linspace(-vmax, vmax, 41), cmap="RdBu_r", extend="both"
+    )
+
+    ax.fill_between(x_plot_1d, 0, h_terrain / 1000.0, color="black")
+
     # Draw Target Box
     rect_x = x_plot_1d[180]
     rect_z = Z_plot_curr[180, 8]
     width = x_plot_1d[200] - x_plot_1d[180]
     height = Z_plot_curr[180, 20] - Z_plot_curr[180, 8]
-    rect = patches.Rectangle((rect_x, rect_z), width, height, linewidth=2, edgecolor='k', facecolor='none', linestyle='--')
+    rect = patches.Rectangle(
+        (rect_x, rect_z), width, height, linewidth=2, edgecolor="k", facecolor="none", linestyle="--"
+    )
     ax.add_patch(rect)
-    
-    ax.set_title(f"{title}\nTarget energy (J): {J_val:.2f}", fontweight='bold')
+
+    ax.set_title(f"{title}\nTarget energy (J): {J_val:.2f}", fontweight="bold")
     ax.set_xlim([-30, 40])
     ax.set_ylim([0, 12])
-    if idx >= 2: ax.set_xlabel('Distance (km)')
-    if idx % 2 == 0: ax.set_ylabel('Altitude (km)')
+    if idx >= 2:
+        ax.set_xlabel("Distance (km)")
+    if idx % 2 == 0:
+        ax.set_ylabel("Altitude (km)")
 
 plt.tight_layout()
-plt.savefig(figure_dir / f"inverse_topography_validation_{CORE_TYPE.lower()}.png", dpi=150, bbox_inches='tight')
+plt.savefig(figure_dir / f"inverse_topography_validation_{CORE_TYPE.lower()}.png", dpi=150, bbox_inches="tight")
 print(f"Validation complete. Saved figures to {figure_dir}")
 
 artifact = xr.Dataset(
     data_vars={
         "optimization_energy": ("optimization_step", np.asarray(energies)),
-        "coefficient_history": (
-            ("optimization_step", "rbf"), np.asarray(history_A)
-        ),
-        "validation_coefficients": (
-            ("configuration", "rbf"),
-            np.asarray([values for _, values in configs_to_test]),
-        ),
+        "coefficient_history": (("optimization_step", "rbf"), np.asarray(history_A)),
+        "validation_coefficients": (("configuration", "rbf"), np.asarray([values for _, values in configs_to_test])),
         "validation_energy": ("configuration", np.asarray(validation_energy)),
-        "vertical_velocity": (
-            ("configuration", "x", "z_interface"),
-            np.asarray(validation_w),
-        ),
-        "physical_height": (
-            ("configuration", "x", "z_interface"),
-            np.asarray(validation_z),
-        ),
-        "terrain_height": (
-            ("configuration", "x"), np.asarray(validation_terrain)
-        ),
+        "vertical_velocity": (("configuration", "x", "z_interface"), np.asarray(validation_w)),
+        "physical_height": (("configuration", "x", "z_interface"), np.asarray(validation_z)),
+        "terrain_height": (("configuration", "x"), np.asarray(validation_terrain)),
     },
     coords={
         "optimization_step": np.arange(1, len(energies) + 1),
@@ -393,8 +400,12 @@ artifact = xr.Dataset(
         "terrain_budget_m": total_dirt_budget,
         "dt_s": dt,
         "t_end_s": t_end,
-        "nx": nx, "ny": ny, "nz": nz,
-        "dx_m": dx, "dy_m": dy, "dz_m": dz,
+        "nx": nx,
+        "ny": ny,
+        "nz": nz,
+        "dx_m": dx,
+        "dy_m": dy,
+        "dz_m": dz,
     },
 )
 artifact_path = save_plot_dataset(

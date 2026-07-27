@@ -46,12 +46,7 @@ def _initialize_sisl_history(state, jnp):
 
 
 def run_worker(
-    core_type: str,
-    n: int,
-    dt_multiplier: float,
-    num_steps: int,
-    warmup_repeats: int,
-    timing_repeats: int,
+    core_type: str, n: int, dt_multiplier: float, num_steps: int, warmup_repeats: int, timing_repeats: int
 ) -> dict:
     # These must be set before importing JAX in the worker process.
     os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
@@ -111,20 +106,13 @@ def run_worker(
     baseline_stats = _memory_stats(device)
     baseline_bytes = baseline_stats.get("bytes_in_use", 0)
 
-    grid = RegionalGrid3D(
-        n, n, n, dx, dx, dx, lat_center=0.0, lon_center=0.0
-    )
+    grid = RegionalGrid3D(n, n, n, dx, dx, dx, lat_center=0.0, lon_center=0.0)
     op = CGridOperator3D(grid)
-    constants = {
-        "g": 9.81,
-        "cp": 1004.0,
-        "Rd": 287.0,
-        "cvd": 717.0,
-        "p0": 100000.0,
-    }
+    constants = {"g": 9.81, "cp": 1004.0, "Rd": 287.0, "cvd": 717.0, "p0": 100000.0}
     tmp_phys = Euler3D(grid, op, constants, dt=requested_dt, N_bv=0.0)
     bg_ref = {
-        "rho": constants["p0"] / (constants["Rd"] * tmp_phys.theta_bg)
+        "rho": constants["p0"]
+        / (constants["Rd"] * tmp_phys.theta_bg)
         * tmp_phys.pi_bg ** (constants["cvd"] / constants["Rd"]),
         "pi": tmp_phys.pi_bg,
         "th_v": tmp_phys.theta_bg,
@@ -141,40 +129,26 @@ def run_worker(
     # RegionalGrid3D is centred on zero in x and y.
     x, y, z = jnp.meshgrid(grid.x_m, grid.y_m, grid.z_m, indexing="ij")
     radius = jnp.sqrt(x**2 + y**2 + (z - 2000.0) ** 2)
-    bubble = jnp.where(
-        radius <= 1500.0,
-        2.0 * jnp.cos(0.5 * jnp.pi * radius / 1500.0) ** 2,
-        0.0,
-    )
+    bubble = jnp.where(radius <= 1500.0, 2.0 * jnp.cos(0.5 * jnp.pi * radius / 1500.0) ** 2, 0.0)
     state["th_v"] = bg_ref["th_v"] + bubble
-    state["rho"] = constants["p0"] / (constants["Rd"] * state["th_v"]) * (
-        bg_ref["pi"] ** (constants["cvd"] / constants["Rd"])
+    state["rho"] = (
+        constants["p0"] / (constants["Rd"] * state["th_v"]) * (bg_ref["pi"] ** (constants["cvd"] / constants["Rd"]))
     )
     if core_type == "sisl":
         state = _initialize_sisl_history(state, jnp)
 
     stepper, actual_dt = build_dynamical_core(
-        core_type=core_type,
-        grid=grid,
-        operators=op,
-        constants=constants,
-        initial_state=state,
-        **core_kwargs,
+        core_type=core_type, grid=grid, operators=op, constants=constants, initial_state=state, **core_kwargs
     )
 
     def run_chunk_impl(chunk_state, steps):
         def body(scan_state, step_index):
             next_state = stepper.step(
-                scan_state,
-                step_index * actual_dt,
-                forcing=None,
-                bc_fn=lambda value, forcing: value,
+                scan_state, step_index * actual_dt, forcing=None, bc_fn=lambda value, forcing: value
             )
             return next_state, None
 
-        return jax.lax.scan(
-            body, chunk_state, jnp.arange(steps)
-        )[0]
+        return jax.lax.scan(body, chunk_state, jnp.arange(steps))[0]
 
     run_chunk = jax.jit(run_chunk_impl, static_argnames=("steps",))
 
@@ -244,10 +218,7 @@ def run_worker(
         "vram_baseline_mib": baseline_bytes / mib,
         "vram_current_mib": current_bytes / mib if current_bytes else float("nan"),
         "vram_peak_mib": peak_bytes / mib if peak_bytes else float("nan"),
-        "vram_peak_increment_mib": (
-            max(0.0, peak_bytes - baseline_bytes) / mib
-            if peak_bytes else float("nan")
-        ),
+        "vram_peak_increment_mib": (max(0.0, peak_bytes - baseline_bytes) / mib if peak_bytes else float("nan")),
         "max_abs_w": max_w,
         "finite_state": finite_state,
     }
@@ -282,9 +253,7 @@ def run_configuration(args, core, n, multiplier) -> dict:
     env = dict(os.environ)
     env["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
     env["XLA_PYTHON_CLIENT_ALLOCATOR"] = "platform"
-    output = subprocess.check_output(
-        command, cwd=REPO_ROOT, env=env, text=True, stderr=subprocess.STDOUT
-    )
+    output = subprocess.check_output(command, cwd=REPO_ROOT, env=env, text=True, stderr=subprocess.STDOUT)
     return json.loads(output.strip().splitlines()[-1])
 
 
@@ -302,27 +271,17 @@ def parse_args():
     parser.add_argument("--core", choices=("sisl", "split-explicit"))
     parser.add_argument("--grid-size", type=int)
     parser.add_argument("--dt-multiplier", type=float, default=1.0)
+    parser.add_argument("--num-steps", type=int, default=5, help="Steps per compiled/timed chunk (default: 5)")
     parser.add_argument(
-        "--num-steps", type=int, default=5,
-        help="Steps per compiled/timed chunk (default: 5)",
+        "--warmup-repeats", type=int, default=1, help="Additional untimed chunks after compilation (default: 1)"
     )
     parser.add_argument(
-        "--warmup-repeats", type=int, default=1,
-        help="Additional untimed chunks after compilation (default: 1)",
+        "--timing-repeats", type=int, default=5, help="Repeated timed chunks used for the median (default: 5)"
     )
-    parser.add_argument(
-        "--timing-repeats", type=int, default=5,
-        help="Repeated timed chunks used for the median (default: 5)",
-    )
-    parser.add_argument(
-        "--grid-sizes", type=int, nargs="+", default=(64, 96, 128, 160, 192)
-    )
+    parser.add_argument("--grid-sizes", type=int, nargs="+", default=(64, 96, 128, 160, 192))
     parser.add_argument("--output-root", type=Path, default=DEFAULT_OUTPUT_ROOT)
     parser.add_argument("--name", default="default", help="Execution label")
-    parser.add_argument(
-        "--output-dir", type=Path,
-        help="Explicit data directory (legacy compatibility override)",
-    )
+    parser.add_argument("--output-dir", type=Path, help="Explicit data directory (legacy compatibility override)")
     return parser.parse_args()
 
 
@@ -332,33 +291,25 @@ def main():
         if args.core is None or args.grid_size is None:
             raise SystemExit("--worker requires --core and --grid-size")
         result = run_worker(
-            args.core,
-            args.grid_size,
-            args.dt_multiplier,
-            args.num_steps,
-            args.warmup_repeats,
-            args.timing_repeats,
+            args.core, args.grid_size, args.dt_multiplier, args.num_steps, args.warmup_repeats, args.timing_repeats
         )
         print(json.dumps(result, allow_nan=True))
         return
 
     if args.output_dir is None:
-        output_dir = ArtifactLayout(
-            kind="benchmarks",
-            case="rising_bubble_3d_scaling",
-            execution=args.name,
-            output_root=args.output_root,
-        ).create().data
+        output_dir = (
+            ArtifactLayout(
+                kind="benchmarks", case="rising_bubble_3d_scaling", execution=args.name, output_root=args.output_root
+            )
+            .create()
+            .data
+        )
     else:
         output_dir = args.output_dir
 
     results = []
     output_path = None
-    configurations = (
-        ("split-explicit", 1.0),
-        ("sisl", 1.0),
-        ("sisl", 10.0),
-    )
+    configurations = (("split-explicit", 1.0), ("sisl", 1.0), ("sisl", 10.0))
     for n in args.grid_sizes:
         for core, multiplier in configurations:
             label = f"{core}, N={n}, dt_multiplier={multiplier:g}"

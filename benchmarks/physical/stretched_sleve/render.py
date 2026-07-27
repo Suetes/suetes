@@ -7,6 +7,7 @@ import argparse
 from pathlib import Path
 
 import matplotlib
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
@@ -34,15 +35,12 @@ def render(source: Path, output_dir: Path | None = None) -> list[Path]:
         variable = str(data.attrs["variable"])
         fig, axis = plt.subplots(figsize=(14, 6))
         image = axis.contourf(
-            x / 1000.0, data["physical_height"] / 1000.0,
-            data["field"], levels=50, cmap="RdBu_r", extend="both",
+            x / 1000.0, data["physical_height"] / 1000.0, data["field"], levels=50, cmap="RdBu_r", extend="both"
         )
-        axis.fill_between(
-            data["x"] / 1000.0, 0.0, data["terrain_height"] / 1000.0,
-            color="black",
-        )
+        axis.fill_between(data["x"] / 1000.0, 0.0, data["terrain_height"] / 1000.0, color="black")
         axis.set(
-            xlabel="Distance (km)", ylabel="Altitude (km)",
+            xlabel="Distance (km)",
+            ylabel="Altitude (km)",
             title=f"{data.attrs['experiment']} ({data.attrs['coordinate']})",
             ylim=(0.0, 10.0),
         )

@@ -8,6 +8,7 @@ import argparse
 from pathlib import Path
 
 import matplotlib
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
@@ -33,10 +34,12 @@ def render(source: Path, output_dir: Path | None = None) -> list[Path]:
         limit = float(abs(field).max())
         for axis, configuration in zip(axes.flat, data["configuration"].values):
             image = axis.contourf(
-                data["x"] / 1000.0, np.arange(field.sizes[vertical]),
+                data["x"] / 1000.0,
+                np.arange(field.sizes[vertical]),
                 field.sel(configuration=configuration).values.T,
                 levels=np.linspace(-limit, limit, 41),
-                cmap="RdBu_r", extend="both",
+                cmap="RdBu_r",
+                extend="both",
             )
             axis.set_title(str(configuration))
         fig.colorbar(image, ax=list(axes.flat))

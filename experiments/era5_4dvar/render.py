@@ -8,6 +8,7 @@ import argparse
 from pathlib import Path
 
 import matplotlib
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import xarray as xr
@@ -25,10 +26,7 @@ def render(source: Path, output_dir: Path | None = None) -> Path:
         fig, axes = plt.subplots(1, 3, figsize=(18, 5))
         for axis, state in zip(axes, data["state"].values):
             field = data["theta_anomaly"].sel(state=state)
-            image = axis.contourf(
-                data["x"] / 1000.0, data["z"], field.values.T,
-                levels=21, cmap="RdBu_r",
-            )
+            image = axis.contourf(data["x"] / 1000.0, data["z"], field.values.T, levels=21, cmap="RdBu_r")
             axis.set_title(str(state))
         fig.colorbar(image, ax=axes, label="Potential-temperature anomaly (K)")
         filename = "4dvar_reconstruction.png"
@@ -39,10 +37,7 @@ def render(source: Path, output_dir: Path | None = None) -> Path:
         for row, variable in enumerate(variables):
             for column, state in enumerate(states):
                 image = axes[row, column].imshow(
-                    data["surface_field"].sel(
-                        state=state, variable=variable
-                    ).values.T,
-                    origin="lower",
+                    data["surface_field"].sel(state=state, variable=variable).values.T, origin="lower"
                 )
                 axes[row, column].set_title(f"{state} ({variable})")
                 fig.colorbar(image, ax=axes[row, column])

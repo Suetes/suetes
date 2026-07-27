@@ -6,9 +6,11 @@ import argparse
 import os
 import sys
 import time
+
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 
 import jax
+
 jax.config.update("jax_enable_x64", True)
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
@@ -16,37 +18,30 @@ import numpy as np
 import optax
 
 from experiments._shared.neuve_coordinate import (
-    TARGET_DEFAULTS, dataset_target, load_dataset, load_neuve,
-    make_dataset, neuve_template, parse_seeds, save_neuve,
-    run_target_case, terrains_from_dataset,
+    TARGET_DEFAULTS,
+    dataset_target,
+    load_dataset,
+    load_neuve,
+    make_dataset,
+    neuve_template,
+    parse_seeds,
+    save_neuve,
+    run_target_case,
+    terrains_from_dataset,
 )
 from suetes.shared.artifacts import figure_dir_for, resolve_data_dir
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--target",
-        choices=["pgf_rest", "tracer_reversibility", "mountain_flux"],
-        default="pgf_rest",
-    )
+    parser.add_argument("--target", choices=["pgf_rest", "tracer_reversibility", "mountain_flux"], default="pgf_rest")
     parser.add_argument("--dataset", help="Existing training dataset manifest")
-    parser.add_argument(
-        "--terrain-family",
-        choices=["ridge", "random3d", "multiscale3d"],
-        default="ridge",
-    )
+    parser.add_argument("--terrain-family", choices=["ridge", "random3d", "multiscale3d"], default="ridge")
     parser.add_argument("--seeds", default="999", help="Comma-separated training seeds")
     parser.add_argument("--initial-weights")
-    parser.add_argument(
-        "--epochs", type=int, default=90,
-        help="Total updates (default: 30 discovery + 60 refinement)",
-    )
+    parser.add_argument("--epochs", type=int, default=90, help="Total updates (default: 30 discovery + 60 refinement)")
     parser.add_argument("--lr", type=float, default=5e-3)
-    parser.add_argument(
-        "--discovery-epochs", type=int, default=30,
-        help="Updates before resetting Adam for refinement",
-    )
+    parser.add_argument("--discovery-epochs", type=int, default=30, help="Updates before resetting Adam for refinement")
     parser.add_argument("--refinement-lr", type=float, default=3e-3)
     parser.add_argument("--steps", type=int)
     parser.add_argument("--minimum-layer-m", type=float, default=100.0)
@@ -59,34 +54,29 @@ def main():
         parser.error("--epochs must be positive")
     if args.discovery_epochs < 1:
         parser.error("--discovery-epochs must be positive")
-    args.output_dir = str(resolve_data_dir(
-        kind="experiments",
-        case="neuve_coordinates",
-        execution=args.name,
-        output_root=args.output_root,
-        output_dir=args.output_dir,
-    ))
+    args.output_dir = str(
+        resolve_data_dir(
+            kind="experiments",
+            case="neuve_coordinates",
+            execution=args.name,
+            output_root=args.output_root,
+            output_dir=args.output_dir,
+        )
+    )
     figure_dir = figure_dir_for(Path(args.output_dir) / "artifact.nc")
     figure_dir.mkdir(parents=True, exist_ok=True)
     manifest_path = os.path.join(args.output_dir, "training_dataset.json")
     steps = args.steps or TARGET_DEFAULTS[args.target]["steps"]
     dataset = (
-        load_dataset(args.dataset) if args.dataset
-        else make_dataset(
-            args.terrain_family, parse_seeds(args.seeds), "training",
-            target=args.target, steps=steps,
-        )
+        load_dataset(args.dataset)
+        if args.dataset
+        else make_dataset(args.terrain_family, parse_seeds(args.seeds), "training", target=args.target, steps=steps)
     )
     target = dataset_target(dataset)
     if args.dataset and target != args.target:
-        parser.error(
-            f"dataset target is {target!r}, not requested {args.target!r}"
-        )
+        parser.error(f"dataset target is {target!r}, not requested {args.target!r}")
     steps = int(dataset["integration"]["steps"])
-    make_dataset(
-        dataset["terrain_family"], dataset["seeds"], "training", manifest_path,
-        target=target, steps=steps,
-    )
+    make_dataset(dataset["terrain_family"], dataset["seeds"], "training", manifest_path, target=target, steps=steps)
     terrains = terrains_from_dataset(dataset)
 
     template = neuve_template()
@@ -95,26 +85,19 @@ def main():
     def make_objective(terrain):
         def objective(current_params):
             transform = template.with_params(current_params)
-            metric, _, grid, _ = run_target_case(
-                target, transform, terrain, steps
-            )
+            metric, _, grid, _ = run_target_case(target, transform, terrain, steps)
             minimum_layer = jnp.min(grid.dz_m_full)
-            thin = jax.nn.relu(
-                (args.minimum_layer_m - minimum_layer) / args.minimum_layer_m
-            ) ** 2
+            thin = jax.nn.relu((args.minimum_layer_m - minimum_layer) / args.minimum_layer_m) ** 2
             return metric + thin, (metric, minimum_layer)
+
         return jax.jit(jax.value_and_grad(objective, has_aux=True)), jax.jit(objective)
 
     functions = [make_objective(terrain) for terrain in terrains]
     discovery_epochs = min(args.discovery_epochs, args.epochs)
 
     def make_optimizer(learning_rate, updates):
-        schedule = optax.cosine_decay_schedule(
-            learning_rate, max(updates, 1), alpha=0.01
-        )
-        return optax.chain(
-            optax.clip_by_global_norm(1.0), optax.adam(schedule)
-        )
+        schedule = optax.cosine_decay_schedule(learning_rate, max(updates, 1), alpha=0.01)
+        return optax.chain(optax.clip_by_global_norm(1.0), optax.adam(schedule))
 
     optimizer = make_optimizer(args.lr, discovery_epochs)
     opt_state = optimizer.init(params)
@@ -132,8 +115,10 @@ def main():
     best_state = jax.tree.map(jnp.array, opt_state)
     save_neuve(checkpoint, best_params)
     history = {
-        "epoch": [0], "mean_tke": [initial_tke],
-        "current_objective": [best_loss], "best_objective": [best_loss],
+        "epoch": [0],
+        "mean_tke": [initial_tke],
+        "current_objective": [best_loss],
+        "best_objective": [best_loss],
         "minimum_layer_m": [initial_minimum],
     }
     metric_label = {
@@ -143,10 +128,7 @@ def main():
     }[target]
     print(f"NEUVE {target} tuning on {len(terrains)} terrain sample(s)")
     print(f"epoch {metric_label} current_objective best_objective min_dz[m] time[s]")
-    print(
-        f"{0:5d} {initial_tke:.6e} {best_loss:.6e} "
-        f"{best_loss:.6e} {initial_minimum:.2f}"
-    )
+    print(f"{0:5d} {initial_tke:.6e} {best_loss:.6e} {best_loss:.6e} {initial_minimum:.2f}")
 
     for epoch in range(1, args.epochs + 1):
         if epoch == discovery_epochs + 1 and epoch <= args.epochs:
@@ -154,15 +136,10 @@ def main():
             # broad discovery stage followed by a fresh, lower-rate Adam pass.
             # Make that deterministic continuation part of one clean run.
             params = jax.tree.map(jnp.array, best_params)
-            optimizer = make_optimizer(
-                args.refinement_lr, args.epochs - discovery_epochs
-            )
+            optimizer = make_optimizer(args.refinement_lr, args.epochs - discovery_epochs)
             opt_state = optimizer.init(params)
             best_state = jax.tree.map(jnp.array, opt_state)
-            print(
-                f"--- refinement stage: reset Adam, "
-                f"lr={args.refinement_lr:.3e}, starting from best checkpoint ---"
-            )
+            print(f"--- refinement stage: reset Adam, lr={args.refinement_lr:.3e}, starting from best checkpoint ---")
         start = time.time()
         gradient_sum = jax.tree.map(jnp.zeros_like, params)
         pre_losses = []
@@ -171,8 +148,10 @@ def main():
         finite = True
         for value_grad, _ in functions:
             (loss, diagnostics), gradient = value_grad(params)
-            finite = finite and bool(jnp.isfinite(loss)) and all(
-                bool(jnp.all(jnp.isfinite(leaf))) for leaf in jax.tree.leaves(gradient)
+            finite = (
+                finite
+                and bool(jnp.isfinite(loss))
+                and all(bool(jnp.all(jnp.isfinite(leaf))) for leaf in jax.tree.leaves(gradient))
             )
             if not finite:
                 break
@@ -212,16 +191,19 @@ def main():
         history["minimum_layer_m"].append(minimum)
         print(
             f"{epoch:5d} {mean_tke:.6e} {current_objective:.6e} "
-            f"{best_loss:.6e} {minimum:.2f} {time.time()-start:.2f}{marker}"
+            f"{best_loss:.6e} {minimum:.2f} {time.time() - start:.2f}{marker}"
         )
 
     np.savez(
         os.path.join(args.output_dir, "neuve_training_history.npz"),
         **{key: np.asarray(value) for key, value in history.items()},
-        seeds=np.asarray(dataset["seeds"]), terrain_family=dataset["terrain_family"],
-        discovery_epochs=discovery_epochs, discovery_lr=args.lr,
+        seeds=np.asarray(dataset["seeds"]),
+        terrain_family=dataset["terrain_family"],
+        discovery_epochs=discovery_epochs,
+        discovery_lr=args.lr,
         refinement_lr=args.refinement_lr,
-        target=target, steps=steps,
+        target=target,
+        steps=steps,
     )
     if not args.no_render:
         fig, axes = plt.subplots(1, 2, figsize=(9.0, 3.6))

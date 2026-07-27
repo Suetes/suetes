@@ -8,6 +8,7 @@ import argparse
 from pathlib import Path
 
 import matplotlib
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import xarray as xr
@@ -25,15 +26,8 @@ def render(source: Path, output_dir: Path | None = None) -> Path:
     for core in data["core"].values:
         label = str(core)
         axes[0].plot(data["time"], data["enstrophy"].sel(core=core), "o-", label=label)
-        axes[1].plot(
-            data["time"], data["maximum_vertical_velocity"].sel(core=core),
-            "o-", label=label,
-        )
-        axes[2].loglog(
-            data["wavenumber"],
-            data["vertical_velocity_spectrum"].sel(core=core),
-            label=label,
-        )
+        axes[1].plot(data["time"], data["maximum_vertical_velocity"].sel(core=core), "o-", label=label)
+        axes[2].loglog(data["wavenumber"], data["vertical_velocity_spectrum"].sel(core=core), label=label)
     labels = (
         ("Enstrophy evolution", "Enstrophy"),
         ("Peak updraft", "Vertical velocity (m/s)"),

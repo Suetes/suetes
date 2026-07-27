@@ -8,6 +8,7 @@ import argparse
 from pathlib import Path
 
 import matplotlib
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
@@ -27,15 +28,14 @@ def render(source: Path, output_dir: Path | None = None) -> list[Path]:
     for configuration in data["configuration"].values:
         fig, axis = plt.subplots(figsize=(10, 5))
         image = axis.contourf(
-            data["x"] / 1000.0, data["z"] / 1000.0,
+            data["x"] / 1000.0,
+            data["z"] / 1000.0,
             data["vorticity"].sel(configuration=configuration).values.T,
             levels=np.linspace(-limit, limit, 40),
-            cmap="RdBu_r", extend="both",
+            cmap="RdBu_r",
+            extend="both",
         )
-        axis.set(
-            xlabel="Horizontal distance (km)", ylabel="Altitude (km)",
-            title=str(configuration),
-        )
+        axis.set(xlabel="Horizontal distance (km)", ylabel="Altitude (km)", title=str(configuration))
         fig.colorbar(image, ax=axis, label="Vorticity (s$^{-1}$)")
         output = output_dir / f"vorticity_{configuration}.png"
         fig.savefig(output, dpi=300, bbox_inches="tight")

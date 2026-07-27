@@ -58,7 +58,7 @@ def main() -> None:
         label=r"High accuracy ($10^{-6}$)",
     )
     axis.set_xlabel("GMRES iterations per timestep")
-    axis.set_ylabel("Relative adjoint $L_2$ error")
+    axis.set_ylabel(r"Relative adjoint error")
     axis.grid(True, which="both", ls="--", alpha=0.4)
     
     handles, labels = axis.get_legend_handles_labels()
