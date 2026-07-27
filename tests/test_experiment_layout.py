@@ -5,8 +5,8 @@ import numpy as np
 import pytest
 import xarray as xr
 
-from suetes.shared.artifacts import (
-    ArtifactLayout,
+from suetes.shared.experiment import (
+    ExperimentLayout,
     artifact_from_bundle,
     figure_dir_for,
     resolve_data_dir,
@@ -15,7 +15,7 @@ from suetes.shared.artifacts import (
 
 
 def test_artifact_layout_creates_bundle_directories(tmp_path: Path) -> None:
-    layout = ArtifactLayout(
+    layout = ExperimentLayout(
         kind="benchmarks",
         case="rising_bubble_3d",
         execution="smoke",
@@ -30,7 +30,7 @@ def test_artifact_layout_creates_bundle_directories(tmp_path: Path) -> None:
 @pytest.mark.parametrize("value", ["", ".", "..", "nested/name"])
 def test_artifact_layout_rejects_unsafe_components(value: str) -> None:
     with pytest.raises(ValueError):
-        ArtifactLayout(kind="benchmarks", case=value)
+        ExperimentLayout(kind="benchmarks", case=value)
 
 
 def test_resolve_data_dir_uses_bundle_or_explicit_legacy_path(
@@ -57,7 +57,7 @@ def test_resolve_data_dir_uses_bundle_or_explicit_legacy_path(
 
 
 def test_artifact_from_bundle_resolves_data_file(tmp_path: Path) -> None:
-    layout = ArtifactLayout(
+    layout = ExperimentLayout(
         kind="experiments", case="example", output_root=tmp_path
     ).create()
     artifact = layout.data / "artifact.nc"
@@ -85,7 +85,7 @@ def test_save_plot_dataset_accepts_boolean_attributes(tmp_path: Path) -> None:
 
 
 def test_rising_bubble_renderer_consumes_artifact(tmp_path: Path) -> None:
-    layout = ArtifactLayout(
+    layout = ExperimentLayout(
         kind="benchmarks",
         case="rising_bubble_3d",
         execution="render-test",

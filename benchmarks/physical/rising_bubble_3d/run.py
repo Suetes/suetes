@@ -30,7 +30,7 @@ from suetes.regional3d.euler import Euler3D
 from suetes.regional3d.geometry import RegionalGrid3D
 from suetes.regional3d.operators import CGridOperator3D
 from suetes.regional3d.steppers import build_dynamical_core
-from suetes.shared.artifacts import ArtifactLayout, save_plot_dataset
+from suetes.shared.experiment import save_plot_dataset, add_experiment_args, setup_experiment_directories
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_OUTPUT_ROOT = REPO_ROOT / "output"
@@ -438,7 +438,7 @@ def parse_args() -> argparse.Namespace:
         default=DEFAULT_OUTPUT_ROOT,
         help="Root containing benchmark, experiment, run, and verification bundles",
     )
-    parser.add_argument("--name", default="default", help="Execution label")
+    add_experiment_args(parser)
     parser.add_argument(
         "--no-render", action="store_true", help="Only produce numerical artifacts; render them in a separate command"
     )
@@ -463,7 +463,7 @@ def main() -> None:
         return
 
     if args.output_dir is None:
-        layout = ArtifactLayout(
+        layout = ExperimentLayout(
             kind="benchmarks", case="rising_bubble_3d", execution=args.name, output_root=args.output_root
         ).create()
         data_dir = layout.data

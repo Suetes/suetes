@@ -18,7 +18,7 @@ from suetes.regional3d.boundaries import BenchmarkSponge
 from suetes.regional3d.steppers import build_dynamical_core
 from suetes.physics.base import PhysicsSuite
 from suetes.shared.optimization import OptaxSolver
-from suetes.shared.artifacts import figure_dir_for, resolve_data_dir, save_plot_dataset
+from suetes.shared.experiment import figure_dir_for, resolve_data_dir, save_plot_dataset
 
 # =====================================================================
 # CONFIGURATION & COMMAND-LINE ARGUMENTS

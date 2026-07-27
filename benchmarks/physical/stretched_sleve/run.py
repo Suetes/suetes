@@ -13,7 +13,7 @@ from suetes.regional3d.euler import Euler3D
 from suetes.regional3d.operators import CGridOperator3D
 from suetes.regional3d.steppers import SISLStepper3D
 from suetes.shared.driver import Simulation
-from suetes.shared.artifacts import ArtifactLayout, save_plot_dataset
+from suetes.shared.experiment import save_plot_dataset, add_experiment_args, setup_experiment_directories
 from suetes.shared.transforms import SleveSimple, BaseTransform
 
 
@@ -220,19 +220,10 @@ def run_stress_test(
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Compare stretched and standard SLEVE coordinates")
-    parser.add_argument("--output-root", type=Path, default=Path("output"))
-    parser.add_argument("--name", default="default")
-    parser.add_argument("--output-dir", type=Path)
+    add_experiment_args(parser)
     parser.add_argument("--no-render", action="store_true")
     args = parser.parse_args()
-    if args.output_dir is None:
-        layout = ArtifactLayout(
-            kind="benchmarks", case="stretched_sleve", execution=args.name, output_root=args.output_root
-        ).create()
-        data_dir, figure_dir = layout.data, layout.figures
-    else:
-        data_dir = figure_dir = args.output_dir
-        data_dir.mkdir(parents=True, exist_ok=True)
+    data_dir, figure_dir = setup_experiment_directories(args, kind="benchmarks", case="stretched_sleve")
     for exp in ["density_current", "wave_breaking"]:
         for stretched in [True, False]:
             run_stress_test(

@@ -29,7 +29,7 @@ from suetes.regional3d.euler import Euler3D
 from suetes.regional3d.geometry import RegionalGrid3D
 from suetes.regional3d.operators import CGridOperator3D
 from suetes.regional3d.steppers import build_dynamical_core
-from suetes.shared.artifacts import ArtifactLayout
+from suetes.shared.experiment import ExperimentLayout
 
 
 jax.config.update("jax_enable_x64", True)
@@ -265,7 +265,7 @@ def main() -> int:
                 f"[{case}/{core}] finest orders: "
                 + ", ".join(f"{key}={value[-1]:.3f}" for key, value in rates.items())
             )
-    layout = ArtifactLayout(
+    layout = ExperimentLayout(
         kind="verification", case="smooth_mode_core_convergence",
         execution=args.name, output_root=args.output_root,
     ).create()

@@ -13,7 +13,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import xarray as xr
 
-from suetes.shared.artifacts import SCHEMA
+from suetes.shared.experiment import SCHEMA
 
 
 def render(artifact: Path, output_dir: Path) -> list[Path]:

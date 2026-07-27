@@ -17,7 +17,7 @@ from suetes.regional3d.geometry import RegionalGrid3D
 from suetes.regional3d.operators import CGridOperator3D
 from suetes.regional3d.euler import Euler3D
 from suetes.regional3d.steppers import build_dynamical_core
-from suetes.shared.artifacts import ArtifactLayout
+from suetes.shared.experiment import ExperimentLayout
 from suetes.shared.driver import Simulation
 
 RESOLUTIONS = [250.0, 125.0, 62.5, 31.25]
@@ -292,7 +292,7 @@ def main():
             "differences": cross_differences, "orders": cross_rates
         },
     }
-    layout = ArtifactLayout(
+    layout = ExperimentLayout(
         kind="verification", case="rising_bubble_core_convergence",
         execution=execution, output_root=args.output_root,
     ).create()

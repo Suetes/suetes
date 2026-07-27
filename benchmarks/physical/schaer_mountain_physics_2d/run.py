@@ -17,7 +17,7 @@ from suetes.regional3d.euler import Euler3D
 from suetes.regional3d.operators import CGridOperator3D
 from suetes.regional3d.steppers import SISLStepper3D
 from suetes.shared.driver import Simulation
-from suetes.shared.artifacts import ArtifactLayout, save_plot_dataset
+from suetes.shared.experiment import save_plot_dataset, add_experiment_args, setup_experiment_directories
 
 from suetes.physics.base import PhysicsSuite
 from suetes.physics.gravity_waves import UpperRayleighDamping, McFarlaneGWD
@@ -146,19 +146,10 @@ sim = Simulation(step_fn=step_fn, dt=dt)
 
 def main():
     parser = argparse.ArgumentParser(description="Run Schär mountain with gravity-wave physics")
-    parser.add_argument("--output-root", type=Path, default=Path("output"))
-    parser.add_argument("--name", default="default")
-    parser.add_argument("--output-dir", type=Path)
+    add_experiment_args(parser)
     parser.add_argument("--no-render", action="store_true")
     args = parser.parse_args()
-    if args.output_dir is None:
-        layout = ArtifactLayout(
-            kind="benchmarks", case="schaer_mountain_physics_2d", execution=args.name, output_root=args.output_root
-        ).create()
-        data_dir, figure_dir = layout.data, layout.figures
-    else:
-        data_dir = figure_dir = args.output_dir
-        data_dir.mkdir(parents=True, exist_ok=True)
+    data_dir, figure_dir = setup_experiment_directories(args, kind="benchmarks", case="schaer_mountain_physics_2d")
 
     # --- 5. RUN SIMULATION ---
     print("\nLaunching Schär Mountain Benchmark...")

@@ -24,7 +24,7 @@ from suetes.physics.microphysics import KesslerWarmRain
 from suetes.regional3d.geometry import RegionalGrid3D
 from suetes.regional3d.operators import CGridOperator3D
 from suetes.regional3d.steppers import build_dynamical_core
-from suetes.shared.artifacts import save_plot_dataset
+from suetes.shared.experiment import save_plot_dataset
 
 
 def build_case(args):

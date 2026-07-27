@@ -22,7 +22,7 @@ import sys
 
 import numpy as np
 import xarray as xr
-from suetes.shared.artifacts import ArtifactLayout, save_plot_dataset
+from suetes.shared.experiment import save_plot_dataset, add_experiment_args, setup_experiment_directories
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -396,9 +396,8 @@ def parse_args():
         default=DEFAULT_OUTPUT_ROOT,
         help="Root containing benchmark, experiment, run, and verification bundles",
     )
-    parser.add_argument("--name", default="default", help="Execution label")
+    add_experiment_args(parser)
     parser.add_argument("--no-render", action="store_true")
-    parser.add_argument("--output-dir", type=Path, help="Explicit flat directory (legacy compatibility override)")
     parser.add_argument("--worker-core", choices=("sisl", "split-explicit"), help=argparse.SUPPRESS)
     parser.add_argument("--worker-output", type=Path, help=argparse.SUPPRESS)
     return parser.parse_args()
@@ -422,7 +421,7 @@ def main():
         return
 
     if args.output_dir is None:
-        layout = ArtifactLayout(
+        layout = ExperimentLayout(
             kind="benchmarks", case="schaer_mountain_3d", execution=args.name, output_root=args.output_root
         ).create()
         data_dir = layout.data

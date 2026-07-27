@@ -21,7 +21,7 @@ from suetes.regional3d.steppers import build_dynamical_core
 from suetes.regional3d.boundaries import BenchmarkSponge
 from suetes.shared.driver import Simulation
 from suetes.shared.optimization import OptaxSolver
-from suetes.shared.artifacts import figure_dir_for, resolve_data_dir, save_plot_dataset
+from suetes.shared.experiment import figure_dir_for, resolve_data_dir, save_plot_dataset
 
 # =====================================================================
 # CONFIGURATION SWITCHES

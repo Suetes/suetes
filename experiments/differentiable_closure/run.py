@@ -26,7 +26,7 @@ from suetes.regional3d.steppers import SISLStepper3D
 from suetes.regional3d.boundaries import DaviesSponge
 from suetes.preprocessing.topography import TopographyProcessor
 from suetes.shared.transforms import SleveSimple
-from suetes.shared.artifacts import resolve_data_dir
+from suetes.shared.experiment import resolve_data_dir
 from suetes.physics.base import PhysicsSuite
 from suetes.physics.turbulence import McFarlaneVerticalDiffusion
 from suetes.physics.ml import MLPhysicsClosure

@@ -18,21 +18,19 @@ from suetes.regional3d.operators import CGridOperator3D
 from suetes.regional3d.steppers import build_dynamical_core
 from suetes.regional3d.boundaries import BenchmarkSponge
 from suetes.shared.driver import Simulation
-from suetes.shared.artifacts import ArtifactLayout, save_plot_dataset
+from suetes.shared.experiment import save_plot_dataset, add_experiment_args, setup_experiment_directories
 
 # =====================================================================
 # CONFIGURATION SWITCHES
 # =====================================================================
 parser = argparse.ArgumentParser(description="Optimize perturbations to Schär mountain waves")
 parser.add_argument("core", nargs="?", default="sisl", choices=("sisl", "split-explicit"))
-parser.add_argument("--output-root", type=Path, default=Path("output"))
-parser.add_argument("--name", default="default")
-parser.add_argument("--output-dir", type=Path)
+add_experiment_args(parser)
 parser.add_argument("--no-render", action="store_true")
 args = parser.parse_args()
 CORE_TYPE = args.core
 if args.output_dir is None:
-    layout = ArtifactLayout(
+    layout = ExperimentLayout(
         kind="experiments",
         case="schaer_mountain_optimal_perturbation_3d",
         execution=args.name,

@@ -16,7 +16,7 @@ from mpl_toolkits.axes_grid1 import make_axes_locatable
 import numpy as np
 import xarray as xr
 
-from suetes.shared.artifacts import SCHEMA
+from suetes.shared.experiment import SCHEMA
 
 EVALUATION_HALF_WIDTH = 20_000.0
 

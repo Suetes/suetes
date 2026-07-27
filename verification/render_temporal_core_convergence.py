@@ -8,7 +8,7 @@ import json
 from pathlib import Path
 
 from convergence_plotting import save_four_panel_convergence
-from suetes.shared.artifacts import artifact_from_bundle, figure_dir_for
+from suetes.shared.experiment import artifact_from_bundle, figure_dir_for
 
 
 def main() -> None:

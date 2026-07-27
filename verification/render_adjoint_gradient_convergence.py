@@ -11,7 +11,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
-from suetes.shared.artifacts import ArtifactLayout
+from suetes.shared.experiment import ExperimentLayout
 
 plt.rcParams.update({
     'font.size': 16,
@@ -34,7 +34,7 @@ def main():
     parser.add_argument("--output-root", type=Path, default=Path("output"))
     parser.add_argument("--name", default="default")
     args = parser.parse_args()
-    layout = ArtifactLayout(
+    layout = ExperimentLayout(
         kind="verification",
         case="adjoint_gradient_convergence",
         execution=args.name,

@@ -13,7 +13,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from suetes.shared.artifacts import ArtifactLayout
+from suetes.shared.experiment import ExperimentLayout
 
 plt.rcParams.update(
     {
@@ -81,7 +81,7 @@ def main():
     parser.add_argument("--output-dir", type=Path)
     args = parser.parse_args()
 
-    layout = ArtifactLayout(
+    layout = ExperimentLayout(
         kind="benchmarks", case="rising_bubble_3d_scaling", execution=args.name, output_root=args.output_root
     )
     input_paths = select_inputs(args.input, layout.data)

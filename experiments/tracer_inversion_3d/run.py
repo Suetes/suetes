@@ -21,16 +21,14 @@ from suetes.regional3d.boundaries import BenchmarkSponge
 
 from suetes.shared.driver import Simulation
 from suetes.shared.optimization import OptaxSolver
-from suetes.shared.artifacts import ArtifactLayout, save_plot_dataset
+from suetes.shared.experiment import save_plot_dataset, add_experiment_args, setup_experiment_directories
 
 parser = argparse.ArgumentParser(description="Run the 3-D tracer inversion experiment")
-parser.add_argument("--output-root", type=Path, default=Path("output"))
-parser.add_argument("--name", default="default")
-parser.add_argument("--output-dir", type=Path)
+add_experiment_args(parser)
 parser.add_argument("--no-render", action="store_true")
 args = parser.parse_args()
 if args.output_dir is None:
-    layout = ArtifactLayout(
+    layout = ExperimentLayout(
         kind="experiments", case="tracer_inversion_3d", execution=args.name, output_root=args.output_root
     ).create()
     data_dir, figure_dir = layout.data, layout.figures

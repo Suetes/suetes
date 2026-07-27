@@ -12,7 +12,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import pandas as pd
 
-from suetes.shared.artifacts import figure_dir_for
+from suetes.shared.experiment import figure_dir_for
 
 plt.rcParams.update(
     {

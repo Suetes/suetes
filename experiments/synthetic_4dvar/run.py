@@ -16,16 +16,14 @@ from suetes.regional3d.euler import Euler3D
 from suetes.regional3d.operators import CGridOperator3D
 from suetes.regional3d.steppers import build_dynamical_core
 from suetes.shared.optimization import OptaxSolver
-from suetes.shared.artifacts import ArtifactLayout, save_plot_dataset
+from suetes.shared.experiment import save_plot_dataset, add_experiment_args, setup_experiment_directories
 
 parser = argparse.ArgumentParser(description="Run the synthetic 4D-Var experiment")
-parser.add_argument("--output-root", type=Path, default=Path("output"))
-parser.add_argument("--name", default="default")
-parser.add_argument("--output-dir", type=Path)
+add_experiment_args(parser)
 parser.add_argument("--no-render", action="store_true")
 args = parser.parse_args()
 if args.output_dir is None:
-    layout = ArtifactLayout(
+    layout = ExperimentLayout(
         kind="experiments", case="synthetic_4dvar", execution=args.name, output_root=args.output_root
     ).create()
     data_dir, figure_dir = layout.data, layout.figures

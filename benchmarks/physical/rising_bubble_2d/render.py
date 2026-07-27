@@ -12,7 +12,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import xarray as xr
 
-from suetes.shared.artifacts import figure_dir_for
+from suetes.shared.experiment import figure_dir_for
 
 
 def render(source: Path, output_dir: Path | None = None) -> Path:

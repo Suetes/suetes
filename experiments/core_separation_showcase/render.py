@@ -14,7 +14,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import xarray as xr
 
-from suetes.shared.artifacts import figure_dir_for
+from suetes.shared.experiment import figure_dir_for
 
 
 def render(source: Path, output_dir: Path | None = None) -> list[Path]:

@@ -27,7 +27,7 @@ from suetes.preprocessing.era2suetes import BoundaryProcessor, TimeManager
 
 from suetes.shared.transforms import SleveSimple
 from suetes.shared.driver import Simulation
-from suetes.shared.artifacts import save_plot_dataset
+from suetes.shared.experiment import save_plot_dataset
 
 from suetes.regional3d.geometry import RegionalGrid3D
 from suetes.regional3d.operators import CGridOperator3D

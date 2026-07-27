@@ -28,7 +28,7 @@ from suetes.physics.surface import BulkAerodynamicPBL
 from suetes.physics.turbulence import FastVerticalDiffusion
 from suetes.physics.forcing import NewtonianRelaxation
 from suetes.vis.visualizer import Visualizer
-from suetes.shared.artifacts import ArtifactLayout, save_plot_dataset
+from suetes.shared.experiment import save_plot_dataset, add_experiment_args, setup_experiment_directories
 
 # ==========================================
 # 0. DOMAIN PRESETS
@@ -43,19 +43,10 @@ DOMAINS = {
 
 def main():
     parser = argparse.ArgumentParser(description="Run the ERA5-coupled adjoint experiment")
-    parser.add_argument("--output-root", type=Path, default=Path("output"))
-    parser.add_argument("--name", default="default")
-    parser.add_argument("--output-dir", type=Path)
+    add_experiment_args(parser)
     parser.add_argument("--no-render", action="store_true")
     args = parser.parse_args()
-    if args.output_dir is None:
-        layout = ArtifactLayout(
-            kind="experiments", case="run_simulation_adjoint", execution=args.name, output_root=args.output_root
-        ).create()
-        data_dir, figure_dir = layout.data, layout.figures
-    else:
-        data_dir = figure_dir = args.output_dir
-        data_dir.mkdir(parents=True, exist_ok=True)
+    data_dir, figure_dir = setup_experiment_directories(args, kind="experiments", case="run_simulation_adjoint")
 
     # ==========================================
     # 1. PIPELINE ORCHESTRATION & SETUP

@@ -17,7 +17,7 @@ from suetes.regional3d.geometry import RegionalGrid3D
 from suetes.regional3d.operators import CGridOperator3D
 from suetes.regional3d.euler import Euler3D
 from suetes.regional3d.steppers import build_dynamical_core
-from suetes.shared.artifacts import ArtifactLayout
+from suetes.shared.experiment import ExperimentLayout
 from suetes.shared.driver import Simulation
 
 # Keep the split-explicit method fixed throughout temporal refinement.  With a
@@ -242,7 +242,7 @@ def main():
             },
         },
     }
-    layout = ArtifactLayout(
+    layout = ExperimentLayout(
         kind="verification", case="temporal_core_convergence",
         execution=args.name, output_root=args.output_root,
     ).create()

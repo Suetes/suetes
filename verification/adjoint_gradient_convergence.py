@@ -24,7 +24,7 @@ from suetes.regional3d.euler import Euler3D
 from suetes.regional3d.geometry import RegionalGrid3D
 from suetes.regional3d.operators import CGridOperator3D
 from suetes.regional3d.steppers import build_dynamical_core
-from suetes.shared.artifacts import ArtifactLayout
+from suetes.shared.experiment import ExperimentLayout
 
 
 def build_case(nx: int = 12, ny: int = 3, nz: int = 8, dx: float = 375.0):
@@ -251,7 +251,7 @@ def main():
             "passed": passed,
         },
     }
-    layout = ArtifactLayout(
+    layout = ExperimentLayout(
         kind="verification",
         case="adjoint_gradient_convergence",
         execution=args.name,

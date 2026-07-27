@@ -21,7 +21,7 @@ from suetes.regional3d.operators import CGridOperator3D
 from suetes.regional3d.euler import Euler3D
 from suetes.regional3d.steppers import build_dynamical_core
 from suetes.shared.driver import Simulation
-from suetes.shared.artifacts import ArtifactLayout, save_plot_dataset
+from suetes.shared.experiment import save_plot_dataset, add_experiment_args, setup_experiment_directories
 
 
 def compute_metrics(state, grid):
@@ -207,19 +207,10 @@ def run_simulation(core_type, dt, state, grid, constants, t_end=120.0):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run the three-way core separation showcase")
-    parser.add_argument("--output-root", type=Path, default=Path("output"))
-    parser.add_argument("--name", default="default")
-    parser.add_argument("--output-dir", type=Path)
+    add_experiment_args(parser)
     parser.add_argument("--no-render", action="store_true")
     args = parser.parse_args()
-    if args.output_dir is None:
-        layout = ArtifactLayout(
-            kind="experiments", case="core_separation_showcase", execution=args.name, output_root=args.output_root
-        ).create()
-        data_dir, figure_dir = layout.data, layout.figures
-    else:
-        data_dir = figure_dir = args.output_dir
-        data_dir.mkdir(parents=True, exist_ok=True)
+    data_dir, figure_dir = setup_experiment_directories(args, kind="experiments", case="core_separation_showcase")
 
     print("\n=======================================================")
     print("RTX 4090 FAIR & OPERATIONAL BENCHMARK (3-WAY COMPARISON)")

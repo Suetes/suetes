@@ -43,7 +43,7 @@ from suetes.regional3d.geometry import RegionalGrid3D
 from suetes.regional3d.operators import CGridOperator3D
 from suetes.regional3d.euler import Euler3D
 from suetes.regional3d.steppers import build_dynamical_core
-from suetes.shared.artifacts import ArtifactLayout
+from suetes.shared.experiment import ExperimentLayout
 
 
 def build_experiment_case(nx=64, ny=3, nz=32, dx=100.0):
@@ -183,7 +183,7 @@ def main():
         }
         print()
 
-    layout = ArtifactLayout(
+    layout = ExperimentLayout(
         kind="verification", case="gmres_adjoint_convergence",
         execution=args.name, output_root=args.output_root,
     ).create()

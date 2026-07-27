@@ -10,7 +10,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from suetes.shared.artifacts import artifact_from_bundle, figure_dir_for
+from suetes.shared.experiment import artifact_from_bundle, figure_dir_for
 
 plt.rcParams.update({
     'font.size': 16,

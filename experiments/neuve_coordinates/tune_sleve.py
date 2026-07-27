@@ -35,7 +35,7 @@ from experiments._shared.neuve_coordinate import (
 )
 from suetes.regional3d.geometry import RegionalGrid3D
 from suetes.shared.transforms import SleveSimple
-from suetes.shared.artifacts import figure_dir_for
+from suetes.shared.experiment import figure_dir_for, add_experiment_args, setup_experiment_directories
 
 
 def values(text):
@@ -67,7 +67,7 @@ def main():
     )
     parser.add_argument("--minimum-layer-m", type=float, default=100.0)
     parser.add_argument("--steps", type=int)
-    parser.add_argument("--output-dir", help="Shared experiment directory (defaults to the dataset directory)")
+    add_experiment_args(parser)
     parser.add_argument("--no-render", action="store_true")
     parser.add_argument("--worker-scale", type=float, help=argparse.SUPPRESS)
     parser.add_argument("--worker-n", type=float, help=argparse.SUPPRESS)

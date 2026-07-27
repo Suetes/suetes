@@ -29,7 +29,7 @@ plt.rcParams.update(
     }
 )
 
-from suetes.shared.artifacts import artifact_from_bundle, figure_dir_for
+from suetes.shared.experiment import artifact_from_bundle, figure_dir_for
 
 
 def main():

@@ -11,7 +11,7 @@ import csv
 import argparse
 from pathlib import Path
 
-from suetes.shared.artifacts import ArtifactLayout
+from suetes.shared.experiment import add_experiment_args, setup_experiment_directories
 
 
 def run_single_worker(core_mode, T_val, grid_size, worker_type="total"):
@@ -209,19 +209,10 @@ if __name__ == "__main__":
     import numpy as np
 
     parser = argparse.ArgumentParser(description="Benchmark reverse-mode core scaling")
-    parser.add_argument("--output-root", type=Path, default=Path("output"))
-    parser.add_argument("--name", default="default")
-    parser.add_argument("--output-dir", type=Path)
+    add_experiment_args(parser)
     parser.add_argument("--no-render", action="store_true")
     args = parser.parse_args()
-    if args.output_dir is None:
-        layout = ArtifactLayout(
-            kind="benchmarks", case="core_ad_scaling", execution=args.name, output_root=args.output_root
-        ).create()
-        data_dir, figure_dir = layout.data, layout.figures
-    else:
-        data_dir = figure_dir = args.output_dir
-        data_dir.mkdir(parents=True, exist_ok=True)
+    data_dir, figure_dir = setup_experiment_directories(args, kind="benchmarks", case="core_ad_scaling")
 
     print("\n==========================================================================")
     print("EXPERIMENT: 3D DOMAIN SIZE SCALING ON A SINGLE GPU (T = 30s)")

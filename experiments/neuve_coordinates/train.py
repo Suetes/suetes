@@ -29,7 +29,7 @@ from experiments._shared.neuve_coordinate import (
     run_target_case,
     terrains_from_dataset,
 )
-from suetes.shared.artifacts import figure_dir_for, resolve_data_dir
+from suetes.shared.experiment import figure_dir_for, resolve_data_dir
 
 
 def main():

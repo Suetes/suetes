@@ -5,6 +5,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import json
 from pathlib import Path
+import argparse
+from typing import Tuple
 import subprocess
 
 import numpy as np
@@ -15,7 +17,7 @@ SCHEMA = "suetes-plot-data-v1"
 ARTIFACT_KINDS = frozenset({"benchmarks", "experiments", "runs", "verification"})
 
 
-class ArtifactLayout:
+class ExperimentLayout:
     """Paths for one self-contained model execution.
 
     The bundle root is ``<output_root>/<kind>/<case>/<execution>``. Numerical
@@ -55,7 +57,7 @@ class ArtifactLayout:
     def figures(self) -> Path:
         return self.root / "figures"
 
-    def create(self) -> "ArtifactLayout":
+    def create(self) -> "ExperimentLayout":
         self.data.mkdir(parents=True, exist_ok=True)
         self.figures.mkdir(parents=True, exist_ok=True)
         return self
@@ -74,7 +76,7 @@ def resolve_data_dir(
         path = Path(output_dir)
         path.mkdir(parents=True, exist_ok=True)
         return path
-    return ArtifactLayout(
+    return ExperimentLayout(
         kind=kind,
         case=case,
         execution=execution,
@@ -167,3 +169,38 @@ def save_plot_dataset(
     with path.with_suffix(".json").open("w") as stream:
         json.dump(provenance, stream, indent=2)
     return path
+
+
+def add_experiment_args(parser: argparse.ArgumentParser) -> None:
+    """Add standard output-directory arguments to an argument parser."""
+    parser.add_argument(
+        "--output-root", type=Path, default=Path("output"),
+        help="Root directory for the standard experiment bundle",
+    )
+    parser.add_argument(
+        "--name", default="default",
+        help="Execution name for the standard experiment bundle",
+    )
+    parser.add_argument(
+        "--output-dir", type=Path, default=None,
+        help="Explicit legacy directory to bypass the standard bundle layout",
+    )
+
+
+def setup_experiment_directories(
+    args: argparse.Namespace, *, kind: str, case: str
+) -> Tuple[Path, Path]:
+    """Return (data_dir, figure_dir) based on standard CLI arguments."""
+    if getattr(args, "output_dir", None) is not None:
+        path = Path(args.output_dir)
+        path.mkdir(parents=True, exist_ok=True)
+        return path, path
+    
+    layout = ExperimentLayout(
+        kind=kind,
+        case=case,
+        execution=getattr(args, "name", "default"),
+        output_root=getattr(args, "output_root", Path("output")),
+    ).create()
+    return layout.data, layout.figures
+

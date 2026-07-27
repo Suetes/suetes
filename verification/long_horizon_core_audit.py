@@ -19,7 +19,7 @@ import sys
 import numpy as np
 import xarray as xr
 
-from suetes.shared.artifacts import ArtifactLayout, artifact_from_bundle
+from suetes.shared.experiment import ExperimentLayout, artifact_from_bundle
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -270,7 +270,7 @@ def main() -> int:
         max_integral_relative_difference=args.max_integral_relative_difference,
         max_mass_drift=args.max_mass_drift,
     )
-    layout = ArtifactLayout(
+    layout = ExperimentLayout(
         kind="verification", case="long_horizon_core_audit",
         execution=args.name, output_root=args.output_root,
     ).create()

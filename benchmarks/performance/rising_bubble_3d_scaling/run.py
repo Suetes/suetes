@@ -18,7 +18,7 @@ import statistics
 import subprocess
 import sys
 
-from suetes.shared.artifacts import ArtifactLayout
+from suetes.shared.experiment import add_experiment_args, setup_experiment_directories
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_OUTPUT_ROOT = REPO_ROOT / "output"
@@ -279,9 +279,7 @@ def parse_args():
         "--timing-repeats", type=int, default=5, help="Repeated timed chunks used for the median (default: 5)"
     )
     parser.add_argument("--grid-sizes", type=int, nargs="+", default=(64, 96, 128, 160, 192))
-    parser.add_argument("--output-root", type=Path, default=DEFAULT_OUTPUT_ROOT)
-    parser.add_argument("--name", default="default", help="Execution label")
-    parser.add_argument("--output-dir", type=Path, help="Explicit data directory (legacy compatibility override)")
+    add_experiment_args(parser)
     return parser.parse_args()
 
 
@@ -298,7 +296,7 @@ def main():
 
     if args.output_dir is None:
         output_dir = (
-            ArtifactLayout(
+            ExperimentLayout(
                 kind="benchmarks", case="rising_bubble_3d_scaling", execution=args.name, output_root=args.output_root
             )
             .create()

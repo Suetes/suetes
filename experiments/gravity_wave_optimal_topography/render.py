@@ -10,7 +10,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import xarray as xr
 
-from suetes.shared.artifacts import artifact_from_bundle, figure_dir_for
+from suetes.shared.experiment import artifact_from_bundle, figure_dir_for
 
 
 def main():

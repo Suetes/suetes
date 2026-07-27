@@ -23,7 +23,7 @@ from suetes.physics.microphysics import KesslerWarmRain
 from suetes.regional3d.geometry import RegionalGrid3D
 from suetes.regional3d.operators import CGridOperator3D
 from suetes.regional3d.steppers import build_dynamical_core
-from suetes.shared.artifacts import save_plot_dataset
+from suetes.shared.experiment import save_plot_dataset
 
 
 CONSTANTS = {"g": 9.81, "cp": 1004.0, "Rd": 287.0, "cvd": 717.0, "p0": 100_000.0, "epsilon": 0.622}

@@ -29,7 +29,7 @@ from experiments._shared.neuve_coordinate import (
     terrains_from_dataset,
 )
 from suetes.shared.transforms import GalChenSigma, SleveSimple
-from suetes.shared.artifacts import figure_dir_for, resolve_data_dir, save_plot_dataset
+from suetes.shared.experiment import figure_dir_for, resolve_data_dir, save_plot_dataset
 
 
 def main():

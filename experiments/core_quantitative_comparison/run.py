@@ -15,7 +15,7 @@ from suetes.regional3d.operators import CGridOperator3D
 from suetes.regional3d.euler import Euler3D
 from suetes.regional3d.steppers import build_dynamical_core
 from suetes.shared.driver import Simulation
-from suetes.shared.artifacts import ArtifactLayout, save_plot_dataset
+from suetes.shared.experiment import save_plot_dataset, add_experiment_args, setup_experiment_directories
 
 
 def compute_metrics(state, grid):
@@ -157,19 +157,10 @@ def run_quantitative_study(core_type, dt, t_end=600.0, dx=50.0):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Compare dual-core quantitative diagnostics")
-    parser.add_argument("--output-root", type=Path, default=Path("output"))
-    parser.add_argument("--name", default="default")
-    parser.add_argument("--output-dir", type=Path)
+    add_experiment_args(parser)
     parser.add_argument("--no-render", action="store_true")
     args = parser.parse_args()
-    if args.output_dir is None:
-        layout = ArtifactLayout(
-            kind="experiments", case="core_quantitative_comparison", execution=args.name, output_root=args.output_root
-        ).create()
-        data_dir, figure_dir = layout.data, layout.figures
-    else:
-        data_dir = figure_dir = args.output_dir
-        data_dir.mkdir(parents=True, exist_ok=True)
+    data_dir, figure_dir = setup_experiment_directories(args, kind="experiments", case="core_quantitative_comparison")
 
     t_end = 600.0
     dx = 50.0
