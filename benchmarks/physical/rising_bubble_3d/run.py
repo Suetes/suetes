@@ -432,18 +432,9 @@ def parse_args() -> argparse.Namespace:
         "--stabilization", type=float, default=0.0, help="Common nu_h_factor and nu_div_factor for both cores"
     )
     parser.add_argument("--reuse", action="store_true", help="Reuse matching NPZ files")
-    parser.add_argument(
-        "--output-root",
-        type=Path,
-        default=DEFAULT_OUTPUT_ROOT,
-        help="Root containing benchmark, experiment, run, and verification bundles",
-    )
-    add_experiment_args(parser)
+    add_experiment_args(parser, default_output_root=DEFAULT_OUTPUT_ROOT)
     parser.add_argument(
         "--no-render", action="store_true", help="Only produce numerical artifacts; render them in a separate command"
-    )
-    parser.add_argument(
-        "--output-dir", type=Path, help="Explicit bundle directory (legacy override of --output-root and --name)"
     )
     parser.add_argument("--worker-core", choices=("sisl", "split-explicit"), help=argparse.SUPPRESS)
     parser.add_argument("--worker-output", type=Path, help=argparse.SUPPRESS)
@@ -462,16 +453,9 @@ def main() -> None:
         )
         return
 
-    if args.output_dir is None:
-        layout = ExperimentLayout(
-            kind="benchmarks", case="rising_bubble_3d", execution=args.name, output_root=args.output_root
-        ).create()
-        data_dir = layout.data
-        figure_dir = layout.figures
-    else:
-        # Preserve the old flat --output-dir contract during the pilot.
-        data_dir = args.output_dir
-        figure_dir = args.output_dir
+    data_dir, figure_dir = setup_experiment_directories(
+        args, kind="benchmarks", case="rising_bubble_3d"
+    )
 
     paths = {
         core: result_path(data_dir, core, args.dx, dt, args.t_end, args.stabilization, args.snapshot_interval)

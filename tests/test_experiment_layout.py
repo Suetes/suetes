@@ -134,7 +134,9 @@ def test_rising_bubble_renderer_consumes_artifact(tmp_path: Path) -> None:
     outputs = renderer.render(layout.root)
 
     assert outputs == [
-        layout.figures / "comparison.png",
+        layout.figures / "rising_bubble_sisl_main.png",
+        layout.figures / "rising_bubble_split_explicit_main.png",
+        layout.figures / "rising_bubble_difference_main.png",
         layout.figures / "evolution.png",
     ]
     assert all(path.is_file() for path in outputs)

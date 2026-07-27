@@ -3,11 +3,14 @@
 """Train spatial NEUVE for one of the supported physical objectives."""
 
 import argparse
+import json
 import os
 import sys
 import time
+from pathlib import Path
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
+os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
 
 import jax
 
@@ -18,6 +21,7 @@ import numpy as np
 import optax
 
 from experiments._shared.neuve_coordinate import (
+    GENERATOR_VERSION,
     TARGET_DEFAULTS,
     dataset_target,
     load_dataset,
@@ -205,6 +209,22 @@ def main():
         target=target,
         steps=steps,
     )
+    with open(
+        os.path.join(args.output_dir, "training_complete.json"), "w"
+    ) as stream:
+        json.dump(
+            {
+                "generator_version": GENERATOR_VERSION,
+                "target": target,
+                "terrain_family": dataset["terrain_family"],
+                "seeds": dataset["seeds"],
+                "steps": steps,
+                "epochs": args.epochs,
+                "best_objective": best_loss,
+            },
+            stream,
+            indent=2,
+        )
     if not args.no_render:
         fig, axes = plt.subplots(1, 2, figsize=(9.0, 3.6))
         epoch = np.asarray(history["epoch"])

@@ -1,100 +1,228 @@
-# Suetes
+# Suêtes
 
-**Suetes** is a high-performance, differentiable, non-hydrostatic atmospheric fluid dynamics solver written in **JAX**.
+Suêtes is a differentiable, fully compressible, nonhydrostatic limited-area
+atmospheric model written in [JAX](https://github.com/jax-ml/jax). It is
+designed for convection-permitting simulation, numerical verification,
+adjoint sensitivity analysis, inverse problems, and learned components of the
+discretization.
 
-It implements the fully compressible Euler equations on an **Arakawa C-grid** using **Terrain-Following Coordinates**. The codebase supports both a 2D vertical slice model and a full 3D regional model, featuring a dual-dynamical core architecture: a **Semi-Implicit Semi-Lagrangian (SISL)** solver for large-timestep coarse runs, and a strictly Eulerian **Split-Explicit Runge-Kutta** solver for convection-permitting high-resolution runs.
+The model uses terrain-following coordinates and an Arakawa C grid. Two
+three-dimensional dynamical cores expose the same model state and operators:
 
-Because it is built entirely in JAX, the dynamical cores are end-to-end differentiable and fully fused by XLA, making it ideal for machine learning integration (e.g., neural closures, hybrid modeling, data assimilation, and learned coordinate transformations).
+- a split-explicit Eulerian core with acoustic substepping; and
+- a semi-implicit semi-Lagrangian (SISL) core with a matrix-free GMRES solve.
 
----
+Both paths support reverse-mode differentiation. The SISL pressure solve uses
+a custom linear-solve adjoint, while long explicit trajectories can use
+gradient checkpointing to trade computation for memory.
 
-##  Features
+> [!NOTE]
+> Suêtes is research software. The repository contains validation cases and
+> real-data demonstrations, but it is not an operational forecasting system.
 
-###  Dynamics & Numerics
-* **Dual Dynamical Cores:** Support for two runtime-selectable dynamical cores:
-    * **Semi-Implicit Semi-Lagrangian (SISL):** 2nd-order time integration using midpoint trajectory and tendency extrapolation, bypassing explicit acoustic and advective CFL limits for highly efficient coarse simulations ($\ge 10$~km).
-    * **Eulerian Split-Explicit Runge-Kutta:** strictly Eulerian split-explicit scheme handling small-scale nonlinearities exceptionally well, optimal for high-resolution convection-permitting simulations ($\le 3$~km).
-* **Spatial Discretization:** Arakawa C-Grid for optimal dispersion properties.
-* **Advection:**
-    * Optimized 3D Tricubic and 2D Bicubic Semi-Lagrangian advection.
-    * **Flux-Form Semi-Lagrangian (FFSL)** scheme for exact mass conservation of tracers and density.
-    * **Quasi-Monotone Limiters** to prevent unphysical undershoots in tracer transport.
-* **Implicit Solver:** JAX-native GMRES solver for the 2D/3D Helmholtz acoustic problem.
-* **Simulation Driver:** High-level `Simulation` class for managed integration loops, JIT compilation, and chunked execution.
-* **Stabilization:** Configurable Davies sponge lateral boundaries, Rayleigh damping at the model top, and divergence damping for acoustic modes.
+## What is included
 
-###  Differentiable Science & ML Integration
-* **Reverse-Mode AD:** Full support for backpropagating through the entire 3D dynamical core, including the implicit GMRES solver and Semi-Lagrangian trajectories.
-* **Adjoint Modeling:** Calculate sensitivities of downstream states (e.g., kinetic energy) to initial conditions or boundary forcing.
-* **Inverse Problems:** Optimize terrain profiles or physical parameters to match target observations.
-* **Neural Closures:** Integrate Flax-based neural networks directly into the physics suite for learned subgrid-scale (SGS) parameterizations.
-* **Checkpointing:** Native support for `jax.checkpoint` (Rematerialization) to handle long-horizon adjoint sensitivity runs within memory constraints.
+- Dry, fully compressible nonhydrostatic dynamics in two-dimensional slices
+  and three-dimensional regional domains.
+- Gal--Chen, SLEVE, stretched SLEVE, and neural NEUVE vertical coordinates.
+- Semi-Lagrangian and flux-form tracer transport with monotonicity controls.
+- Kessler warm-rain microphysics and optional Smagorinsky--Lilly turbulence.
+- Davies lateral relaxation, Rayleigh upper damping, numerical diffusion, and
+  divergence damping.
+- ERA5 preprocessing and time-dependent limited-area boundary forcing.
+- JAX-native optimization, adjoint sensitivities, Taylor tests, and inverse
+  modeling examples.
+- Self-describing NetCDF plot artifacts, allowing figures to be regenerated
+  without repeating expensive simulations.
 
----
+Representative cases include rising thermals, Schär mountain waves,
+Weisman--Klemp squall lines, tracer-source and terrain inversion, learned
+vertical coordinates, and an adjoint-directed Wreckhouse wind scenario.
 
-## Scientific Lineage & Theoretical Foundations
+## Installation
 
-Suetes is built upon decades of research in Semi-Implicit Semi-Lagrangian (SISL) atmospheric modeling. While modernized for GPU execution via JAX, its architectural DNA traces back to several seminal models and papers:
+Clone the repository and create an isolated environment:
 
-* **Core Architecture (CRCM & MC2):** The fully elastic, non-hydrostatic Euler equations solved in perturbation form on a limited-area domain directly mirror the Canadian Regional Climate Model (CRCM) (Caya and Laprise, 1999) and the Mesoscale Compressible Community (MC2) model (Tanguay et al., 1990).
-* **SISL Formulation:** The implicit stabilization of acoustic and gravity waves draws heavily from the principles outlined by Wood et al. (2013), adapted here for a shallow-atmosphere regional framework.
-* **Mass Conservation (FFSL):** To solve the classic mass-leakage problem of standard SL advection, Suetes uses a split Flux-Form Semi-Lagrangian scheme inspired by the Cell-Integrated Semi-Lagrangian (CISL) method (Kaas, 2008).
-* **Vertical Coordinates:** The model utilizes the SLEVE (Smooth LEvel VErtical) coordinate (Schär et al., 2002) to minimize truncation errors over steep topography.
-* **Helmholtz Preconditioning:** The vertical tridiagonal preconditioner applied before the GMRES solve is heavily inspired by the non-hydrostatic formulation of the Canadian GEM model (Yeh et al., 2002).
-
----
-
-## Quickstart
-
-### 1. Forward Simulation (ERA5 Driven)
-Run a real-world regional simulation over Wreckhouse using ERA5 boundary conditions. This requires a three-step configuration-driven workflow:
-* **Preprocess boundary conditions** (download ERA5 and terrain raw data, compile Zarr boundary stores):
 ```bash
-python runs/preprocess.py --config configs/wreckhouse25_config.yaml
-```
-* **Execute the forward run** (integrated via JIT compiled core and save results):
-```bash
-python runs/run_simulation.py --config configs/wreckhouse25_config.yaml
-```
-* **Render output fields** (generate figures beside the run artifact):
-```bash
-python runs/render.py --config configs/wreckhouse25_config.yaml
+git clone <repository-url> suetes
+cd suetes
+python3 -m venv .venv
+.venv/bin/python3 -m pip install --upgrade pip
+.venv/bin/python3 -m pip install -e .
 ```
 
-### 2. Adjoint Sensitivity Analysis
-Calculate the sensitivity of 3D wave energy with respect to the initial wind perturbation at $t=0$. This demonstrates the core's ability to propagate gradients backward through the solver.
+JAX installation is platform dependent. For GPU execution, install the JAX
+wheel appropriate for the installed CUDA version by following the
+[official JAX installation guide](https://docs.jax.dev/en/latest/installation.html),
+then install Suêtes with `pip install -e .`.
+
+Confirm the installation with:
+
 ```bash
-python experiments/simulation_adjoint/run.py
-python experiments/schaer_optimal_perturbation/run.py
+.venv/bin/python3 -m pytest -q
 ```
 
-### 3. Inverse Topography Optimization
-Optimize a 3D terrain profile to maximize the generation of gravity waves downstream, illustrating how the core can be used for "Atmospheric Engineering" and inverse modeling.
+Large three-dimensional examples require an NVIDIA GPU with substantial
+memory. Smaller verification and plotting programs can be run independently.
+
+## Quick start
+
+### Physical benchmark
+
+Run and render the two-core rising-bubble comparison:
+
 ```bash
-python experiments/gravity_wave_optimal_topography/run.py
+.venv/bin/python3 benchmarks/physical/rising_bubble_3d/run.py \
+  --dx 50 --dt 1 --t-end 600 \
+  --output-root output --name quickstart
+
+.venv/bin/python3 benchmarks/physical/rising_bubble_3d/render.py \
+  output/benchmarks/rising_bubble_3d/quickstart
 ```
 
-## Repository organization
+### Inverse problem
 
-- `runs/`: operational ERA5 coupling, simulation, and rendering workflows.
-- `experiments/`: paper-specific science, inverse problems, and sensitivities.
-- `benchmarks/`: reusable physical cases and performance measurements.
-- `verification/`: numerical consistency and convergence programs.
-- `tests/`: automated pytest regression tests.
+Optimize eight terrain-basis amplitudes to alter a downstream gravity-wave
+diagnostic:
 
-## Artifact and rendering contract
+```bash
+.venv/bin/python3 experiments/gravity_wave_optimal_topography/run.py \
+  split-explicit --output-root output --name quickstart
 
-Benchmarks, experiments, operational runs, and numerical verification use the
-same execution-bundle structure:
+.venv/bin/python3 experiments/gravity_wave_optimal_topography/render.py \
+  output/experiments/gravity_wave_optimal_topography/quickstart
+```
+
+### ERA5-driven regional run
+
+The configuration-driven workflow separates preprocessing, integration, and
+rendering:
+
+```bash
+.venv/bin/python3 runs/preprocess.py \
+  --config configs/wreckhouse25_config.yaml
+
+.venv/bin/python3 runs/run_simulation.py \
+  --config configs/wreckhouse25_config.yaml
+
+.venv/bin/python3 runs/render.py \
+  --config configs/wreckhouse25_config.yaml
+```
+
+ERA5 downloads require a configured CDS API account. Static and atmospheric
+input data are stored below `inputs/`, not in the output tree.
+
+## Reproducing the manuscript experiments
+
+[`paper_suite.toml`](paper_suite.toml) is the authoritative manifest for the
+forward benchmarks, inverse problems, sensitivities, learned-coordinate
+experiment, and appendix verification studies used by the manuscript. The
+runner executes cases serially and stores all new results below
+`output/paper/`.
+
+Inspect the suite:
+
+```bash
+.venv/bin/python3 scripts/run_paper_suite.py list
+.venv/bin/python3 scripts/run_paper_suite.py status
+.venv/bin/python3 scripts/run_paper_suite.py all --dry-run
+```
+
+Run the main-table and appendix cases:
+
+```bash
+.venv/bin/python3 scripts/run_paper_suite.py all --group table
+.venv/bin/python3 scripts/run_paper_suite.py all --group appendix
+```
+
+Run or render an individual case:
+
+```bash
+.venv/bin/python3 scripts/run_paper_suite.py run squall_forward
+.venv/bin/python3 scripts/run_paper_suite.py render squall_forward
+```
+
+Completed stages are skipped unless `--force` is supplied. Each stage records
+its command, console log, return code, timestamps, and Git commit. The output
+root also receives the exact manifest and its checksum. See
+[`docs/paper_suite.md`](docs/paper_suite.md) for details.
+
+## Output and rendering contract
+
+Benchmarks, experiments, runs, and verification studies use execution bundles:
 
 ```text
 output/<kind>/<case>/<execution>/
 ├── data/
+│   ├── artifact.nc
+│   ├── artifact.json
+│   └── checkpoints, histories, or diagnostic tables
 └── figures/
 ```
 
-Model and optimization entry points support data-only execution, normally via
-`--no-render`. Standalone renderers consume the saved artifact and write to the
-sibling `figures/` directory, so plots can be regenerated without rerunning an
-expensive model. Some older entry points still render by default for command
-compatibility; the case READMEs document those flags.
+The NetCDF artifacts contain the reduced fields and diagnostics required by
+the corresponding figures. JSON sidecars record provenance. They are
+plot-ready products rather than complete restart states.
+
+Where supported, `--no-render` performs only the expensive computation.
+Standalone `render.py` programs accept either an execution bundle or its
+primary artifact. This separation makes plotting reproducible and permits
+collaborators to regenerate figures without the model or a GPU.
+
+## Repository layout
+
+```text
+suetes/
+├── suetes/          # model implementation
+│   ├── regional3d/  # three-dimensional dynamics and operators
+│   ├── slice2d/     # two-dimensional slice model
+│   ├── physics/     # microphysics, turbulence, and other physics
+│   ├── preprocessing/
+│   └── shared/      # configuration, drivers, transforms, and artifacts
+├── benchmarks/      # reusable physical and performance benchmarks
+├── experiments/     # inversions, sensitivities, and learned methods
+├── verification/    # convergence and adjoint-consistency studies
+├── runs/            # ERA5-driven regional workflows
+├── configs/         # regional-run configurations
+├── tests/           # automated regression tests
+├── scripts/         # repository-level orchestration
+└── paper_suite.toml # manuscript experiment manifest
+```
+
+The distinction is intentional:
+
+- `benchmarks/` contains reusable physical cases and performance measurements;
+- `verification/` tests numerical consistency and convergence;
+- `experiments/` answers scientific or differentiable-modeling questions; and
+- `runs/` contains externally forced regional workflows.
+
+## Differentiable workflows
+
+Any scalar functional constructed from a simulated trajectory can, subject to
+the differentiability of the selected parameterizations, be differentiated
+with respect to model inputs. Existing examples demonstrate gradients with
+respect to:
+
+- initial potential temperature and water vapor;
+- tracer-source location and amplitude;
+- terrain-basis coefficients;
+- upstream thermal perturbations; and
+- neural vertical-coordinate parameters.
+
+Taylor remainder tests are included in the verification and sensitivity
+programs to compare the adjoint directional derivative with centered nonlinear
+perturbations. These checks are important whenever a new differentiated
+objective, model component, or control variable is introduced.
+
+## Scientific background
+
+The limited-area, fully elastic formulation follows the lineage of Canadian
+nonhydrostatic regional models including MC2, CRCM, and GEM. The coordinate and
+transport options build on Gal--Chen terrain-following coordinates, SLEVE, and
+conservative semi-Lagrangian methods. The repository’s experiments extend
+these methods with automatic differentiation and PDE-supervised neural
+coordinate discovery.
+
+For exact equations, numerical choices, experiment configurations, and
+literature citations, consult the manuscript and the case-specific source and
+documentation in `benchmarks/`, `experiments/`, and `verification/`.

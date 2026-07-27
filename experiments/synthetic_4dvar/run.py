@@ -22,14 +22,9 @@ parser = argparse.ArgumentParser(description="Run the synthetic 4D-Var experimen
 add_experiment_args(parser)
 parser.add_argument("--no-render", action="store_true")
 args = parser.parse_args()
-if args.output_dir is None:
-    layout = ExperimentLayout(
-        kind="experiments", case="synthetic_4dvar", execution=args.name, output_root=args.output_root
-    ).create()
-    data_dir, figure_dir = layout.data, layout.figures
-else:
-    data_dir = figure_dir = args.output_dir
-    data_dir.mkdir(parents=True, exist_ok=True)
+data_dir, figure_dir = setup_experiment_directories(
+    args, kind="experiments", case="synthetic_4dvar"
+)
 
 # =====================================================================
 # CONFIGURATION

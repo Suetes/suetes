@@ -12,6 +12,7 @@ from suetes.regional3d.euler import Euler3D
 from suetes.regional3d.geometry import RegionalGrid3D
 from suetes.regional3d.operators import CGridOperator3D
 from suetes.regional3d.steppers import build_dynamical_core
+from suetes.shared.experiment import save_plot_dataset, add_experiment_args, setup_experiment_directories
 
 import argparse
 import math
@@ -22,8 +23,6 @@ import sys
 
 import numpy as np
 import xarray as xr
-from suetes.shared.experiment import save_plot_dataset, add_experiment_args, setup_experiment_directories
-
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_OUTPUT_ROOT = REPO_ROOT / "output"
@@ -50,7 +49,17 @@ def result_path(output_dir, core, dx, dz, dt, t_end, stabilization, snapshot_int
     )
 
 
-def run_core(core, dx, dz, dt, t_end, stabilization, snapshot_interval, output):
+def run_core(
+    core,
+    dx,
+    dz,
+    dt,
+    t_end,
+    stabilization,
+    snapshot_interval,
+    internal_chunk_seconds,
+    output,
+):
 
     nx = round(DOMAIN_X / dx)
     nz = round(DOMAIN_Z / dz)
@@ -140,7 +149,7 @@ def run_core(core, dx, dz, dt, t_end, stabilization, snapshot_interval, output):
         next_state = stepper.step(current_state, step_index * actual_dt, forcing=None, bc_fn=boundary_conditions)
         return next_state, jnp.max(jnp.abs(next_state["w"]))
 
-    target_chunk_steps = max(1, round(200.0 / actual_dt))
+    target_chunk_steps = max(1, round(internal_chunk_seconds / actual_dt))
     chunk_steps = math.gcd(snapshot_steps, target_chunk_steps)
     chunks_per_snapshot = snapshot_steps // chunk_steps
 
@@ -387,16 +396,19 @@ def parse_args():
     parser.add_argument("--dt", type=float, default=4.0)
     parser.add_argument("--t-end", type=float, default=7200.0)
     parser.add_argument("--snapshot-interval", type=float, default=1800.0)
+    parser.add_argument(
+        "--internal-chunk-seconds",
+        type=float,
+        default=100.0,
+        help=(
+            "Duration compiled into each JAX scan. This affects compilation "
+            "and launch overhead only, not the numerical integration."
+        ),
+    )
     parser.add_argument("--comparison-time", type=float)
     parser.add_argument("--stabilization", type=float, default=0.0)
     parser.add_argument("--reuse", action="store_true")
-    parser.add_argument(
-        "--output-root",
-        type=Path,
-        default=DEFAULT_OUTPUT_ROOT,
-        help="Root containing benchmark, experiment, run, and verification bundles",
-    )
-    add_experiment_args(parser)
+    add_experiment_args(parser, default_output_root=DEFAULT_OUTPUT_ROOT)
     parser.add_argument("--no-render", action="store_true")
     parser.add_argument("--worker-core", choices=("sisl", "split-explicit"), help=argparse.SUPPRESS)
     parser.add_argument("--worker-output", type=Path, help=argparse.SUPPRESS)
@@ -416,19 +428,14 @@ def main():
             args.t_end,
             args.stabilization,
             args.snapshot_interval,
+            args.internal_chunk_seconds,
             args.worker_output,
         )
         return
 
-    if args.output_dir is None:
-        layout = ExperimentLayout(
-            kind="benchmarks", case="schaer_mountain_3d", execution=args.name, output_root=args.output_root
-        ).create()
-        data_dir = layout.data
-        figure_dir = layout.figures
-    else:
-        data_dir = args.output_dir
-        figure_dir = args.output_dir
+    data_dir, figure_dir = setup_experiment_directories(
+        args, kind="benchmarks", case="schaer_mountain_3d"
+    )
 
     paths = {
         core: result_path(
@@ -461,6 +468,8 @@ def main():
             str(args.t_end),
             "--snapshot-interval",
             str(args.snapshot_interval),
+            "--internal-chunk-seconds",
+            str(args.internal_chunk_seconds),
             "--stabilization",
             str(args.stabilization),
         ]

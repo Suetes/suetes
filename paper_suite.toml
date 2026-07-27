@@ -1,0 +1,482 @@
+version = 1
+
+# Commands are argument arrays, not shell strings. Available placeholders are
+# {python}, {repo}, and {output_root}. Stages are skipped when all declared
+# outputs exist, unless the runner is invoked with --force.
+
+[[case]]
+id = "rising_bubble"
+group = "table"
+description = "High-resolution dual-core rising thermal bubble"
+
+[[case.stage]]
+name = "simulate"
+kind = "run"
+command = [
+  "{python}", "benchmarks/physical/rising_bubble_3d/run.py",
+  "--dx", "25", "--dt", "0.5", "--t-end", "750",
+  "--snapshot-interval", "150", "--stabilization", "0.05",
+  "--output-root", "{output_root}", "--name", "paper", "--no-render",
+]
+outputs = ["{output_root}/benchmarks/rising_bubble_3d/paper/data/artifact.nc"]
+
+[[case.stage]]
+name = "render"
+kind = "render"
+command = [
+  "{python}", "benchmarks/physical/rising_bubble_3d/render.py",
+  "{output_root}/benchmarks/rising_bubble_3d/paper/data/artifact.nc",
+  "--output-dir", "{output_root}/benchmarks/rising_bubble_3d/paper/figures",
+]
+outputs = [
+  "{output_root}/benchmarks/rising_bubble_3d/paper/figures/rising_bubble_difference_main.png",
+  "{output_root}/benchmarks/rising_bubble_3d/paper/figures/evolution.png",
+]
+
+[[case]]
+id = "schaer_waves"
+group = "table"
+description = "High-resolution dual-core Schär mountain waves"
+
+[[case.stage]]
+name = "simulate"
+kind = "run"
+command = [
+  "{python}", "benchmarks/physical/schaer_mountain_3d/run.py",
+  "--dx", "250", "--dz", "200", "--dt", "2", "--t-end", "3600",
+  "--snapshot-interval", "900", "--internal-chunk-seconds", "20",
+  "--output-root", "{output_root}", "--name", "paper", "--no-render",
+]
+outputs = ["{output_root}/benchmarks/schaer_mountain_3d/paper/data/artifact.nc"]
+
+[[case.stage]]
+name = "render"
+kind = "render"
+command = [
+  "{python}", "benchmarks/physical/schaer_mountain_3d/render.py",
+  "{output_root}/benchmarks/schaer_mountain_3d/paper/data/artifact.nc",
+  "--output-dir", "{output_root}/benchmarks/schaer_mountain_3d/paper/figures",
+]
+outputs = [
+  "{output_root}/benchmarks/schaer_mountain_3d/paper/figures/schaer_mountain_difference_main.png",
+]
+
+[[case]]
+id = "optimal_topography"
+group = "table"
+description = "Eight-parameter gravity-wave topography inversion"
+
+[[case.stage]]
+name = "optimize"
+kind = "run"
+command = [
+  "{python}", "experiments/gravity_wave_optimal_topography/run.py",
+  "split-explicit", "--output-root", "{output_root}", "--name", "paper",
+]
+outputs = [
+  "{output_root}/experiments/gravity_wave_optimal_topography/paper/data/gravity_wave_optimal_topography_split-explicit.nc",
+]
+
+[[case.stage]]
+name = "render"
+kind = "render"
+command = [
+  "{python}", "experiments/gravity_wave_optimal_topography/render.py",
+  "{output_root}/experiments/gravity_wave_optimal_topography/paper/data/gravity_wave_optimal_topography_split-explicit.nc",
+  "--output-dir", "{output_root}/experiments/gravity_wave_optimal_topography/paper/figures",
+]
+outputs = [
+  "{output_root}/experiments/gravity_wave_optimal_topography/paper/figures/inverse_topography_evolution_split-explicit.png",
+  "{output_root}/experiments/gravity_wave_optimal_topography/paper/figures/inverse_topography_validation_split-explicit.png",
+]
+
+[[case]]
+id = "tracer_inversion"
+group = "table"
+description = "Complex 3-D tracer-source inversion with both cores"
+
+[[case.stage]]
+name = "split_explicit"
+kind = "run"
+command = [
+  "{python}", "experiments/tracer_inversion_3d_complex/run.py",
+  "--core", "split-explicit", "--steps", "100",
+  "--output-root", "{output_root}", "--name", "paper-se",
+]
+outputs = [
+  "{output_root}/experiments/tracer_inversion_3d_complex/paper-se/data/tracer_inversion_3d_complex_split-explicit.nc",
+]
+
+[[case.stage]]
+name = "sisl"
+kind = "run"
+command = [
+  "{python}", "experiments/tracer_inversion_3d_complex/run.py",
+  "--core", "sisl", "--steps", "100",
+  "--output-root", "{output_root}", "--name", "paper-sisl",
+]
+outputs = [
+  "{output_root}/experiments/tracer_inversion_3d_complex/paper-sisl/data/tracer_inversion_3d_complex_sisl.nc",
+]
+
+[[case.stage]]
+name = "render_split_explicit"
+kind = "render"
+command = [
+  "{python}", "experiments/tracer_inversion_3d_complex/render.py",
+  "{output_root}/experiments/tracer_inversion_3d_complex/paper-se/data/tracer_inversion_3d_complex_split-explicit.nc",
+  "--output-dir", "{output_root}/experiments/tracer_inversion_3d_complex/paper-se/figures",
+]
+outputs = [
+  "{output_root}/experiments/tracer_inversion_3d_complex/paper-se/figures/tracer_3d_complex_plume_split-explicit.png",
+  "{output_root}/experiments/tracer_inversion_3d_complex/paper-se/figures/tracer_3d_complex_optimization_split-explicit.png",
+  "{output_root}/experiments/tracer_inversion_3d_complex/paper-se/figures/tracer_3d_complex_sensors_split-explicit.png",
+]
+
+[[case.stage]]
+name = "render_sisl"
+kind = "render"
+command = [
+  "{python}", "experiments/tracer_inversion_3d_complex/render.py",
+  "{output_root}/experiments/tracer_inversion_3d_complex/paper-sisl/data/tracer_inversion_3d_complex_sisl.nc",
+  "--output-dir", "{output_root}/experiments/tracer_inversion_3d_complex/paper-sisl/figures",
+]
+outputs = [
+  "{output_root}/experiments/tracer_inversion_3d_complex/paper-sisl/figures/tracer_3d_complex_plume_sisl.png",
+  "{output_root}/experiments/tracer_inversion_3d_complex/paper-sisl/figures/tracer_3d_complex_optimization_sisl.png",
+  "{output_root}/experiments/tracer_inversion_3d_complex/paper-sisl/figures/tracer_3d_complex_sensors_sisl.png",
+]
+
+[[case]]
+id = "squall_forward"
+group = "table"
+description = "Publication-resolution three-dimensional squall line"
+
+[[case.stage]]
+name = "simulate"
+kind = "run"
+command = [
+  "{python}", "experiments/squall_line_3d/run.py",
+  "--dx", "312.5", "--dz", "250", "--dt", "0.375",
+  "--chunk-seconds", "30", "--diffusivity", "33.33",
+  "--tracer-diffusivity", "0", "--divergence-damping", "0",
+  "--output-dir", "{output_root}/experiments/squall_line_3d/paper/data",
+]
+outputs = ["{output_root}/experiments/squall_line_3d/paper/data/artifact.nc"]
+
+[[case.stage]]
+name = "render"
+kind = "render"
+command = [
+  "{python}", "experiments/squall_line_3d/render.py",
+  "{output_root}/experiments/squall_line_3d/paper/data/artifact.nc",
+  "--output-dir", "{output_root}/experiments/squall_line_3d/paper/figures",
+]
+outputs = [
+  "{output_root}/experiments/squall_line_3d/paper/figures/squall_line_3d.png",
+]
+
+[[case]]
+id = "squall_sensitivity"
+group = "table"
+description = "Coarse-grid precipitation sensitivity and Taylor tests"
+
+[[case.stage]]
+name = "differentiate"
+kind = "run"
+command = [
+  "{python}", "experiments/squall_line_3d/sensitivity.py",
+  "--dx", "1000", "--dz", "1000", "--dt", "0.5",
+  "--spinup-end", "6600", "--window-end", "6750",
+  "--diffusivity", "33.33", "--tracer-diffusivity", "0",
+  "--divergence-damping", "0",
+  "--output-dir", "{output_root}/experiments/squall_line_3d_sensitivity/paper/data",
+]
+outputs = [
+  "{output_root}/experiments/squall_line_3d_sensitivity/paper/data/sensitivity.nc",
+]
+
+[[case.stage]]
+name = "render"
+kind = "render"
+command = [
+  "{python}", "experiments/squall_line_3d/render_sensitivity.py",
+  "{output_root}/experiments/squall_line_3d_sensitivity/paper/data/sensitivity.nc",
+  "--output-dir", "{output_root}/experiments/squall_line_3d_sensitivity/paper/figures",
+]
+outputs = [
+  "{output_root}/experiments/squall_line_3d_sensitivity/paper/figures/squall_precipitation_sensitivity_maps.png",
+  "{output_root}/experiments/squall_line_3d_sensitivity/paper/figures/squall_precipitation_sensitivity_sections.png",
+  "{output_root}/experiments/squall_line_3d_sensitivity/paper/figures/squall_precipitation_taylor_tests.png",
+]
+
+[[case]]
+id = "wreckhouse"
+group = "table"
+description = "Adjoint-directed adverse Wreckhouse wind scenario"
+
+[[case.stage]]
+name = "simulate_and_differentiate"
+kind = "run"
+command = [
+  "{python}", "runs/wreckhouse_worst_case.py",
+  "--output-dir", "{output_root}/runs/wreckhouse_worst_case/paper/data",
+]
+outputs = [
+  "{output_root}/runs/wreckhouse_worst_case/paper/data/wreckhouse_worst_case_feb2025_plot_data.nc",
+]
+
+[[case.stage]]
+name = "render"
+kind = "render"
+command = [
+  "{python}", "runs/plot_wreckhouse_worst_case.py",
+  "{output_root}/runs/wreckhouse_worst_case/paper/data/wreckhouse_worst_case_feb2025_plot_data.nc",
+  "--output", "{output_root}/runs/wreckhouse_worst_case/paper/figures/wreckhouse_worst_case_feb2025_dashboard.png",
+]
+outputs = [
+  "{output_root}/runs/wreckhouse_worst_case/paper/figures/wreckhouse_worst_case_feb2025_dashboard.png",
+]
+
+[[case]]
+id = "neuve_pgf"
+group = "table"
+description = "PGF-trained NEUVE with tuned SLEVE and held-out evaluation"
+
+[[case.stage]]
+name = "train_neuve"
+kind = "run"
+command = [
+  "{python}", "experiments/neuve_coordinates/train.py",
+  "--target", "pgf_rest", "--terrain-family", "multiscale3d",
+  "--seeds", "100,101,102,103,104,105,106,107,108,109",
+  "--epochs", "90", "--minimum-layer-m", "150",
+  "--output-root", "{output_root}", "--name", "paper", "--no-render",
+]
+outputs = [
+  "{output_root}/experiments/neuve_coordinates/paper/data/neuve_coordinate.npz",
+  "{output_root}/experiments/neuve_coordinates/paper/data/training_dataset.json",
+  "{output_root}/experiments/neuve_coordinates/paper/data/neuve_training_history.npz",
+  "{output_root}/experiments/neuve_coordinates/paper/data/training_complete.json",
+]
+
+[[case.stage]]
+name = "tune_sleve"
+kind = "run"
+command = [
+  "{python}", "experiments/neuve_coordinates/tune_sleve.py",
+  "--dataset", "{output_root}/experiments/neuve_coordinates/paper/data/training_dataset.json",
+  "--minimum-layer-m", "150",
+  "--output-dir", "{output_root}/experiments/neuve_coordinates/paper/data",
+  "--no-render",
+]
+outputs = [
+  "{output_root}/experiments/neuve_coordinates/paper/data/best_sleve.json",
+]
+
+[[case.stage]]
+name = "evaluate"
+kind = "run"
+command = [
+  "{python}", "experiments/neuve_coordinates/evaluate.py",
+  "--target", "pgf_rest", "--terrain-family", "multiscale3d",
+  "--seeds", "200,201,202,203,204,205,206,207,208,209",
+  "--output-root", "{output_root}", "--name", "paper", "--no-render",
+]
+outputs = [
+  "{output_root}/experiments/neuve_coordinates/paper/data/coordinate_evaluation.nc",
+]
+
+[[case.stage]]
+name = "render_training"
+kind = "render"
+command = [
+  "{python}", "experiments/neuve_coordinates/render_training.py",
+  "{output_root}/experiments/neuve_coordinates/paper",
+  "--output-dir", "{output_root}/experiments/neuve_coordinates/paper/figures",
+]
+outputs = [
+  "{output_root}/experiments/neuve_coordinates/paper/figures/neuve_training.png",
+  "{output_root}/experiments/neuve_coordinates/paper/figures/sleve_tuning.png",
+]
+
+[[case.stage]]
+name = "render_evaluation"
+kind = "render"
+command = [
+  "{python}", "experiments/neuve_coordinates/render_evaluation.py",
+  "{output_root}/experiments/neuve_coordinates/paper/data/coordinate_evaluation.nc",
+  "--output-dir", "{output_root}/experiments/neuve_coordinates/paper/figures",
+  "--plot-samples", "3",
+]
+outputs = [
+  "{output_root}/experiments/neuve_coordinates/paper/figures/coordinate_sample_gallery.png",
+]
+
+[[case]]
+id = "appendix_temporal"
+group = "appendix"
+description = "Fixed-grid temporal self-convergence"
+
+[[case.stage]]
+name = "verify"
+kind = "run"
+command = [
+  "{python}", "verification/temporal_core_convergence.py",
+  "--output-root", "{output_root}", "--name", "paper",
+]
+outputs = [
+  "{output_root}/verification/temporal_core_convergence/paper/data/summary.json",
+]
+
+[[case.stage]]
+name = "render"
+kind = "render"
+command = [
+  "{python}", "verification/render_temporal_core_convergence.py",
+  "{output_root}/verification/temporal_core_convergence/paper",
+]
+outputs = [
+  "{output_root}/verification/temporal_core_convergence/paper/figures/temporal_self_convergence.png",
+]
+
+[[case]]
+id = "appendix_smooth_modes"
+group = "appendix"
+description = "Acoustic, gravity, and tracer temporal self-convergence"
+
+[[case.stage]]
+name = "verify"
+kind = "run"
+command = [
+  "{python}", "verification/smooth_mode_core_convergence.py",
+  "--output-root", "{output_root}", "--name", "paper",
+]
+outputs = [
+  "{output_root}/verification/smooth_mode_core_convergence/paper/data/summary.json",
+]
+
+[[case.stage]]
+name = "render"
+kind = "render"
+command = [
+  "{python}", "verification/render_smooth_mode_convergence.py",
+  "{output_root}/verification/smooth_mode_core_convergence/paper",
+]
+outputs = [
+  "{output_root}/verification/smooth_mode_core_convergence/paper/figures/acoustic_temporal_self_convergence.png",
+  "{output_root}/verification/smooth_mode_core_convergence/paper/figures/gravity_temporal_self_convergence.png",
+  "{output_root}/verification/smooth_mode_core_convergence/paper/figures/tracer_temporal_self_convergence.png",
+]
+
+[[case]]
+id = "appendix_bubble_convergence"
+group = "appendix"
+description = "Short-horizon bubble self- and cross-core convergence"
+
+[[case.stage]]
+name = "verify"
+kind = "run"
+command = [
+  "{python}", "verification/rising_bubble_core_convergence.py",
+  "--output-root", "{output_root}", "--name", "paper",
+]
+outputs = [
+  "{output_root}/verification/rising_bubble_core_convergence/paper/data/summary.json",
+]
+
+[[case.stage]]
+name = "render"
+kind = "render"
+command = [
+  "{python}", "verification/render_short_bubble_convergence.py",
+  "{output_root}/verification/rising_bubble_core_convergence/paper",
+]
+outputs = [
+  "{output_root}/verification/rising_bubble_core_convergence/paper/figures/bubble_t24_self_convergence.png",
+  "{output_root}/verification/rising_bubble_core_convergence/paper/figures/bubble_t24_cross_core_convergence.png",
+  "{output_root}/verification/rising_bubble_core_convergence/paper/figures/bubble_t24_theta_self_convergence.png",
+]
+
+[[case]]
+id = "appendix_long_horizon"
+group = "appendix"
+description = "Long-horizon bubble cross-core refinement audit"
+
+[[case.stage]]
+name = "verify"
+kind = "run"
+command = [
+  "{python}", "verification/long_horizon_core_audit.py",
+  "--run",
+  "--output-root", "{output_root}", "--name", "paper",
+]
+outputs = [
+  "{output_root}/verification/long_horizon_core_audit/paper/data/metrics.csv",
+]
+
+[[case.stage]]
+name = "render"
+kind = "render"
+command = [
+  "{python}", "verification/render_long_horizon_core_audit.py",
+  "{output_root}/verification/long_horizon_core_audit/paper",
+]
+outputs = [
+  "{output_root}/verification/long_horizon_core_audit/paper/figures/long_horizon_convergence.png",
+  "{output_root}/verification/long_horizon_core_audit/paper/figures/cross_core_error_evolution.png",
+]
+
+[[case]]
+id = "appendix_adjoint_gradient"
+group = "appendix"
+description = "Adjoint Taylor test and temporal gradient convergence"
+
+[[case.stage]]
+name = "verify"
+kind = "run"
+command = [
+  "{python}", "verification/adjoint_gradient_convergence.py",
+  "--output-root", "{output_root}", "--name", "paper",
+]
+outputs = [
+  "{output_root}/verification/adjoint_gradient_convergence/paper/data/summary.json",
+]
+
+[[case.stage]]
+name = "render"
+kind = "render"
+command = [
+  "{python}", "verification/render_adjoint_gradient_convergence.py",
+  "--output-root", "{output_root}", "--name", "paper",
+]
+outputs = [
+  "{output_root}/verification/adjoint_gradient_convergence/paper/figures/adjoint_gradient_convergence.png",
+]
+
+[[case]]
+id = "appendix_gmres_adjoint"
+group = "appendix"
+description = "GMRES iteration sensitivity of the discrete adjoint"
+
+[[case.stage]]
+name = "verify"
+kind = "run"
+command = [
+  "{python}", "verification/gmres_adjoint_convergence.py",
+  "--output-root", "{output_root}", "--name", "paper",
+]
+outputs = [
+  "{output_root}/verification/gmres_adjoint_convergence/paper/data/summary.json",
+]
+
+[[case.stage]]
+name = "render"
+kind = "render"
+command = [
+  "{python}", "verification/render_gmres_adjoint_convergence.py",
+  "{output_root}/verification/gmres_adjoint_convergence/paper",
+]
+outputs = [
+  "{output_root}/verification/gmres_adjoint_convergence/paper/figures/gmres_adjoint_convergence.png",
+]

@@ -168,7 +168,7 @@ def create_state_with_tracer(x_km, y_km, z_km, amplitude):
         )
     )
 
-    return {
+    state = {
         "u": get_wind_u(grid.Z_u),
         "v": get_wind_v(grid.Z_v),
         "w": jnp.zeros((nx, ny, nz + 1)),
@@ -178,6 +178,27 @@ def create_state_with_tracer(x_km, y_km, z_km, amplitude):
         "th_v": bg_ref["th_v"],
         "q_tr": q_tr,
     }
+    # SISL uses two-time-level trajectory and tendency extrapolation. These
+    # fields must be present before entering lax.scan because a scan carry may
+    # not gain new dictionary keys on its first iteration. The core builder
+    # historically adds them in place to the state used to construct the
+    # stepper; optimization creates fresh parameter-dependent states afterward,
+    # so they need the same explicit initialization.
+    if CORE_TYPE.lower() == "sisl":
+        state.update(
+            {
+                "u_prev": state["u"],
+                "v_prev": state["v"],
+                "w_prev": state["w"],
+                "eta_dot_prev": state["eta_dot"],
+                "tend_th_v_prev": jnp.zeros_like(state["th_v"]),
+                "tend_q_tr_prev": jnp.zeros_like(state["q_tr"]),
+                "is_first_step": jnp.asarray(
+                    1.0, dtype=state["th_v"].dtype
+                ),
+            }
+        )
+    return state
 
 
 # --- 6. DISCRETE MONITORING TOWERS (SENSORS) ---

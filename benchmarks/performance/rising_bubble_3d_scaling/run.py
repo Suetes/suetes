@@ -279,7 +279,7 @@ def parse_args():
         "--timing-repeats", type=int, default=5, help="Repeated timed chunks used for the median (default: 5)"
     )
     parser.add_argument("--grid-sizes", type=int, nargs="+", default=(64, 96, 128, 160, 192))
-    add_experiment_args(parser)
+    add_experiment_args(parser, default_output_root=DEFAULT_OUTPUT_ROOT)
     return parser.parse_args()
 
 
@@ -294,16 +294,9 @@ def main():
         print(json.dumps(result, allow_nan=True))
         return
 
-    if args.output_dir is None:
-        output_dir = (
-            ExperimentLayout(
-                kind="benchmarks", case="rising_bubble_3d_scaling", execution=args.name, output_root=args.output_root
-            )
-            .create()
-            .data
-        )
-    else:
-        output_dir = args.output_dir
+    output_dir, _ = setup_experiment_directories(
+        args, kind="benchmarks", case="rising_bubble_3d_scaling"
+    )
 
     results = []
     output_path = None

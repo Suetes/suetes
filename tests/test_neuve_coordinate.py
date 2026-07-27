@@ -2,10 +2,21 @@
 
 import jax.numpy as jnp
 
-from suetes.shared.transforms import IntegralNeuralTransform, NEUVECoordinate
-from suetes.shared.transforms import GalChenSigma
 from experiments._shared.neuve_coordinate import (
-    build_transport_case, random_3d_terrain, transport_reversibility,
+    RESTING_N_BV,
+    build_case,
+    build_transport_case,
+    neuve_template,
+    random_3d_terrain,
+    transport_reversibility,
+)
+from experiments.neuve_coordinates.reachability_pipeline import (
+    DirectDensityCoordinate,
+)
+from suetes.shared.transforms import (
+    GalChenSigma,
+    IntegralNeuralTransform,
+    NEUVECoordinate,
 )
 
 
@@ -85,9 +96,55 @@ def test_reversible_transport_target_is_finite_and_mass_conservative():
 
 def test_reversible_transport_has_closed_lateral_boundaries():
     terrain = random_3d_terrain(17)
-    _, _, flow, _, _, _, _ = build_transport_case(
-        GalChenSigma(), terrain
-    )
+    _, _, flow, _, _, _, _ = build_transport_case(GalChenSigma(), terrain)
 
     assert float(jnp.max(jnp.abs(flow["u"][0]))) < 1.0e-6
     assert float(jnp.max(jnp.abs(flow["u"][-1]))) < 1.0e-6
+
+
+def test_matched_hydrostatic_reference_remains_at_rest():
+    _, state, stepper, boundary = build_case(
+        neuve_template(),
+        random_3d_terrain(17),
+        reference_n_bv=RESTING_N_BV,
+    )
+
+    next_state = stepper.step(state, 0.0, None, boundary)
+
+    assert jnp.max(jnp.abs(next_state["u"])) < 1.0e-6
+    assert jnp.max(jnp.abs(next_state["v"])) < 1.0e-6
+    assert jnp.max(jnp.abs(next_state["w"])) < 1.0e-6
+
+
+def test_direct_density_coordinate_has_exact_endpoints_and_positive_layers():
+    coordinate = DirectDensityCoordinate({"global": jnp.linspace(2.0, -2.0, 12)})
+    x = jnp.linspace(-2000.0, 2000.0, 5)
+    y = jnp.linspace(-1000.0, 1000.0, 3)
+    zeta = jnp.linspace(0.0, 16000.0, 33)
+    xi, _, zeta_3d = jnp.meshgrid(x, y, zeta, indexing="ij")
+    terrain_2d = 1800.0 * jnp.exp(-0.5 * (x[:, None] / 900.0) ** 2) * jnp.ones((1, 3))
+    terrain = jnp.broadcast_to(terrain_2d[..., None], zeta_3d.shape)
+
+    physical_z = coordinate(xi, zeta_3d, terrain, 16000.0)
+
+    assert jnp.allclose(physical_z[..., 0], terrain_2d)
+    assert jnp.allclose(physical_z[..., -1], 16000.0)
+    assert float(jnp.min(jnp.diff(physical_z, axis=-1))) > 0.0
+
+
+def test_zero_aggressiveness_direct_coordinate_is_galchen():
+    direct = DirectDensityCoordinate({"global": jnp.zeros(12)})
+    galchen = GalChenSigma()
+    x = jnp.linspace(-2000.0, 2000.0, 5)
+    y = jnp.linspace(-1000.0, 1000.0, 3)
+    zeta = jnp.linspace(0.0, 16000.0, 17)
+    xi, _, zeta_3d = jnp.meshgrid(x, y, zeta, indexing="ij")
+    terrain = jnp.broadcast_to(
+        (1500.0 * jnp.exp(-0.5 * (x[:, None] / 900.0) ** 2))[..., None],
+        zeta_3d.shape,
+    )
+
+    assert jnp.allclose(
+        direct(xi, zeta_3d, terrain, 16000.0),
+        galchen(xi, zeta_3d, terrain, 16000.0),
+    )

@@ -171,10 +171,14 @@ def save_plot_dataset(
     return path
 
 
-def add_experiment_args(parser: argparse.ArgumentParser) -> None:
+def add_experiment_args(
+    parser: argparse.ArgumentParser,
+    *,
+    default_output_root: str | Path = Path("output"),
+) -> None:
     """Add standard output-directory arguments to an argument parser."""
     parser.add_argument(
-        "--output-root", type=Path, default=Path("output"),
+        "--output-root", type=Path, default=Path(default_output_root),
         help="Root directory for the standard experiment bundle",
     )
     parser.add_argument(
@@ -203,4 +207,3 @@ def setup_experiment_directories(
         output_root=getattr(args, "output_root", Path("output")),
     ).create()
     return layout.data, layout.figures
-
