@@ -28,19 +28,33 @@ def main():
     with xr.open_dataset(artifact) as source:
         data = source.load()
 
-    fig = plt.figure(figsize=(16, 12))
-    grid = fig.add_gridspec(2, 2)
+    fig = plt.figure(figsize=(16, 11))
+    grid = fig.add_gridspec(2, 2, hspace=.28, wspace=.16)
     axis = fig.add_subplot(grid[0, 0])
     hours = data.time.values / 3600.0
-    axis.plot(hours, data.era5_wind, "r--", linewidth=2, label="ERA5 driver")
-    axis.plot(hours, data.baseline_wind, "b-", linewidth=2, alpha=.7,
+    baseline = data.baseline_wind.values
+    adverse = data.adverse_wind.values
+    control_hour = float(data.attrs["control_time_seconds"]) / 3600.0
+    target_hour = float(data.attrs["target_time_seconds"]) / 3600.0
+    end_hour = min(float(data.attrs["end_time_seconds"]) / 3600.0,
+                   target_hour + 1.0)
+    axis.plot(hours, baseline, color="#3973b7", linewidth=2.2,
               label="Baseline Suêtes")
-    axis.plot(hours, data.adverse_wind, "k-", linewidth=2,
-              label="Adjoint-directed adverse run")
-    axis.set(title="Surface wind speed evolution at target",
+    axis.plot(hours, adverse, color="black", linewidth=2.2,
+              label="Adjoint-directed run")
+    axis.axvline(control_hour, color=".35", linestyle=":", linewidth=1.4)
+    axis.axvline(target_hour, color=".35", linestyle="--", linewidth=1.4)
+    axis.set_xlim(control_hour, end_hour)
+    visible = (hours >= control_hour) & (hours <= end_hour)
+    margin = 1.5
+    axis.set_ylim(
+        min(baseline[visible].min(), adverse[visible].min()) - margin,
+        max(baseline[visible].max(), adverse[visible].max()) + margin,
+    )
+    axis.set(title="Target-footprint wind response",
              xlabel="Simulation time [hours]", ylabel="Wind speed [km/h]")
     axis.grid(True, linestyle="--", alpha=.6)
-    axis.legend()
+    axis.legend(loc="lower left")
 
     axis = fig.add_subplot(grid[0, 1], projection=ccrs.PlateCarree())
     perturbation = data.thermal_perturbation_surface.values
@@ -50,8 +64,34 @@ def main():
         cmap="RdBu_r", vmin=-limit, vmax=limit, transform=ccrs.PlateCarree(),
     )
     i, j = int(data.attrs["target_i"]), int(data.attrs["target_j"])
+    # The lower panels use the model-x section at the target y index.
+    axis.plot(
+        data.longitude.values[:, j], data.latitude.values[:, j],
+        color=".15", linestyle="--", linewidth=1.3,
+        transform=ccrs.PlateCarree(), label="Cross-section",
+    )
     axis.plot(data.longitude.values[i, j], data.latitude.values[i, j],
               "k*", markersize=16, transform=ccrs.PlateCarree(), label="Target")
+    if "terrain_height_map" in data:
+        terrain_map = data.terrain_height_map.values / 1000.0
+        maximum = float(np.nanmax(terrain_map))
+        if maximum > .25:
+            axis.contour(
+                data.longitude, data.latitude, terrain_map,
+                levels=np.arange(.25, maximum + .25, .25),
+                colors=".35", linewidths=.6, alpha=.65,
+                transform=ccrs.PlateCarree(),
+            )
+    if {"baseline_surface_u", "baseline_surface_v"} <= set(data.data_vars):
+        stride = 12
+        axis.quiver(
+            data.longitude.values[::stride, ::stride],
+            data.latitude.values[::stride, ::stride],
+            data.baseline_surface_u.values[::stride, ::stride],
+            data.baseline_surface_v.values[::stride, ::stride],
+            color=".2", alpha=.65, scale=320, width=.0018,
+            transform=ccrs.PlateCarree(),
+        )
     axis.coastlines()
     axis.set_title(r"Adjoint-directed thermal perturbation ($\Delta\theta_v$)")
     axis.legend(loc="lower right")
@@ -70,13 +110,32 @@ def main():
         return x_plot, z_plot, field_plot
 
     axis = fig.add_subplot(grid[1, 0])
-    x_plot, z_plot, baseline_plot = padded_mass_section(
-        data.baseline_zonal_wind.values
+    baseline_name = (
+        "baseline_wind_speed"
+        if "baseline_wind_speed" in data
+        else "baseline_zonal_wind"
+    )
+    anomaly_name = (
+        "wind_speed_anomaly"
+        if "wind_speed_anomaly" in data
+        else "zonal_wind_anomaly"
+    )
+    using_speed = baseline_name == "baseline_wind_speed"
+    x_plot, z_plot, baseline_plot = padded_mass_section(data[baseline_name].values)
+    # Determine the colour range from the portion of the atmosphere that is
+    # actually displayed.  Otherwise upper-level jet speeds above the 4-km
+    # axis limit wash out the downslope-flow structure.
+    displayed = baseline_plot[z_plot <= 4.0]
+    base_min = max(
+        0.0, np.floor(float(np.nanpercentile(displayed, 1)) / 10.0) * 10.0
+    )
+    base_max = (
+        np.ceil(float(np.nanpercentile(displayed, 99.5)) / 10.0) * 10.0
     )
     image = axis.contourf(
         x_plot, z_plot, baseline_plot,
-        levels=np.linspace(-50.0, 150.0, 31),
-        cmap="RdBu_r", vmin=-50.0, vmax=150.0, extend="both",
+        levels=np.linspace(base_min, base_max, 31),
+        cmap="viridis", vmin=base_min, vmax=base_max, extend="both",
     )
     theta = data.baseline_virtual_potential_temperature.values
     _, _, theta_plot = padded_mass_section(theta)
@@ -86,13 +145,19 @@ def main():
         colors="black", linewidths=1.0, alpha=.7,
     )
     axis.fill_between(x, 0, terrain, color="dimgray")
-    axis.set(title="Baseline zonal wind [km/h] across terrain",
+    baseline_title = (
+        "Baseline wind speed and isentropes at verification time"
+        if using_speed else
+        "Baseline zonal wind and isentropes at verification time"
+    )
+    baseline_label = "Wind speed [km/h]" if using_speed else "Zonal wind [km/h]"
+    axis.set(title=baseline_title,
              xlabel="Distance [km]", ylabel="Height [km]", ylim=(0, 4))
     fig.colorbar(image, ax=axis, orientation="horizontal", pad=.15,
-                 label="Baseline zonal wind [km/h]")
+                 label=baseline_label)
 
     axis = fig.add_subplot(grid[1, 1])
-    anomaly = data.zonal_wind_anomaly.values
+    anomaly = data[anomaly_name].values
     depth = int(data.attrs["sponge_depth"])
     interior = anomaly[depth:-depth] if depth else anomaly
     limit = max(float(np.max(np.abs(interior))), 1.0)
@@ -103,13 +168,25 @@ def main():
         vmin=-limit, vmax=limit, extend="both",
     )
     axis.fill_between(x, 0, terrain, color="dimgray")
-    axis.set(title=r"Zonal wind anomaly induced by adjoint",
+    _, _, theta_plot = padded_mass_section(theta)
+    axis.contour(
+        x_plot, z_plot, theta_plot, levels=theta_levels,
+        colors=".25", linewidths=.7, alpha=.45,
+    )
+    response_title = (
+        "Adjoint-directed wind-speed response at verification time"
+        if using_speed else
+        "Adjoint-directed zonal-wind response at verification time"
+    )
+    response_label = (
+        r"$\Delta$ wind speed [km/h]"
+        if using_speed else r"$\Delta$ zonal wind [km/h]"
+    )
+    axis.set(title=response_title,
              xlabel="Distance [km]", ylabel="Height [km]", ylim=(0, 4))
     fig.colorbar(image, ax=axis, orientation="horizontal", pad=.15,
-                 label="Wind difference [km/h]")
-    fig.suptitle("Suêtes downscaling: adjoint-directed adverse perturbation",
-                 fontsize=18, y=.98)
-    fig.subplots_adjust(top=.90, bottom=.08)
+                 label=response_label)
+    fig.subplots_adjust(top=.96, bottom=.08)
     fig.savefig(output, dpi=300, bbox_inches="tight")
     plt.close(fig)
     print(f"Saved {output}")

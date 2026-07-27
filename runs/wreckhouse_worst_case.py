@@ -13,6 +13,8 @@ os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 import argparse
 import time
 import math
+import subprocess
+import sys
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -437,6 +439,18 @@ def main():
     u_adverse_m = 0.5 * (
         state_worst_case_t7["u"][:-1] + state_worst_case_t7["u"][1:]
     )
+    v_baseline_m = 0.5 * (
+        state_baseline_t7["v"][:, :-1] + state_baseline_t7["v"][:, 1:]
+    )
+    v_adverse_m = 0.5 * (
+        state_worst_case_t7["v"][:, :-1] + state_worst_case_t7["v"][:, 1:]
+    )
+    baseline_speed_m = np.sqrt(
+        np.asarray(u_baseline_m) ** 2 + np.asarray(v_baseline_m) ** 2
+    )
+    adverse_speed_m = np.sqrt(
+        np.asarray(u_adverse_m) ** 2 + np.asarray(v_adverse_m) ** 2
+    )
     x_mesh, y_mesh = np.meshgrid(grid.x_m, grid.y_m, indexing="ij")
     latitude, longitude = grid.proj.get_lat_lon(x_mesh, y_mesh)
     artifact = xr.Dataset(
@@ -449,6 +463,15 @@ def main():
             ),
             "latitude": (("x", "y"), np.asarray(latitude)),
             "longitude": (("x", "y"), np.asarray(longitude)),
+            "terrain_height_map": (
+                ("x", "y"), np.asarray(grid.Z_w[:, :, 0])
+            ),
+            "baseline_surface_u": (
+                ("x", "y"), np.asarray(u_baseline_m[:, :, 0])
+            ),
+            "baseline_surface_v": (
+                ("x", "y"), np.asarray(v_baseline_m[:, :, 0])
+            ),
             "physical_height": (
                 ("x", "z"), np.asarray(grid.Z_m[:, j_w, :])
             ),
@@ -459,6 +482,14 @@ def main():
             "zonal_wind_anomaly": (
                 ("x", "z"),
                 np.asarray(u_adverse_m[:, j_w, :] - u_baseline_m[:, j_w, :])
+                * 3.6,
+            ),
+            "baseline_wind_speed": (
+                ("x", "z"), baseline_speed_m[:, j_w, :] * 3.6
+            ),
+            "wind_speed_anomaly": (
+                ("x", "z"),
+                (adverse_speed_m[:, j_w, :] - baseline_speed_m[:, j_w, :])
                 * 3.6,
             ),
             "baseline_virtual_potential_temperature": (
@@ -504,6 +535,19 @@ def main():
         loc_idx=(i_w, j_w),
         sponge_depth=sponge_depth,
         save_path=os.path.join(output_dir, f"{RUN_NAME}_dashboard.png")
+    )
+    # Re-render from the portable artifact using the publication layout.  This
+    # also verifies that the saved NetCDF is sufficient to reproduce the
+    # figure without rerunning the forecast.
+    subprocess.run(
+        [
+            sys.executable,
+            os.path.join(os.path.dirname(__file__), "plot_wreckhouse_worst_case.py"),
+            str(artifact_path),
+            "--output",
+            os.path.join(output_dir, f"{RUN_NAME}_dashboard.png"),
+        ],
+        check=True,
     )
 
 if __name__ == "__main__":
