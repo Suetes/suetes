@@ -60,13 +60,20 @@ primary artifact and never rerun the model.
 
 ## NEUVE coordinate-discovery workflow
 
-The coordinate experiments have three manifest-driven entry points:
+The publication PGF experiment has four manifest-driven entry points:
 
-1. `neuve_coordinates/train.py` trains NEUVE on one or more terrain samples and writes
-   `training_dataset.json`, a frozen checkpoint, history, and training plot.
-2. `neuve_coordinates/tune_sleve.py` tunes SLEVE on that exact training manifest.
-3. `neuve_coordinates/evaluate.py` evaluates frozen NEUVE, tuned SLEVE, and
-   Gal-Chen on an arbitrary testing manifest containing one or more samples.
+1. `neuve_coordinates/create_dataset.py` freezes the training or testing
+   terrain ensemble.
+2. `neuve_coordinates/train_density.py` trains the geometry-initialized,
+   terrain-conditioned density coordinate end to end on the training ensemble.
+3. `neuve_coordinates/tune_sleve.py` tunes SLEVE on that exact training
+   manifest.
+4. `neuve_coordinates/evaluate.py` evaluates frozen NEUVE, tuned SLEVE, and
+   Gal-Chen on an arbitrary held-out manifest.
+
+The older `neuve_coordinates/train.py` remains available for the exploratory
+tracer-reversibility and mountain-flux objectives. It is not used for the
+publication PGF result.
 
 All entry points support `--target pgf_rest`, `--target
 tracer_reversibility`, and `--target mountain_flux`.  The first minimizes

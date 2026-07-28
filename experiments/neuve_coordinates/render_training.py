@@ -49,16 +49,33 @@ def render(source: Path, output_dir: Path | None = None) -> list[Path]:
     data_dir, figures = _directories(source, output_dir)
     outputs: list[Path] = []
 
-    history_path = data_dir / "neuve_training_history.npz"
+    history_path = data_dir / "training_history.npz"
+    if not history_path.exists():
+        history_path = data_dir / "neuve_training_history.npz"
     if history_path.exists():
         with np.load(history_path) as archive:
             history = {key: archive[key] for key in archive.files}
         fig, axes = plt.subplots(1, 2, figsize=(14.0, 6.0))
         epoch = history["epoch"]
         axes[0].semilogy(epoch, history["mean_tke"], label="Current metric", color="C0", linewidth=2)
-        axes[0].semilogy(
-            epoch, history["best_objective"], "--", label="Best feasible objective", color="C1", linewidth=2
-        )
+        if "best_objective" in history:
+            axes[0].semilogy(
+                epoch,
+                history["best_objective"],
+                "--",
+                label="Best feasible objective",
+                color="C1",
+                linewidth=2,
+            )
+        elif "objective" in history:
+            axes[0].semilogy(
+                epoch,
+                history["objective"],
+                "--",
+                label="Penalized objective",
+                color="C1",
+                linewidth=2,
+            )
         axes[0].set(xlabel="Epoch", ylabel="Objective (Mean TKE)")
         axes[0].grid(True, which="both", ls="--", alpha=0.4)
 

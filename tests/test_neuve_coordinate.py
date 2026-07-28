@@ -10,8 +10,10 @@ from experiments._shared.neuve_coordinate import (
     random_3d_terrain,
     transport_reversibility,
 )
-from experiments.neuve_coordinates.reachability_pipeline import (
-    DirectDensityCoordinate,
+from experiments._shared.neuve_learned_coordinate import (
+    LearnedDensityCoordinate,
+    load_learned_coordinate,
+    save_learned_coordinate,
 )
 from suetes.shared.transforms import (
     GalChenSigma,
@@ -117,7 +119,7 @@ def test_matched_hydrostatic_reference_remains_at_rest():
 
 
 def test_direct_density_coordinate_has_exact_endpoints_and_positive_layers():
-    coordinate = DirectDensityCoordinate({"global": jnp.linspace(2.0, -2.0, 12)})
+    coordinate = LearnedDensityCoordinate({"global": jnp.linspace(2.0, -2.0, 12)})
     x = jnp.linspace(-2000.0, 2000.0, 5)
     y = jnp.linspace(-1000.0, 1000.0, 3)
     zeta = jnp.linspace(0.0, 16000.0, 33)
@@ -133,7 +135,7 @@ def test_direct_density_coordinate_has_exact_endpoints_and_positive_layers():
 
 
 def test_zero_aggressiveness_direct_coordinate_is_galchen():
-    direct = DirectDensityCoordinate({"global": jnp.zeros(12)})
+    direct = LearnedDensityCoordinate({"global": jnp.zeros(12)})
     galchen = GalChenSigma()
     x = jnp.linspace(-2000.0, 2000.0, 5)
     y = jnp.linspace(-1000.0, 1000.0, 3)
@@ -148,3 +150,13 @@ def test_zero_aggressiveness_direct_coordinate_is_galchen():
         direct(xi, zeta_3d, terrain, 16000.0),
         galchen(xi, zeta_3d, terrain, 16000.0),
     )
+
+
+def test_learned_coordinate_checkpoint_roundtrip(tmp_path):
+    params = {"global": jnp.linspace(2.0, -2.0, 12)}
+    path = tmp_path / "coordinate.npz"
+    save_learned_coordinate(path, params, residual_scale=1.25)
+    loaded = load_learned_coordinate(path)
+
+    assert loaded.residual_scale == 1.25
+    assert jnp.allclose(loaded.params["global"], params["global"])

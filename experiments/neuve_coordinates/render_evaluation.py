@@ -58,9 +58,16 @@ def main():
     x = data.x.values / 1000.0
 
     fig, axes = plt.subplots(
-        count, len(names), figsize=(5.0 * len(names), 4.0 * count), sharex=True, sharey=True, squeeze=False
+        count,
+        len(names),
+        figsize=(5.0 * len(names), 4.0 * count),
+        sharex=True,
+        sharey=True,
+        squeeze=False,
     )
-    props = dict(boxstyle="square,pad=0.3", facecolor="white", alpha=0.9, edgecolor="none")
+    props = dict(
+        boxstyle="square,pad=0.3", facecolor="white", alpha=0.9, edgecolor="none"
+    )
     for sample in range(count):
         for column, name in enumerate(names):
             axis = axes[sample, column]
@@ -72,7 +79,13 @@ def main():
             # Label instead of title
             if sample == 0:
                 axis.text(
-                    0.05, 0.95, f"{name}", transform=axis.transAxes, fontsize=16, verticalalignment="top", bbox=props
+                    0.05,
+                    0.95,
+                    f"{name}",
+                    transform=axis.transAxes,
+                    fontsize=16,
+                    verticalalignment="top",
+                    bbox=props,
                 )
 
             if column == 0:
@@ -86,18 +99,92 @@ def main():
 
     target = data.attrs["target"]
     time = data.time.values
-    fig, axes = plt.subplots(1, count, figsize=(6.0 * count, 5.0), sharex=True, sharey=True, squeeze=False)
     line_styles = ["-", "--", "-.", ":"] * 3
+    if target == "pgf_rest":
+        fig = plt.figure(figsize=(6.0 * count, 6.0))
+        grid = fig.add_gridspec(
+            2,
+            count,
+            height_ratios=(1.0, 2.4),
+            hspace=0.05,
+            wspace=0.12,
+        )
+        upper_axes = [fig.add_subplot(grid[0, 0])]
+        lower_axes = [fig.add_subplot(grid[1, 0], sharex=upper_axes[0])]
+        for sample in range(1, count):
+            upper_axes.append(fig.add_subplot(grid[0, sample], sharey=upper_axes[0]))
+            lower_axes.append(
+                fig.add_subplot(
+                    grid[1, sample],
+                    sharex=upper_axes[sample],
+                    sharey=lower_axes[0],
+                )
+            )
+            upper_axes[sample].tick_params(labelleft=False)
+            lower_axes[sample].tick_params(labelleft=False)
+        axes = np.asarray([lower_axes])
+    else:
+        fig, axes = plt.subplots(
+            1,
+            count,
+            figsize=(6.0 * count, 5.0),
+            sharex=True,
+            sharey=True,
+            squeeze=False,
+        )
     for sample in range(count):
         axis = axes[0, sample]
         plotted = {}
         for name in names:
             series = data.diagnostic_series.sel(sample=sample, coordinate=name).values
-            plotted[name] = np.cumsum(series) / np.arange(1, len(series) + 1) if target == "pgf_rest" else series
+            plotted[name] = (
+                np.cumsum(series) / np.arange(1, len(series) + 1)
+                if target == "pgf_rest"
+                else series
+            )
 
         if target == "mountain_flux":
             for i, name in enumerate(names):
-                axis.plot(time, plotted[name], label=name, ls=line_styles[i], linewidth=2)
+                axis.plot(
+                    time, plotted[name], label=name, ls=line_styles[i], linewidth=2
+                )
+        elif target == "pgf_rest":
+            reference = plotted["Tuned SLEVE"]
+            ratios = {
+                name: np.divide(
+                    plotted[name],
+                    reference,
+                    out=np.full_like(reference, np.nan),
+                    where=reference > np.finfo(float).tiny,
+                )
+                for name in names
+            }
+            upper = upper_axes[sample]
+            upper.plot(
+                time,
+                ratios["Gal-Chen"],
+                label="Gal-Chen",
+                color="C0",
+                linewidth=2,
+            )
+            upper.set_yscale("log")
+            upper.set_ylim(2.5, 200.0)
+            upper.grid(True, ls="--", alpha=0.4)
+            upper.tick_params(labelbottom=False)
+            for name, color, style in (
+                ("Tuned SLEVE", "C1", "--"),
+                ("NEUVE", "C2", "-"),
+            ):
+                axis.plot(
+                    time,
+                    ratios[name],
+                    label=name,
+                    color=color,
+                    ls=style,
+                    linewidth=2,
+                )
+            axis.set_ylim(0.85, 1.02)
+            axis.axhline(1.0, color="0.25", linestyle="--", linewidth=1.5)
         else:
             reference = plotted["Tuned SLEVE"]
             for i, name in enumerate(names):
@@ -119,31 +206,45 @@ def main():
         axis.grid(True, ls="--", alpha=0.4)
 
         # Add sample label
-        props = dict(boxstyle="square,pad=0.3", facecolor="white", alpha=0.9, edgecolor="none")
-        axis.text(
+        props = dict(
+            boxstyle="square,pad=0.3", facecolor="white", alpha=0.9, edgecolor="none"
+        )
+        label_axis = upper_axes[sample] if target == "pgf_rest" else axis
+        label_axis.text(
             0.05,
             0.95,
             f"Sample {sample + 1}",
-            transform=axis.transAxes,
+            transform=label_axis.transAxes,
             fontsize=16,
             verticalalignment="top",
             bbox=props,
         )
 
-    axes[0, 0].set_ylabel(
-        "Cumulative mean TKE / tuned SLEVE"
-        if target == "pgf_rest"
-        else (
+    if target == "pgf_rest":
+        fig.supylabel("TKE / SLEVE")
+    else:
+        axes[0, 0].set_ylabel(
             "Tracer return error / tuned SLEVE"
             if target == "tracer_reversibility"
             else "Momentum-flux transmission error"
         )
+
+    if target == "pgf_rest":
+        upper_handles, upper_labels = upper_axes[0].get_legend_handles_labels()
+        lower_handles, lower_labels = axes[0, 0].get_legend_handles_labels()
+        handles = upper_handles + lower_handles
+        labels = upper_labels + lower_labels
+    else:
+        handles, labels = axes[0, 0].get_legend_handles_labels()
+    fig.legend(
+        handles,
+        labels,
+        loc="upper center",
+        bbox_to_anchor=(0.5, 1.01),
+        ncol=len(labels),
     )
 
-    handles, labels = axes[0, 0].get_legend_handles_labels()
-    fig.legend(handles, labels, loc="lower center", bbox_to_anchor=(0.5, 0.0), ncol=len(names))
-
-    fig.tight_layout(rect=[0, 0.15, 1, 1])
+    fig.tight_layout(rect=[0, 0, 1, 0.91])
     fig.savefig(output / "metric_sample_gallery.png", dpi=300)
     plt.close(fig)
     print(f"Saved figures to {output}")

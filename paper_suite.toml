@@ -14,8 +14,8 @@ name = "simulate"
 kind = "run"
 command = [
   "{python}", "benchmarks/physical/rising_bubble_3d/run.py",
-  "--dx", "25", "--dt", "0.5", "--t-end", "750",
-  "--snapshot-interval", "150", "--stabilization", "0.05",
+  "--dx", "50", "--dt", "1", "--t-end", "1000",
+  "--snapshot-interval", "200", "--stabilization", "0",
   "--output-root", "{output_root}", "--name", "paper", "--no-render",
 ]
 outputs = ["{output_root}/benchmarks/rising_bubble_3d/paper/data/artifact.nc"]
@@ -43,8 +43,8 @@ name = "simulate"
 kind = "run"
 command = [
   "{python}", "benchmarks/physical/schaer_mountain_3d/run.py",
-  "--dx", "250", "--dz", "200", "--dt", "2", "--t-end", "3600",
-  "--snapshot-interval", "900", "--internal-chunk-seconds", "20",
+  "--dx", "500", "--dz", "400", "--dt", "2", "--t-end", "7200",
+  "--snapshot-interval", "1800", "--internal-chunk-seconds", "20",
   "--output-root", "{output_root}", "--name", "paper", "--no-render",
 ]
 outputs = ["{output_root}/benchmarks/schaer_mountain_3d/paper/data/artifact.nc"]
@@ -176,6 +176,20 @@ outputs = [
   "{output_root}/experiments/squall_line_3d/paper/figures/squall_line_3d.png",
 ]
 
+[[case.stage]]
+name = "render_3d"
+kind = "render"
+command = [
+  "{python}", "experiments/squall_line_3d/render_3d_panel.py",
+  "{output_root}/experiments/squall_line_3d/paper/data/artifact.nc",
+  "--output", "{output_root}/experiments/squall_line_3d/paper/figures/squall_line_3d_isosurfaces.png",
+  "--mesh-step", "1",
+  "--elevation", "14", "--azimuth", "-108", "--cloud-alpha", "0.32",
+]
+outputs = [
+  "{output_root}/experiments/squall_line_3d/paper/figures/squall_line_3d_isosurfaces.png",
+]
+
 [[case]]
 id = "squall_sensitivity"
 group = "table"
@@ -244,20 +258,17 @@ group = "table"
 description = "PGF-trained NEUVE with tuned SLEVE and held-out evaluation"
 
 [[case.stage]]
-name = "train_neuve"
+name = "create_training_dataset"
 kind = "run"
 command = [
-  "{python}", "experiments/neuve_coordinates/train.py",
+  "{python}", "experiments/neuve_coordinates/create_dataset.py",
   "--target", "pgf_rest", "--terrain-family", "multiscale3d",
   "--seeds", "100,101,102,103,104,105,106,107,108,109",
-  "--epochs", "90", "--minimum-layer-m", "150",
-  "--output-root", "{output_root}", "--name", "paper", "--no-render",
+  "--role", "training",
+  "--output", "{output_root}/experiments/neuve_coordinates/paper/data/training_dataset.json",
 ]
 outputs = [
-  "{output_root}/experiments/neuve_coordinates/paper/data/neuve_coordinate.npz",
   "{output_root}/experiments/neuve_coordinates/paper/data/training_dataset.json",
-  "{output_root}/experiments/neuve_coordinates/paper/data/neuve_training_history.npz",
-  "{output_root}/experiments/neuve_coordinates/paper/data/training_complete.json",
 ]
 
 [[case.stage]]
@@ -272,6 +283,39 @@ command = [
 ]
 outputs = [
   "{output_root}/experiments/neuve_coordinates/paper/data/best_sleve.json",
+  "{output_root}/experiments/neuve_coordinates/paper/data/sleve_grid_search.csv",
+]
+
+[[case.stage]]
+name = "train_neuve"
+kind = "run"
+command = [
+  "{python}", "experiments/neuve_coordinates/train_density.py",
+  "--dataset", "{output_root}/experiments/neuve_coordinates/paper/data/training_dataset.json",
+  "--epochs", "60",
+  "--global-lr", "0.001", "--conditioner-lr", "0.003",
+  "--initial-minimum-layer-m", "175", "--minimum-layer-m", "150",
+  "--output-dir", "{output_root}/experiments/neuve_coordinates/paper/data",
+  "--no-render",
+]
+outputs = [
+  "{output_root}/experiments/neuve_coordinates/paper/data/neuve_coordinate.npz",
+  "{output_root}/experiments/neuve_coordinates/paper/data/training_history.npz",
+  "{output_root}/experiments/neuve_coordinates/paper/data/training_summary.json",
+]
+
+[[case.stage]]
+name = "create_testing_dataset"
+kind = "run"
+command = [
+  "{python}", "experiments/neuve_coordinates/create_dataset.py",
+  "--target", "pgf_rest", "--terrain-family", "multiscale3d",
+  "--seeds", "200,201,202,203,204,205,206,207,208,209",
+  "--role", "testing",
+  "--output", "{output_root}/experiments/neuve_coordinates/paper/data/testing_dataset.json",
+]
+outputs = [
+  "{output_root}/experiments/neuve_coordinates/paper/data/testing_dataset.json",
 ]
 
 [[case.stage]]
@@ -279,12 +323,18 @@ name = "evaluate"
 kind = "run"
 command = [
   "{python}", "experiments/neuve_coordinates/evaluate.py",
-  "--target", "pgf_rest", "--terrain-family", "multiscale3d",
-  "--seeds", "200,201,202,203,204,205,206,207,208,209",
-  "--output-root", "{output_root}", "--name", "paper", "--no-render",
+  "--target", "pgf_rest",
+  "--dataset", "{output_root}/experiments/neuve_coordinates/paper/data/testing_dataset.json",
+  "--neuve-weights", "{output_root}/experiments/neuve_coordinates/paper/data/neuve_coordinate.npz",
+  "--sleve-config", "{output_root}/experiments/neuve_coordinates/paper/data/best_sleve.json",
+  "--plot-samples", "3",
+  "--output-dir", "{output_root}/experiments/neuve_coordinates/paper/data",
+  "--no-render",
 ]
 outputs = [
   "{output_root}/experiments/neuve_coordinates/paper/data/coordinate_evaluation.nc",
+  "{output_root}/experiments/neuve_coordinates/paper/data/testing_metrics.csv",
+  "{output_root}/experiments/neuve_coordinates/paper/data/testing_summary.json",
 ]
 
 [[case.stage]]
@@ -311,6 +361,7 @@ command = [
 ]
 outputs = [
   "{output_root}/experiments/neuve_coordinates/paper/figures/coordinate_sample_gallery.png",
+  "{output_root}/experiments/neuve_coordinates/paper/figures/metric_sample_gallery.png",
 ]
 
 [[case]]

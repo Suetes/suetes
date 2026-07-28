@@ -10,7 +10,9 @@ import sys
 import tempfile
 from pathlib import Path
 
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
+sys.path.insert(
+    0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../.."))
+)
 os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
 
 import jax
@@ -25,8 +27,8 @@ from experiments._shared.neuve_coordinate import (
     run_target_case,
     terrains_from_dataset,
 )
-from experiments.neuve_coordinates.reachability_pipeline import (
-    DirectDensityCoordinate,
+from experiments._shared.neuve_learned_coordinate import (
+    LearnedDensityCoordinate,
 )
 from suetes.shared.transforms import GalChenSigma, SleveSimple
 
@@ -39,16 +41,14 @@ def _direct_transform(amplitude, basis_count):
     # Bernstein coefficients sampled from a linear function reproduce
     # log(rho)=a(1-2 eta) exactly for any basis_count >= 2.
     coefficients = jnp.linspace(amplitude, -amplitude, basis_count)
-    return DirectDensityCoordinate({"global": coefficients})
+    return LearnedDensityCoordinate({"global": coefficients})
 
 
 def _evaluate(transform, terrains, steps):
     values, minima = [], []
     for terrain in terrains:
         try:
-            metric, _, grid, _ = run_target_case(
-                "pgf_rest", transform, terrain, steps
-            )
+            metric, _, grid, _ = run_target_case("pgf_rest", transform, terrain, steps)
         except (ValueError, FloatingPointError) as error:
             return {
                 "mean_tke": np.inf,
@@ -132,9 +132,7 @@ def _run_worker(args, kind, result_path, amplitude=None):
 
 def _plot(rows, output_dir, minimum_layer):
     direct = [
-        row
-        for row in rows
-        if row["kind"] == "direct" and np.isfinite(row["mean_tke"])
+        row for row in rows if row["kind"] == "direct" and np.isfinite(row["mean_tke"])
     ]
     galchen = next(row for row in rows if row["kind"] == "galchen")
     sleve = next(row for row in rows if row["kind"] == "sleve")
@@ -229,10 +227,7 @@ def main():
                 row
                 for row in rows
                 if row["kind"] == kind
-                and (
-                    amplitude is None
-                    or np.isclose(row["amplitude"], amplitude)
-                )
+                and (amplitude is None or np.isclose(row["amplitude"], amplitude))
             ),
             None,
         )
@@ -271,9 +266,7 @@ def main():
             and row["minimum_layer_m"] >= args.minimum_layer_m
         )
     with open(args.output_dir / "aggressiveness_scan.csv", "w", newline="") as stream:
-        fieldnames = list(
-            dict.fromkeys(key for row in rows for key in row)
-        )
+        fieldnames = list(dict.fromkeys(key for row in rows for key in row))
         writer = csv.DictWriter(stream, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(rows)

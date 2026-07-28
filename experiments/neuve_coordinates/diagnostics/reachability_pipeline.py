@@ -5,8 +5,8 @@ This experiment separates representational capacity from optimizer
 reachability:
 
 1. fit the existing NEUVE MLP to the tuned SLEVE geometry;
-2. learn a shared vertical density profile using a short PGF integration;
-3. continue that profile with the full PGF integration;
+2. learn a scalar aggressiveness profile using the full PGF integration;
+3. refine all vertical density coefficients using the full integration;
 4. add a bounded, terrain-conditioned residual and train on the dataset.
 
 The SLEVE fit is an audit only.  None of its parameters or fitted NEUVE
@@ -16,13 +16,14 @@ weights initialize the self-supervised stages.
 import argparse
 import gc
 import json
-import math
 import os
 import sys
 import time
 from pathlib import Path
 
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
+sys.path.insert(
+    0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../.."))
+)
 os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
 
 import jax
@@ -40,108 +41,17 @@ from experiments._shared.neuve_coordinate import (
     neuve_template,
     run_target_case,
     save_neuve,
+    terrain_factory,
     terrains_from_dataset,
 )
+from experiments._shared.neuve_learned_coordinate import (
+    LearnedDensityCoordinate,
+    bernstein_basis,
+    load_learned_params,
+    save_learned_coordinate,
+)
 from suetes.regional3d.geometry import RegionalGrid3D
-from suetes.shared.transforms import BaseTransform, GalChenSigma, SleveSimple
-
-_GL_X = jnp.asarray(
-    [
-        -0.9815606342467192,
-        -0.9041172563704749,
-        -0.7699026743093193,
-        -0.5873179542866175,
-        -0.3678314989981802,
-        -0.1252334085114689,
-        0.1252334085114689,
-        0.3678314989981802,
-        0.5873179542866175,
-        0.7699026743093193,
-        0.9041172563704749,
-        0.9815606342467192,
-    ]
-)
-_GL_W = jnp.asarray(
-    [
-        0.0471753363865118,
-        0.1069393259953184,
-        0.1600783285433462,
-        0.2031674267230659,
-        0.2334925365383548,
-        0.2491470458134028,
-        0.2491470458134028,
-        0.2334925365383548,
-        0.2031674267230659,
-        0.1600783285433462,
-        0.1069393259953184,
-        0.0471753363865118,
-    ]
-)
-
-
-def _bernstein(y, count):
-    powers = jnp.arange(count)
-    coefficients = jnp.asarray([math.comb(count - 1, k) for k in range(count)])
-    return (
-        coefficients
-        * y[..., None] ** powers
-        * (1.0 - y[..., None]) ** (count - 1 - powers)
-    )
-
-
-class DirectDensityCoordinate(BaseTransform):
-    """Smooth learned coordinate expressed in vertical Bernstein coefficients."""
-
-    def __init__(self, params, residual_scale=1.5):
-        self.params = params
-        self.residual_scale = residual_scale
-
-    def _column_coefficients(self, xi, h):
-        coefficients = self.params["global"]
-        if "conditioner" not in self.params or h.ndim != 3:
-            return coefficients
-        h2 = h[:, :, 0] / 4000.0
-        spacing = jnp.maximum(jnp.mean(jnp.abs(jnp.diff(xi[:, 0, 0]))), 1.0)
-        hx = jnp.gradient(h[:, :, 0], axis=0) / spacing
-        hy = jnp.gradient(h[:, :, 0], axis=1) / spacing
-        slope = jnp.sqrt(hx**2 + hy**2 + 1.0e-12)
-        curvature = (
-            4000.0 * (jnp.gradient(hx, axis=0) + jnp.gradient(hy, axis=1)) / spacing
-        )
-        features = jnp.stack((h2, slope, curvature), axis=-1)
-        network = self.params["conditioner"]
-        hidden = jnp.tanh(features @ network["w1"] + network["b1"])
-        residual = jnp.tanh(hidden @ network["w2"] + network["b2"])
-        # Remove the vertically uniform component, which cancels from the
-        # normalized density integral and otherwise creates a null direction.
-        residual -= jnp.mean(residual, axis=-1, keepdims=True)
-        return coefficients + self.residual_scale * residual
-
-    def __call__(self, xi, zeta, h, Lz):
-        eta = jnp.clip(zeta / Lz, 0.0, 1.0)
-        coefficients = self._column_coefficients(xi, h)
-
-        def density(y):
-            basis = _bernstein(y, coefficients.shape[-1])
-            if coefficients.ndim == 1:
-                log_density = jnp.sum(basis * coefficients, axis=-1)
-            elif y.ndim == 1:
-                log_density = jnp.sum(
-                    basis[None, None, ...] * coefficients[..., None, :],
-                    axis=-1,
-                )
-            else:
-                log_density = jnp.sum(basis * coefficients[..., None, None, :], axis=-1)
-            return jnp.exp(jnp.clip(log_density, -6.0, 6.0))
-
-        total_nodes = 0.5 * (_GL_X + 1.0)
-        total = 0.5 * jnp.sum(_GL_W * density(total_nodes), axis=-1)
-        partial_nodes = 0.5 * eta[..., None] * (_GL_X + 1.0)
-        partial = 0.5 * eta * jnp.sum(_GL_W * density(partial_nodes), axis=-1)
-        if jnp.ndim(total):
-            total = total[..., None]
-        cumulative = partial / total
-        return zeta + h * (1.0 - cumulative)
+from suetes.shared.transforms import GalChenSigma, SleveSimple
 
 
 def _grid(transform, terrain):
@@ -163,29 +73,8 @@ def _copy_tree(tree):
     return jax.tree.map(lambda value: jnp.array(value), tree)
 
 
-def _save_tree(path, params, **metadata):
-    payload = {"global": np.asarray(params["global"])}
-    if "conditioner" in params:
-        payload.update(
-            {
-                f"conditioner_{name}": np.asarray(value)
-                for name, value in params["conditioner"].items()
-            }
-        )
-    np.savez(path, **payload, metadata=json.dumps(metadata))
-
-
 def _load_tree(path):
-    with np.load(path) as source:
-        params = {"global": jnp.asarray(source["global"])}
-        conditioner = {
-            name.removeprefix("conditioner_"): jnp.asarray(source[name])
-            for name in source.files
-            if name.startswith("conditioner_")
-        }
-    if conditioner:
-        params["conditioner"] = conditioner
-    return params
+    return load_learned_params(path)[0]
 
 
 def _release_compiled_state(*objects):
@@ -246,7 +135,8 @@ def _fit_sleve_geometry(terrain, sleve, epochs, learning_rate, output_dir):
 
 def _train_direct(
     initial_params,
-    terrains,
+    terrain_generator,
+    terrain_seeds,
     steps,
     epochs,
     learning_rate,
@@ -255,31 +145,31 @@ def _train_direct(
     residual_scale,
     label,
 ):
-    def make_function(terrain):
-        def objective(params):
-            transform = DirectDensityCoordinate(params, residual_scale)
-            metric, _, grid, _ = run_target_case("pgf_rest", transform, terrain, steps)
-            minimum = jnp.min(grid.dz_m_full)
-            violation = jax.nn.relu((minimum_layer - minimum) / minimum_layer)
-            return metric + barrier_weight * violation**2, (metric, minimum)
+    def objective(params, terrain_seed):
+        transform = LearnedDensityCoordinate(params, residual_scale)
+        terrain = terrain_generator(terrain_seed)
+        metric, _, grid, _ = run_target_case("pgf_rest", transform, terrain, steps)
+        minimum = jnp.min(grid.dz_m_full)
+        violation = jax.nn.relu((minimum_layer - minimum) / minimum_layer)
+        return metric + barrier_weight * violation**2, (metric, minimum)
 
-        return jax.jit(jax.value_and_grad(objective, has_aux=True))
-
-    functions = [make_function(terrain) for terrain in terrains]
+    function = jax.jit(jax.value_and_grad(objective, has_aux=True))
     optimizer = _optimizer(learning_rate, epochs)
     params = _copy_tree(initial_params)
     state = optimizer.init(params)
     best_params = _copy_tree(params)
     best_objective = np.inf
     history = []
-    print(f"\n[{label}] steps={steps}, epochs={epochs}, samples={len(terrains)}")
+    print(f"\n[{label}] steps={steps}, epochs={epochs}, samples={len(terrain_seeds)}")
     print("epoch metric objective min_dz[m] time[s]")
     for epoch in range(epochs + 1):
         start = time.time()
         gradient_sum = jax.tree.map(jnp.zeros_like, params)
         objectives, metrics, minima = [], [], []
-        for function in functions:
-            (objective, diagnostics), gradient = function(params)
+        for terrain_seed in terrain_seeds:
+            (objective, diagnostics), gradient = function(
+                params, jnp.asarray(terrain_seed)
+            )
             objectives.append(float(objective))
             metrics.append(float(diagnostics[0]))
             minima.append(float(diagnostics[1]))
@@ -301,10 +191,105 @@ def _train_direct(
                 f"{minimum:.2f} {time.time() - start:.2f}"
             )
         if epoch < epochs:
-            gradient = jax.tree.map(lambda value: value / len(functions), gradient_sum)
+            gradient = jax.tree.map(
+                lambda value: value / len(terrain_seeds), gradient_sum
+            )
             updates, state = optimizer.update(gradient, state, params)
             params = optax.apply_updates(params, updates)
     return best_params, history
+
+
+def _maximum_feasible_amplitude(
+    terrains, basis_count, minimum_layer, margin=2.0, iterations=24
+):
+    target = minimum_layer + margin
+
+    def geometry_minimum(amplitude):
+        transform = LearnedDensityCoordinate(
+            {"global": jnp.linspace(amplitude, -amplitude, basis_count)}
+        )
+        minima = []
+        for terrain in terrains:
+            try:
+                minima.append(float(jnp.min(_grid(transform, terrain).dz_m_full)))
+            except (ValueError, FloatingPointError):
+                return -np.inf
+        return min(minima)
+
+    low, high = 0.0, 6.0
+    if geometry_minimum(high) >= target:
+        raise RuntimeError(
+            "Aggressiveness search did not locate the feasibility boundary"
+        )
+    for _ in range(iterations):
+        middle = 0.5 * (low + high)
+        if geometry_minimum(middle) >= target:
+            low = middle
+        else:
+            high = middle
+    return low, geometry_minimum(low)
+
+
+def _train_scalar_amplitude(
+    terrain_generator,
+    terrain_seeds,
+    basis_count,
+    steps,
+    epochs,
+    learning_rate,
+    maximum_amplitude,
+):
+    def objective(amplitude, terrain_seed):
+        params = {"global": jnp.linspace(amplitude, -amplitude, basis_count)}
+        terrain = terrain_generator(terrain_seed)
+        metric, _, grid, _ = run_target_case(
+            "pgf_rest",
+            LearnedDensityCoordinate(params),
+            terrain,
+            steps,
+        )
+        return metric, jnp.min(grid.dz_m_full)
+
+    function = jax.jit(jax.value_and_grad(objective, has_aux=True))
+    optimizer = _optimizer(learning_rate, epochs)
+    amplitude = jnp.asarray(0.0)
+    state = optimizer.init(amplitude)
+    best_amplitude = jnp.asarray(0.0)
+    best_metric = np.inf
+    history = []
+    print(
+        "\n[Stage 2: scalar aggressiveness / full horizon] "
+        f"steps={steps}, epochs={epochs}, samples={len(terrain_seeds)}"
+    )
+    print(f"Geometric admissible range: 0 <= a <= {maximum_amplitude:.6f}")
+    print("epoch metric amplitude min_dz[m] time[s]")
+    for epoch in range(epochs + 1):
+        start = time.time()
+        gradients, metrics, minima = [], [], []
+        for terrain_seed in terrain_seeds:
+            (metric, minimum), gradient = function(amplitude, jnp.asarray(terrain_seed))
+            gradients.append(gradient)
+            metrics.append(float(metric))
+            minima.append(float(minimum))
+        mean_metric = float(np.mean(metrics))
+        minimum = float(np.min(minima))
+        scalar = float(amplitude)
+        history.append((epoch, mean_metric, scalar, minimum))
+        if mean_metric < best_metric:
+            best_metric = mean_metric
+            best_amplitude = jnp.array(amplitude)
+        if epoch % 5 == 0 or epoch == epochs:
+            print(
+                f"{epoch:5d} {mean_metric:.6e} {scalar:.6f} "
+                f"{minimum:.2f} {time.time() - start:.2f}"
+            )
+        if epoch < epochs:
+            gradient = jnp.mean(jnp.stack(gradients))
+            updates, state = optimizer.update(gradient, state, amplitude)
+            amplitude = optax.apply_updates(amplitude, updates)
+            amplitude = jnp.clip(amplitude, 0.0, maximum_amplitude)
+    params = {"global": jnp.linspace(best_amplitude, -best_amplitude, basis_count)}
+    return params, history, float(best_amplitude), best_metric
 
 
 def _conditioned_params(global_params, basis_count, hidden, seed):
@@ -363,7 +348,7 @@ def _plot(output_dir, terrain, sleve, stages, histories, metrics):
     eta = jnp.linspace(0.0, 1.0, 200)
     for label, params in stages.items():
         coefficients = params["global"]
-        density = jnp.exp(_bernstein(eta, len(coefficients)) @ coefficients)
+        density = jnp.exp(bernstein_basis(eta, len(coefficients)) @ coefficients)
         density /= jnp.trapezoid(density, eta)
         axes[0, 1].plot(np.asarray(density), np.asarray(eta), label=label)
     axes[0, 1].set(xlabel=r"Normalized layer density", ylabel=r"$\eta$")
@@ -372,8 +357,8 @@ def _plot(output_dir, terrain, sleve, stages, histories, metrics):
     transforms = {
         "Gal--Chen": GalChenSigma(),
         "SLEVE": sleve,
-        "Global": DirectDensityCoordinate(stages["Stage 3"]),
-        "Conditioned": DirectDensityCoordinate(stages["Stage 4"]),
+        "Global": LearnedDensityCoordinate(stages["Stage 3"]),
+        "Conditioned": LearnedDensityCoordinate(stages["Stage 4"]),
     }
     colors = plt.rcParams["axes.prop_cycle"].by_key()["color"]
     for coordinate_index, (name, transform) in enumerate(transforms.items()):
@@ -419,11 +404,10 @@ def main():
     parser.add_argument("--barrier-weight", type=float, default=100.0)
     parser.add_argument("--audit-epochs", type=int, default=200)
     parser.add_argument("--audit-lr", type=float, default=3.0e-3)
-    parser.add_argument("--short-steps", type=int, default=25)
-    parser.add_argument("--short-epochs", type=int, default=30)
-    parser.add_argument("--short-lr", type=float, default=5.0e-2)
-    parser.add_argument("--long-epochs", type=int, default=45)
-    parser.add_argument("--long-lr", type=float, default=1.0e-2)
+    parser.add_argument("--scalar-epochs", type=int, default=30)
+    parser.add_argument("--scalar-lr", type=float, default=2.0e-1)
+    parser.add_argument("--shape-epochs", type=int, default=45)
+    parser.add_argument("--shape-lr", type=float, default=1.0e-3)
     parser.add_argument("--conditioned-epochs", type=int, default=45)
     parser.add_argument("--conditioned-lr", type=float, default=3.0e-3)
     parser.add_argument("--residual-scale", type=float, default=1.5)
@@ -447,6 +431,8 @@ def main():
     if dataset.get("target", "pgf_rest") != "pgf_rest":
         parser.error("This diagnostic currently supports only pgf_rest")
     terrains = terrains_from_dataset(dataset)
+    terrain_generator = terrain_factory(dataset["terrain_family"])
+    terrain_seeds = tuple(dataset["seeds"])
     full_steps = int(dataset["integration"]["steps"])
     with open(args.sleve_config) as stream:
         sleve_config = json.load(stream)
@@ -463,15 +449,15 @@ def main():
         if progress_path.exists():
             with open(progress_path) as stream:
                 audit = json.load(stream).get("capacity_audit", {})
-        stage2 = _load_tree(args.output_dir / "stage2_global_short.npz")
-        stage3 = _load_tree(args.output_dir / "stage3_global_long.npz")
+        stage2 = _load_tree(args.output_dir / "stage2_scalar_full.npz")
+        stage3 = _load_tree(args.output_dir / "stage3_shape_full.npz")
         stage4 = _load_tree(args.output_dir / "stage4_conditioned.npz")
         transforms = {
             "Gal-Chen": GalChenSigma(),
             "Tuned SLEVE": sleve,
-            "Stage 2": DirectDensityCoordinate(stage2),
-            "Stage 3": DirectDensityCoordinate(stage3),
-            "Stage 4": DirectDensityCoordinate(stage4, args.residual_scale),
+            "Stage 2": LearnedDensityCoordinate(stage2),
+            "Stage 3": LearnedDensityCoordinate(stage3),
+            "Stage 4": LearnedDensityCoordinate(stage4, args.residual_scale),
         }
         metrics = _full_metrics(transforms, terrains, full_steps)
         configuration = dict(vars(args))
@@ -520,41 +506,54 @@ def main():
         with open(progress_path) as stream:
             audit = json.load(stream).get("capacity_audit", {})
 
-    stage2_path = args.output_dir / "stage2_global_short.npz"
+    stage2_path = args.output_dir / "stage2_scalar_full.npz"
     if args.start_stage <= 2:
-        initial = {"global": jnp.zeros((args.basis_count,))}
-        stage2, history2 = _train_direct(
-            initial,
+        maximum_amplitude, boundary_minimum = _maximum_feasible_amplitude(
             terrains,
-            args.short_steps,
-            args.short_epochs,
-            args.short_lr,
+            args.basis_count,
             args.minimum_layer_m,
-            args.barrier_weight,
-            args.residual_scale,
-            "Stage 2: direct global profile / short horizon",
         )
-        _save_tree(stage2_path, stage2)
+        print(
+            "Strongest geometrically admissible scalar profile: "
+            f"a={maximum_amplitude:.6f}, min_dz={boundary_minimum:.2f} m"
+        )
+        stage2, history2, scalar_amplitude, scalar_metric = _train_scalar_amplitude(
+            terrain_generator,
+            terrain_seeds,
+            args.basis_count,
+            full_steps,
+            args.scalar_epochs,
+            args.scalar_lr,
+            maximum_amplitude,
+        )
+        save_learned_coordinate(
+            stage2_path,
+            stage2,
+            amplitude=scalar_amplitude,
+            objective=scalar_metric,
+            maximum_amplitude=maximum_amplitude,
+        )
         with open(progress_path, "w") as stream:
             json.dump({"capacity_audit": audit, "completed_stage": 2}, stream, indent=2)
         _release_compiled_state()
     else:
         stage2 = _load_tree(stage2_path)
 
-    stage3_path = args.output_dir / "stage3_global_long.npz"
+    stage3_path = args.output_dir / "stage3_shape_full.npz"
     if args.start_stage <= 3:
         stage3, history3 = _train_direct(
             stage2,
-            terrains,
+            terrain_generator,
+            terrain_seeds,
             full_steps,
-            args.long_epochs,
-            args.long_lr,
+            args.shape_epochs,
+            args.shape_lr,
             args.minimum_layer_m,
             args.barrier_weight,
             args.residual_scale,
-            "Stage 3: global profile / full horizon",
+            "Stage 3: full profile refinement / full horizon",
         )
-        _save_tree(stage3_path, stage3)
+        save_learned_coordinate(stage3_path, stage3)
         with open(progress_path, "w") as stream:
             json.dump({"capacity_audit": audit, "completed_stage": 3}, stream, indent=2)
         _release_compiled_state()
@@ -566,7 +565,8 @@ def main():
     )
     stage4, history4 = _train_direct(
         conditioned_initial,
-        terrains,
+        terrain_generator,
+        terrain_seeds,
         full_steps,
         args.conditioned_epochs,
         args.conditioned_lr,
@@ -575,7 +575,13 @@ def main():
         args.residual_scale,
         "Stage 4: terrain-conditioned residual",
     )
-    _save_tree(args.output_dir / "stage4_conditioned.npz", stage4)
+    save_learned_coordinate(
+        args.output_dir / "stage4_conditioned.npz",
+        stage4,
+        residual_scale=args.residual_scale,
+        stage=4,
+        target="pgf_rest",
+    )
     with open(progress_path, "w") as stream:
         json.dump({"capacity_audit": audit, "completed_stage": 4}, stream, indent=2)
     _release_compiled_state()
@@ -583,9 +589,9 @@ def main():
     transforms = {
         "Gal-Chen": GalChenSigma(),
         "Tuned SLEVE": sleve,
-        "Stage 2": DirectDensityCoordinate(stage2),
-        "Stage 3": DirectDensityCoordinate(stage3),
-        "Stage 4": DirectDensityCoordinate(stage4, args.residual_scale),
+        "Stage 2": LearnedDensityCoordinate(stage2),
+        "Stage 3": LearnedDensityCoordinate(stage3),
+        "Stage 4": LearnedDensityCoordinate(stage4, args.residual_scale),
     }
     metrics = _full_metrics(transforms, terrains, full_steps)
     configuration = dict(vars(args))

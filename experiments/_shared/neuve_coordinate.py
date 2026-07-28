@@ -207,14 +207,19 @@ def multiscale_3d_terrain(seed):
     return terrain
 
 
-def terrains_from_dataset(dataset):
+def terrain_factory(family):
     factory = {
         "ridge": ridge_terrain,
         "random3d": random_3d_terrain,
         "multiscale3d": multiscale_3d_terrain,
-    }.get(dataset["terrain_family"])
+    }.get(family)
     if factory is None:
-        raise ValueError(f"Unknown terrain family: {dataset['terrain_family']}")
+        raise ValueError(f"Unknown terrain family: {family}")
+    return factory
+
+
+def terrains_from_dataset(dataset):
+    factory = terrain_factory(dataset["terrain_family"])
     return [factory(seed) for seed in dataset["seeds"]]
 
 
@@ -257,6 +262,12 @@ def build_case(transform, terrain, reference_n_bv=REFERENCE_N_BV):
         transform=transform,
     )
     operators = CGridOperator3D(grid)
+    # The default boundary padding detaches duplicated edge values from the
+    # adjoint. That leaves the forward solution unchanged but is not the exact
+    # derivative of this coordinate-dependent PGF objective; the discrepancy
+    # propagates into the interior over long integrations. Retain the complete
+    # boundary derivative for this gradient-training experiment.
+    operators.use_stop_grad = False
     suite = PhysicsSuite()
     physics = Euler3D(
         grid,
