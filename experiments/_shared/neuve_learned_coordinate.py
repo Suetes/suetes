@@ -53,12 +53,66 @@ def bernstein_basis(y, count):
     )
 
 
+def _open_uniform_knots(count, degree=3):
+    if count <= degree:
+        raise ValueError(
+            f"A degree-{degree} B-spline requires at least {degree + 1} coefficients"
+        )
+    internal_count = count - degree - 1
+    internal = jnp.linspace(0.0, 1.0, internal_count + 2)[1:-1]
+    return jnp.concatenate((jnp.zeros(degree + 1), internal, jnp.ones(degree + 1)))
+
+
+def bspline_basis(y, count, degree=3):
+    """Evaluate a clamped, open-uniform B-spline basis on ``[0, 1]``."""
+
+    y = jnp.clip(jnp.asarray(y), 0.0, 1.0)
+    knots = _open_uniform_knots(count, degree)
+    values = ((y[..., None] >= knots[:-1]) & (y[..., None] < knots[1:])).astype(y.dtype)
+    for order in range(1, degree + 1):
+        function_count = knots.size - order - 1
+        left_denominator = (
+            knots[order : order + function_count] - knots[:function_count]
+        )
+        right_denominator = (
+            knots[order + 1 : order + function_count + 1]
+            - knots[1 : function_count + 1]
+        )
+        left = jnp.where(
+            left_denominator > 0.0,
+            (y[..., None] - knots[:function_count])
+            / jnp.where(left_denominator > 0.0, left_denominator, 1.0)
+            * values[..., :function_count],
+            0.0,
+        )
+        right = jnp.where(
+            right_denominator > 0.0,
+            (knots[order + 1 : order + function_count + 1] - y[..., None])
+            / jnp.where(right_denominator > 0.0, right_denominator, 1.0)
+            * values[..., 1 : function_count + 1],
+            0.0,
+        )
+        values = left + right
+    values = values[..., :count]
+    endpoint = jax.nn.one_hot(count - 1, count, dtype=y.dtype)
+    return jnp.where((y == 1.0)[..., None], endpoint, values)
+
+
+def density_basis(y, count, basis):
+    if basis == "bernstein":
+        return bernstein_basis(y, count)
+    if basis == "bspline":
+        return bspline_basis(y, count)
+    raise ValueError(f"Unknown learned-density basis: {basis}")
+
+
 class LearnedDensityCoordinate(BaseTransform):
     """Positive integrated density with optional terrain-conditioned residual."""
 
-    def __init__(self, params, residual_scale=1.5):
+    def __init__(self, params, residual_scale=1.5, basis="bernstein"):
         self.params = params
         self.residual_scale = residual_scale
+        self.basis = basis
 
     def _column_coefficients(self, xi, h):
         coefficients = self.params["global"]
@@ -84,7 +138,7 @@ class LearnedDensityCoordinate(BaseTransform):
         coefficients = self._column_coefficients(xi, h)
 
         def density(y):
-            basis = bernstein_basis(y, coefficients.shape[-1])
+            basis = density_basis(y, coefficients.shape[-1], self.basis)
             if coefficients.ndim == 1:
                 log_density = jnp.sum(basis * coefficients, axis=-1)
             elif y.ndim == 1:
@@ -169,11 +223,22 @@ class DirectDensityCoordinate(BaseTransform):
         return zeta + h * (1.0 - cumulative)
 
 
-def scalar_density_params(amplitude, basis_count):
-    return {"global": jnp.linspace(amplitude, -amplitude, basis_count)}
+def scalar_density_params(amplitude, basis_count, basis="bernstein"):
+    if basis == "bernstein":
+        locations = jnp.linspace(0.0, 1.0, basis_count)
+    elif basis == "bspline":
+        knots = _open_uniform_knots(basis_count)
+        locations = jnp.asarray(
+            [jnp.mean(knots[index + 1 : index + 4]) for index in range(basis_count)]
+        )
+    else:
+        raise ValueError(f"Unknown learned-density basis: {basis}")
+    return {"global": amplitude * (1.0 - 2.0 * locations)}
 
 
-def save_learned_coordinate(path, params, residual_scale=1.5, **metadata):
+def save_learned_coordinate(
+    path, params, residual_scale=1.5, basis="bernstein", **metadata
+):
     payload = {
         "global": np.asarray(params["global"]),
         "residual_scale": np.asarray(residual_scale),
@@ -190,6 +255,7 @@ def save_learned_coordinate(path, params, residual_scale=1.5, **metadata):
         **payload,
         metadata=json.dumps(metadata),
         coordinate_format="learned_density_v1",
+        basis=basis,
     )
 
 
@@ -209,9 +275,18 @@ def load_learned_params(path):
     return params, residual_scale
 
 
+def load_learned_basis(path):
+    with np.load(path) as source:
+        return str(source["basis"]) if "basis" in source else "bernstein"
+
+
 def load_learned_coordinate(path):
     params, residual_scale = load_learned_params(path)
-    return LearnedDensityCoordinate(params, residual_scale)
+    return LearnedDensityCoordinate(
+        params,
+        residual_scale,
+        basis=load_learned_basis(path),
+    )
 
 
 def direct_density_params(amplitude, hidden, seed):

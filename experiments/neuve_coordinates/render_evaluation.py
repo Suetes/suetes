@@ -65,9 +65,12 @@ def main():
         sharey=True,
         squeeze=False,
     )
-    props = dict(
-        boxstyle="square,pad=0.3", facecolor="white", alpha=0.9, edgecolor="none"
-    )
+    props = {
+        "boxstyle": "square,pad=0.3",
+        "facecolor": "white",
+        "alpha": 0.9,
+        "edgecolor": "none",
+    }
     for sample in range(count):
         for column, name in enumerate(names):
             axis = axes[sample, column]
@@ -100,6 +103,29 @@ def main():
     target = data.attrs["target"]
     time = data.time.values
     line_styles = ["-", "--", "-.", ":"] * 3
+    pgf_ratio_limits = None
+    if target == "pgf_rest":
+        visible_ratios = []
+        for sample in range(count):
+            series = {
+                name: data.diagnostic_series.sel(sample=sample, coordinate=name).values
+                for name in names
+            }
+            cumulative = {
+                name: np.cumsum(values) / np.arange(1, len(values) + 1)
+                for name, values in series.items()
+            }
+            reference = cumulative["Tuned SLEVE"]
+            valid = reference > np.finfo(float).tiny
+            for name in ("Tuned SLEVE", "NEUVE"):
+                visible_ratios.append(cumulative[name][valid] / reference[valid])
+        visible_ratios = np.concatenate(visible_ratios)
+        span = float(np.nanmax(visible_ratios) - np.nanmin(visible_ratios))
+        padding = max(0.02, 0.08 * span)
+        pgf_ratio_limits = (
+            max(0.0, float(np.nanmin(visible_ratios)) - padding),
+            max(1.02, float(np.nanmax(visible_ratios)) + padding),
+        )
     if target == "pgf_rest":
         fig = plt.figure(figsize=(6.0 * count, 6.0))
         grid = fig.add_gridspec(
@@ -183,7 +209,7 @@ def main():
                     ls=style,
                     linewidth=2,
                 )
-            axis.set_ylim(0.85, 1.02)
+            axis.set_ylim(*pgf_ratio_limits)
             axis.axhline(1.0, color="0.25", linestyle="--", linewidth=1.5)
         else:
             reference = plotted["Tuned SLEVE"]
@@ -206,9 +232,12 @@ def main():
         axis.grid(True, ls="--", alpha=0.4)
 
         # Add sample label
-        props = dict(
-            boxstyle="square,pad=0.3", facecolor="white", alpha=0.9, edgecolor="none"
-        )
+        props = {
+            "boxstyle": "square,pad=0.3",
+            "facecolor": "white",
+            "alpha": 0.9,
+            "edgecolor": "none",
+        }
         label_axis = upper_axes[sample] if target == "pgf_rest" else axis
         label_axis.text(
             0.05,

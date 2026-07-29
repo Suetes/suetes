@@ -32,6 +32,7 @@ from experiments._shared.neuve_coordinate import (
 from experiments._shared.neuve_learned_coordinate import (
     LearnedDensityCoordinate,
     load_direct_density_coordinate,
+    load_learned_basis,
     load_learned_coordinate,
     load_learned_params,
 )
@@ -144,15 +145,15 @@ def main():
         learned_params, residual_scale = load_learned_params(args.neuve_weights)
         learned_params.pop("conditioner", None)
         coordinates[neuve_name] = LearnedDensityCoordinate(
-            learned_params, residual_scale
+            learned_params,
+            residual_scale,
+            basis=load_learned_basis(args.neuve_weights),
         )
     else:
         if coordinate_format == "learned_density_v1":
             coordinates[neuve_name] = load_learned_coordinate(args.neuve_weights)
         elif coordinate_format == "direct_density_mlp_v1":
-            coordinates[neuve_name] = load_direct_density_coordinate(
-                args.neuve_weights
-            )
+            coordinates[neuve_name] = load_direct_density_coordinate(args.neuve_weights)
         else:
             coordinates[neuve_name] = load_neuve(args.neuve_weights)
 
@@ -313,6 +314,25 @@ def main():
             sharey=True,
             squeeze=False,
         )
+        pgf_ratio_limits = None
+        if target == "pgf_rest":
+            visible_ratios = []
+            for sample in range(gallery_count):
+                cumulative = {}
+                for name in names:
+                    series, _ = gallery[sample][name]
+                    cumulative[name] = np.cumsum(series) / np.arange(1, len(series) + 1)
+                reference = cumulative["Tuned SLEVE"]
+                valid = reference > np.finfo(float).tiny
+                for name in ("Tuned SLEVE", neuve_name):
+                    visible_ratios.append(cumulative[name][valid] / reference[valid])
+            visible_ratios = np.concatenate(visible_ratios)
+            span = float(np.nanmax(visible_ratios) - np.nanmin(visible_ratios))
+            padding = max(0.02, 0.08 * span)
+            pgf_ratio_limits = (
+                max(0.0, float(np.nanmin(visible_ratios)) - padding),
+                max(1.02, float(np.nanmax(visible_ratios)) + padding),
+            )
         for sample in range(gallery_count):
             for column, name in enumerate(names):
                 axis = axes[sample, column]
@@ -370,15 +390,7 @@ def main():
                     transform=axis.transAxes,
                     fontsize=8,
                 )
-                visible_ratios = np.concatenate(
-                    [
-                        plotted[name][valid] / reference[valid]
-                        for name in ("Tuned SLEVE", neuve_name)
-                    ]
-                )
-                lower = min(0.85, float(np.nanmin(visible_ratios)) - 0.02)
-                upper = max(1.02, float(np.nanmax(visible_ratios)) + 0.02)
-                axis.set_ylim(lower, upper)
+                axis.set_ylim(*pgf_ratio_limits)
                 axis.axhline(1.0, color="0.25", linestyle="--", linewidth=0.8)
             else:
                 reference = plotted["Tuned SLEVE"]

@@ -292,6 +292,7 @@ kind = "run"
 command = [
   "{python}", "experiments/neuve_coordinates/train_density.py",
   "--dataset", "{output_root}/experiments/neuve_coordinates/paper/data/training_dataset.json",
+  "--basis", "bspline", "--basis-count", "16",
   "--epochs", "60",
   "--global-lr", "0.001", "--conditioner-lr", "0.003",
   "--initial-minimum-layer-m", "175", "--minimum-layer-m", "150",

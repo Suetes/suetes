@@ -56,10 +56,11 @@ def _grid(coordinate, terrain):
     )
 
 
-def _initial_amplitude(terrains, basis_count, target_minimum, iterations=24):
+def _initial_amplitude(terrains, basis_count, basis, target_minimum, iterations=24):
     def minimum_layer(amplitude):
         coordinate = LearnedDensityCoordinate(
-            scalar_density_params(amplitude, basis_count)
+            scalar_density_params(amplitude, basis_count, basis),
+            basis=basis,
         )
         minima = []
         for terrain in terrains:
@@ -121,6 +122,12 @@ def main():
     parser.add_argument("--dataset", required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--epochs", type=int, default=60)
+    parser.add_argument(
+        "--basis",
+        choices=("bernstein", "bspline"),
+        default="bernstein",
+        help="Smooth basis used for the vertical log-density profile",
+    )
     parser.add_argument("--basis-count", type=int, default=16)
     parser.add_argument("--conditioner-hidden", type=int, default=24)
     parser.add_argument("--global-lr", type=float, default=1.0e-3)
@@ -154,9 +161,14 @@ def main():
     amplitude, initial_minimum = _initial_amplitude(
         terrains,
         args.basis_count,
+        args.basis,
         args.initial_minimum_layer_m,
     )
-    global_params = scalar_density_params(jnp.asarray(amplitude), args.basis_count)
+    global_params = scalar_density_params(
+        jnp.asarray(amplitude),
+        args.basis_count,
+        args.basis,
+    )
     params = _conditioned_params(
         global_params,
         args.basis_count,
@@ -166,7 +178,11 @@ def main():
     print(f"Geometry initialization: a={amplitude:.6f}, min_dz={initial_minimum:.2f} m")
 
     def objective(current_params, terrain_seed):
-        coordinate = LearnedDensityCoordinate(current_params, args.residual_scale)
+        coordinate = LearnedDensityCoordinate(
+            current_params,
+            args.residual_scale,
+            basis=args.basis,
+        )
         metric, _, grid, _ = run_target_case(
             "pgf_rest", coordinate, generator(terrain_seed), steps
         )
@@ -212,6 +228,7 @@ def main():
                 args.output_dir / "neuve_coordinate.npz",
                 best_params,
                 residual_scale=args.residual_scale,
+                basis=args.basis,
                 target="pgf_rest",
                 training_mode="geometry_initialized_end_to_end",
             )

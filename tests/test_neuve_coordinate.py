@@ -1,5 +1,6 @@
 """Regression tests for the learned NEUVE vertical coordinate."""
 
+import jax
 import jax.numpy as jnp
 
 from experiments._shared.neuve_coordinate import (
@@ -13,11 +14,13 @@ from experiments._shared.neuve_coordinate import (
 from experiments._shared.neuve_learned_coordinate import (
     DirectDensityCoordinate,
     LearnedDensityCoordinate,
+    bspline_basis,
     direct_density_params,
     load_direct_density_coordinate,
     load_learned_coordinate,
     save_direct_density_coordinate,
     save_learned_coordinate,
+    scalar_density_params,
 )
 from suetes.shared.transforms import (
     GalChenSigma,
@@ -166,6 +169,36 @@ def test_learned_coordinate_checkpoint_roundtrip(tmp_path):
     assert jnp.allclose(loaded.params["global"], params["global"])
 
 
+def test_cubic_bspline_basis_is_local_and_partitions_unity():
+    y = jnp.linspace(0.0, 1.0, 101)
+    basis = bspline_basis(y, count=16)
+
+    assert jnp.all(basis >= 0.0)
+    assert jnp.allclose(jnp.sum(basis, axis=-1), 1.0, atol=1.0e-6)
+    assert int(jnp.max(jnp.sum(basis > 1.0e-12, axis=-1))) <= 4
+    assert jnp.allclose(basis[0], jax.nn.one_hot(0, 16))
+    assert jnp.allclose(basis[-1], jax.nn.one_hot(15, 16))
+
+
+def test_cubic_bspline_scalar_initialization_reproduces_linear_log_density():
+    y = jnp.linspace(0.0, 1.0, 101)
+    params = scalar_density_params(2.0, 16, basis="bspline")
+    represented = jnp.sum(bspline_basis(y, 16) * params["global"], axis=-1)
+
+    assert jnp.allclose(represented, 2.0 * (1.0 - 2.0 * y), atol=1.0e-6)
+
+
+def test_bspline_checkpoint_roundtrip(tmp_path):
+    params = {"global": jnp.linspace(2.0, -2.0, 16)}
+    path = tmp_path / "coordinate.npz"
+    save_learned_coordinate(path, params, residual_scale=1.25, basis="bspline")
+    loaded = load_learned_coordinate(path)
+
+    assert loaded.basis == "bspline"
+    assert loaded.residual_scale == 1.25
+    assert jnp.allclose(loaded.params["global"], params["global"])
+
+
 def test_direct_mlp_density_has_exact_endpoints_and_positive_layers():
     params = direct_density_params(amplitude=2.0, hidden=8, seed=3)
     coordinate = DirectDensityCoordinate(params)
@@ -173,11 +206,7 @@ def test_direct_mlp_density_has_exact_endpoints_and_positive_layers():
     y = jnp.linspace(-1000.0, 1000.0, 3)
     zeta = jnp.linspace(0.0, 16000.0, 33)
     xi, _, zeta_3d = jnp.meshgrid(x, y, zeta, indexing="ij")
-    terrain_2d = (
-        1800.0
-        * jnp.exp(-0.5 * (x[:, None] / 900.0) ** 2)
-        * jnp.ones((1, 3))
-    )
+    terrain_2d = 1800.0 * jnp.exp(-0.5 * (x[:, None] / 900.0) ** 2) * jnp.ones((1, 3))
     terrain = jnp.broadcast_to(terrain_2d[..., None], zeta_3d.shape)
 
     physical_z = coordinate(xi, zeta_3d, terrain, 16000.0)
