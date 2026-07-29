@@ -60,7 +60,7 @@ primary artifact and never rerun the model.
 
 ## NEUVE coordinate-discovery workflow
 
-The publication PGF experiment has four manifest-driven entry points:
+The publication PGF experiment has four primary manifest-driven entry points:
 
 1. `neuve_coordinates/create_dataset.py` freezes the training or testing
    terrain ensemble.
@@ -70,6 +70,12 @@ The publication PGF experiment has four manifest-driven entry points:
    manifest.
 4. `neuve_coordinates/evaluate.py` evaluates frozen NEUVE, tuned SLEVE, and
    Gal-Chen on an arbitrary held-out manifest.
+
+`neuve_coordinates/train_direct_density.py` provides an architectural
+ablation with the same normalized integral, terrain inputs, optimization
+target, and constraints. It replaces the Bernstein expansion with a
+comparably sized MLP that predicts log density directly; its checkpoints are
+accepted by the standard evaluator.
 
 The older `neuve_coordinates/train.py` remains available for the exploratory
 tracer-reversibility and mountain-flux objectives. It is not used for the

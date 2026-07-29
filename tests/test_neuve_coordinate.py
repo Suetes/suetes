@@ -11,8 +11,12 @@ from experiments._shared.neuve_coordinate import (
     transport_reversibility,
 )
 from experiments._shared.neuve_learned_coordinate import (
+    DirectDensityCoordinate,
     LearnedDensityCoordinate,
+    direct_density_params,
+    load_direct_density_coordinate,
     load_learned_coordinate,
+    save_direct_density_coordinate,
     save_learned_coordinate,
 )
 from suetes.shared.transforms import (
@@ -160,3 +164,38 @@ def test_learned_coordinate_checkpoint_roundtrip(tmp_path):
 
     assert loaded.residual_scale == 1.25
     assert jnp.allclose(loaded.params["global"], params["global"])
+
+
+def test_direct_mlp_density_has_exact_endpoints_and_positive_layers():
+    params = direct_density_params(amplitude=2.0, hidden=8, seed=3)
+    coordinate = DirectDensityCoordinate(params)
+    x = jnp.linspace(-2000.0, 2000.0, 5)
+    y = jnp.linspace(-1000.0, 1000.0, 3)
+    zeta = jnp.linspace(0.0, 16000.0, 33)
+    xi, _, zeta_3d = jnp.meshgrid(x, y, zeta, indexing="ij")
+    terrain_2d = (
+        1800.0
+        * jnp.exp(-0.5 * (x[:, None] / 900.0) ** 2)
+        * jnp.ones((1, 3))
+    )
+    terrain = jnp.broadcast_to(terrain_2d[..., None], zeta_3d.shape)
+
+    physical_z = coordinate(xi, zeta_3d, terrain, 16000.0)
+
+    assert jnp.allclose(physical_z[..., 0], terrain_2d)
+    assert jnp.allclose(physical_z[..., -1], 16000.0)
+    assert float(jnp.min(jnp.diff(physical_z, axis=-1))) > 0.0
+
+
+def test_direct_mlp_density_checkpoint_roundtrip(tmp_path):
+    params = direct_density_params(amplitude=2.0, hidden=8, seed=3)
+    path = tmp_path / "coordinate.npz"
+    save_direct_density_coordinate(path, params, residual_scale=1.25)
+    loaded = load_direct_density_coordinate(path)
+
+    assert loaded.residual_scale == 1.25
+    assert jnp.allclose(loaded.params["amplitude"], params["amplitude"])
+    assert jnp.allclose(
+        loaded.params["network"]["w2"],
+        params["network"]["w2"],
+    )

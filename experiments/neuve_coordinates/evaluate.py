@@ -30,7 +30,10 @@ from experiments._shared.neuve_coordinate import (
     terrains_from_dataset,
 )
 from experiments._shared.neuve_learned_coordinate import (
+    LearnedDensityCoordinate,
+    load_direct_density_coordinate,
     load_learned_coordinate,
+    load_learned_params,
 )
 from suetes.shared.experiment import figure_dir_for, resolve_data_dir, save_plot_dataset
 from suetes.shared.transforms import GalChenSigma, SleveSimple
@@ -60,6 +63,14 @@ def main():
         "--include-untrained",
         action="store_true",
         help="Include the untrained NEUVE initialization as an ablation",
+    )
+    parser.add_argument(
+        "--disable-neuve-conditioner",
+        action="store_true",
+        help=(
+            "Evaluate only the globally shared density profile stored in a "
+            "learned-density checkpoint"
+        ),
     )
     parser.add_argument("--output-root", default="output")
     parser.add_argument("--name", default="default", help="Execution label")
@@ -124,11 +135,26 @@ def main():
             if "coordinate_format" in weights
             else "legacy_mlp"
         )
-    coordinates["NEUVE"] = (
-        load_learned_coordinate(args.neuve_weights)
-        if coordinate_format == "learned_density_v1"
-        else load_neuve(args.neuve_weights)
-    )
+    neuve_name = "Global-only NEUVE" if args.disable_neuve_conditioner else "NEUVE"
+    if args.disable_neuve_conditioner:
+        if coordinate_format != "learned_density_v1":
+            parser.error(
+                "--disable-neuve-conditioner requires a learned_density_v1 checkpoint"
+            )
+        learned_params, residual_scale = load_learned_params(args.neuve_weights)
+        learned_params.pop("conditioner", None)
+        coordinates[neuve_name] = LearnedDensityCoordinate(
+            learned_params, residual_scale
+        )
+    else:
+        if coordinate_format == "learned_density_v1":
+            coordinates[neuve_name] = load_learned_coordinate(args.neuve_weights)
+        elif coordinate_format == "direct_density_mlp_v1":
+            coordinates[neuve_name] = load_direct_density_coordinate(
+                args.neuve_weights
+            )
+        else:
+            coordinates[neuve_name] = load_neuve(args.neuve_weights)
 
     rows, gallery, artifact_series, artifact_z = [], {}, {}, {}
     first_grid = None
@@ -184,7 +210,11 @@ def main():
         name: np.asarray([row["metric"] for row in rows if row["coordinate"] == name])
         for name in coordinates
     }
-    gal, slv, neu = arrays["Gal-Chen"], arrays["Tuned SLEVE"], arrays["NEUVE"]
+    gal, slv, neu = (
+        arrays["Gal-Chen"],
+        arrays["Tuned SLEVE"],
+        arrays[neuve_name],
+    )
 
     def paired_interval(values):
         if len(values) == 1:
@@ -328,7 +358,7 @@ def main():
             elif target == "pgf_rest":
                 reference = plotted["Tuned SLEVE"]
                 valid = reference > np.finfo(float).tiny
-                for name in ("Tuned SLEVE", "NEUVE"):
+                for name in ("Tuned SLEVE", neuve_name):
                     ratio = np.full_like(reference, np.nan)
                     ratio[valid] = plotted[name][valid] / reference[valid]
                     axis.plot(time, ratio, label=name)
@@ -340,7 +370,15 @@ def main():
                     transform=axis.transAxes,
                     fontsize=8,
                 )
-                axis.set_ylim(0.85, 1.02)
+                visible_ratios = np.concatenate(
+                    [
+                        plotted[name][valid] / reference[valid]
+                        for name in ("Tuned SLEVE", neuve_name)
+                    ]
+                )
+                lower = min(0.85, float(np.nanmin(visible_ratios)) - 0.02)
+                upper = max(1.02, float(np.nanmax(visible_ratios)) + 0.02)
+                axis.set_ylim(lower, upper)
                 axis.axhline(1.0, color="0.25", linestyle="--", linewidth=0.8)
             else:
                 reference = plotted["Tuned SLEVE"]

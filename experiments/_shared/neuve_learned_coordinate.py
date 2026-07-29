@@ -3,6 +3,7 @@
 import json
 import math
 
+import jax
 import jax.numpy as jnp
 import numpy as np
 
@@ -108,6 +109,66 @@ class LearnedDensityCoordinate(BaseTransform):
         return zeta + h * (1.0 - cumulative)
 
 
+class DirectDensityCoordinate(BaseTransform):
+    """Terrain-conditioned MLP that predicts log density directly."""
+
+    def __init__(self, params, residual_scale=1.5):
+        self.params = params
+        self.residual_scale = residual_scale
+
+    @staticmethod
+    def _terrain_features(xi, h):
+        h2 = h[:, :, 0] / 4000.0
+        spacing = jnp.maximum(jnp.mean(jnp.abs(jnp.diff(xi[:, 0, 0]))), 1.0)
+        hx = jnp.gradient(h[:, :, 0], axis=0) / spacing
+        hy = jnp.gradient(h[:, :, 0], axis=1) / spacing
+        slope = jnp.sqrt(hx**2 + hy**2 + 1.0e-12)
+        curvature = (
+            4000.0 * (jnp.gradient(hx, axis=0) + jnp.gradient(hy, axis=1)) / spacing
+        )
+        return jnp.stack((h2, slope, curvature), axis=-1)
+
+    def _log_density(self, y, features):
+        y = jnp.asarray(y)
+        y_values = y if y.ndim >= 2 else jnp.reshape(y, (1, 1, y.shape[0]))
+        horizontal_shape = features.shape[:-1]
+        feature_shape = (
+            horizontal_shape + (1,) * (y_values.ndim - 2) + (features.shape[-1],)
+        )
+        target_shape = jnp.broadcast_shapes(feature_shape[:-1], y_values.shape)
+        feature_values = jnp.broadcast_to(
+            jnp.reshape(features, feature_shape),
+            target_shape + (3,),
+        )
+        height_values = jnp.broadcast_to(y_values, target_shape)
+        inputs = jnp.concatenate(
+            (height_values[..., None], feature_values),
+            axis=-1,
+        )
+        network = self.params["network"]
+        hidden = jnp.tanh(inputs @ network["w1"] + network["b1"])
+        hidden = jnp.tanh(hidden @ network["w2"] + network["b2"])
+        residual = (hidden @ network["w3"] + network["b3"])[..., 0]
+        base = self.params["amplitude"] * (1.0 - 2.0 * height_values)
+        return base + self.residual_scale * residual
+
+    def __call__(self, xi, zeta, h, Lz):
+        if h.ndim != 3:
+            raise ValueError("DirectDensityCoordinate requires a 3-D terrain field")
+        eta = jnp.clip(zeta / Lz, 0.0, 1.0)
+        features = self._terrain_features(xi, h)
+
+        def density(y):
+            return jnp.exp(jnp.clip(self._log_density(y, features), -6.0, 6.0))
+
+        total_nodes = 0.5 * (GL_X + 1.0)
+        total = 0.5 * jnp.sum(GL_W * density(total_nodes), axis=-1)
+        partial_nodes = 0.5 * eta[..., None] * (GL_X + 1.0)
+        partial = 0.5 * eta * jnp.sum(GL_W * density(partial_nodes), axis=-1)
+        cumulative = partial / total[..., None]
+        return zeta + h * (1.0 - cumulative)
+
+
 def scalar_density_params(amplitude, basis_count):
     return {"global": jnp.linspace(amplitude, -amplitude, basis_count)}
 
@@ -151,3 +212,53 @@ def load_learned_params(path):
 def load_learned_coordinate(path):
     params, residual_scale = load_learned_params(path)
     return LearnedDensityCoordinate(params, residual_scale)
+
+
+def direct_density_params(amplitude, hidden, seed):
+    first, second = jax.random.split(jax.random.PRNGKey(seed))
+    return {
+        "amplitude": jnp.asarray(amplitude),
+        "network": {
+            "w1": 0.2 * jax.random.normal(first, (4, hidden)),
+            "b1": jnp.zeros(hidden),
+            "w2": 0.2 * jax.random.normal(second, (hidden, hidden)),
+            "b2": jnp.zeros(hidden),
+            "w3": jnp.zeros((hidden, 1)),
+            "b3": jnp.zeros(1),
+        },
+    }
+
+
+def save_direct_density_coordinate(path, params, residual_scale=1.5, **metadata):
+    payload = {
+        "amplitude": np.asarray(params["amplitude"]),
+        "residual_scale": np.asarray(residual_scale),
+    }
+    payload.update(
+        {
+            f"network_{name}": np.asarray(value)
+            for name, value in params["network"].items()
+        }
+    )
+    np.savez(
+        path,
+        **payload,
+        metadata=json.dumps(metadata),
+        coordinate_format="direct_density_mlp_v1",
+    )
+
+
+def load_direct_density_coordinate(path):
+    with np.load(path) as source:
+        params = {
+            "amplitude": jnp.asarray(source["amplitude"]),
+            "network": {
+                name.removeprefix("network_"): jnp.asarray(source[name])
+                for name in source.files
+                if name.startswith("network_")
+            },
+        }
+        residual_scale = (
+            float(source["residual_scale"]) if "residual_scale" in source else 1.5
+        )
+    return DirectDensityCoordinate(params, residual_scale)
