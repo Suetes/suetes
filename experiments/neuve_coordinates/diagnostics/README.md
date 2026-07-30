@@ -10,6 +10,9 @@ are not stages of `paper_suite.toml`:
   increasingly terrain-decaying coordinates.
 - `reachability_pipeline.py` separates scalar, global-profile, and
   terrain-conditioned optimization stages.
+- `stratification_sweep.py` evaluates the fixed trained coordinates across
+  several hydrostatic resting states without retraining, including the
+  matched-reference state as a negative control.
 
 The supported publication workflow is:
 

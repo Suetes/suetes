@@ -46,18 +46,12 @@ GL_W = jnp.asarray(
 def bernstein_basis(y, count):
     powers = jnp.arange(count)
     coefficients = jnp.asarray([math.comb(count - 1, index) for index in range(count)])
-    return (
-        coefficients
-        * y[..., None] ** powers
-        * (1.0 - y[..., None]) ** (count - 1 - powers)
-    )
+    return coefficients * y[..., None] ** powers * (1.0 - y[..., None]) ** (count - 1 - powers)
 
 
 def _open_uniform_knots(count, degree=3):
     if count <= degree:
-        raise ValueError(
-            f"A degree-{degree} B-spline requires at least {degree + 1} coefficients"
-        )
+        raise ValueError(f"A degree-{degree} B-spline requires at least {degree + 1} coefficients")
     internal_count = count - degree - 1
     internal = jnp.linspace(0.0, 1.0, internal_count + 2)[1:-1]
     return jnp.concatenate((jnp.zeros(degree + 1), internal, jnp.ones(degree + 1)))
@@ -71,13 +65,8 @@ def bspline_basis(y, count, degree=3):
     values = ((y[..., None] >= knots[:-1]) & (y[..., None] < knots[1:])).astype(y.dtype)
     for order in range(1, degree + 1):
         function_count = knots.size - order - 1
-        left_denominator = (
-            knots[order : order + function_count] - knots[:function_count]
-        )
-        right_denominator = (
-            knots[order + 1 : order + function_count + 1]
-            - knots[1 : function_count + 1]
-        )
+        left_denominator = knots[order : order + function_count] - knots[:function_count]
+        right_denominator = knots[order + 1 : order + function_count + 1] - knots[1 : function_count + 1]
         left = jnp.where(
             left_denominator > 0.0,
             (y[..., None] - knots[:function_count])
@@ -123,9 +112,7 @@ class LearnedDensityCoordinate(BaseTransform):
         hx = jnp.gradient(h[:, :, 0], axis=0) / spacing
         hy = jnp.gradient(h[:, :, 0], axis=1) / spacing
         slope = jnp.sqrt(hx**2 + hy**2 + 1.0e-12)
-        curvature = (
-            4000.0 * (jnp.gradient(hx, axis=0) + jnp.gradient(hy, axis=1)) / spacing
-        )
+        curvature = 4000.0 * (jnp.gradient(hx, axis=0) + jnp.gradient(hy, axis=1)) / spacing
         features = jnp.stack((h2, slope, curvature), axis=-1)
         network = self.params["conditioner"]
         hidden = jnp.tanh(features @ network["w1"] + network["b1"])
@@ -142,15 +129,9 @@ class LearnedDensityCoordinate(BaseTransform):
             if coefficients.ndim == 1:
                 log_density = jnp.sum(basis * coefficients, axis=-1)
             elif y.ndim == 1:
-                log_density = jnp.sum(
-                    basis[None, None, ...] * coefficients[..., None, :],
-                    axis=-1,
-                )
+                log_density = jnp.sum(basis[None, None, ...] * coefficients[..., None, :], axis=-1)
             else:
-                log_density = jnp.sum(
-                    basis * coefficients[..., None, None, :],
-                    axis=-1,
-                )
+                log_density = jnp.sum(basis * coefficients[..., None, None, :], axis=-1)
             return jnp.exp(jnp.clip(log_density, -6.0, 6.0))
 
         total_nodes = 0.5 * (GL_X + 1.0)
@@ -177,28 +158,18 @@ class DirectDensityCoordinate(BaseTransform):
         hx = jnp.gradient(h[:, :, 0], axis=0) / spacing
         hy = jnp.gradient(h[:, :, 0], axis=1) / spacing
         slope = jnp.sqrt(hx**2 + hy**2 + 1.0e-12)
-        curvature = (
-            4000.0 * (jnp.gradient(hx, axis=0) + jnp.gradient(hy, axis=1)) / spacing
-        )
+        curvature = 4000.0 * (jnp.gradient(hx, axis=0) + jnp.gradient(hy, axis=1)) / spacing
         return jnp.stack((h2, slope, curvature), axis=-1)
 
     def _log_density(self, y, features):
         y = jnp.asarray(y)
         y_values = y if y.ndim >= 2 else jnp.reshape(y, (1, 1, y.shape[0]))
         horizontal_shape = features.shape[:-1]
-        feature_shape = (
-            horizontal_shape + (1,) * (y_values.ndim - 2) + (features.shape[-1],)
-        )
+        feature_shape = horizontal_shape + (1,) * (y_values.ndim - 2) + (features.shape[-1],)
         target_shape = jnp.broadcast_shapes(feature_shape[:-1], y_values.shape)
-        feature_values = jnp.broadcast_to(
-            jnp.reshape(features, feature_shape),
-            target_shape + (3,),
-        )
+        feature_values = jnp.broadcast_to(jnp.reshape(features, feature_shape), target_shape + (3,))
         height_values = jnp.broadcast_to(y_values, target_shape)
-        inputs = jnp.concatenate(
-            (height_values[..., None], feature_values),
-            axis=-1,
-        )
+        inputs = jnp.concatenate((height_values[..., None], feature_values), axis=-1)
         network = self.params["network"]
         hidden = jnp.tanh(inputs @ network["w1"] + network["b1"])
         hidden = jnp.tanh(hidden @ network["w2"] + network["b2"])
@@ -228,48 +199,26 @@ def scalar_density_params(amplitude, basis_count, basis="bernstein"):
         locations = jnp.linspace(0.0, 1.0, basis_count)
     elif basis == "bspline":
         knots = _open_uniform_knots(basis_count)
-        locations = jnp.asarray(
-            [jnp.mean(knots[index + 1 : index + 4]) for index in range(basis_count)]
-        )
+        locations = jnp.asarray([jnp.mean(knots[index + 1 : index + 4]) for index in range(basis_count)])
     else:
         raise ValueError(f"Unknown learned-density basis: {basis}")
     return {"global": amplitude * (1.0 - 2.0 * locations)}
 
 
-def save_learned_coordinate(
-    path, params, residual_scale=1.5, basis="bernstein", **metadata
-):
-    payload = {
-        "global": np.asarray(params["global"]),
-        "residual_scale": np.asarray(residual_scale),
-    }
+def save_learned_coordinate(path, params, residual_scale=1.5, basis="bernstein", **metadata):
+    payload = {"global": np.asarray(params["global"]), "residual_scale": np.asarray(residual_scale)}
     if "conditioner" in params:
-        payload.update(
-            {
-                f"conditioner_{name}": np.asarray(value)
-                for name, value in params["conditioner"].items()
-            }
-        )
-    np.savez(
-        path,
-        **payload,
-        metadata=json.dumps(metadata),
-        coordinate_format="learned_density_v1",
-        basis=basis,
-    )
+        payload.update({f"conditioner_{name}": np.asarray(value) for name, value in params["conditioner"].items()})
+    np.savez(path, **payload, metadata=json.dumps(metadata), coordinate_format="learned_density_v1", basis=basis)
 
 
 def load_learned_params(path):
     with np.load(path) as source:
         params = {"global": jnp.asarray(source["global"])}
         conditioner = {
-            name.removeprefix("conditioner_"): jnp.asarray(source[name])
-            for name in source.files
-            if name.startswith("conditioner_")
+            name.removeprefix("conditioner_"): jnp.asarray(source[name]) for name in source.files if name.startswith("conditioner_")
         }
-        residual_scale = (
-            float(source["residual_scale"]) if "residual_scale" in source else 1.5
-        )
+        residual_scale = float(source["residual_scale"]) if "residual_scale" in source else 1.5
     if conditioner:
         params["conditioner"] = conditioner
     return params, residual_scale
@@ -282,11 +231,7 @@ def load_learned_basis(path):
 
 def load_learned_coordinate(path):
     params, residual_scale = load_learned_params(path)
-    return LearnedDensityCoordinate(
-        params,
-        residual_scale,
-        basis=load_learned_basis(path),
-    )
+    return LearnedDensityCoordinate(params, residual_scale, basis=load_learned_basis(path))
 
 
 def direct_density_params(amplitude, hidden, seed):
@@ -305,35 +250,16 @@ def direct_density_params(amplitude, hidden, seed):
 
 
 def save_direct_density_coordinate(path, params, residual_scale=1.5, **metadata):
-    payload = {
-        "amplitude": np.asarray(params["amplitude"]),
-        "residual_scale": np.asarray(residual_scale),
-    }
-    payload.update(
-        {
-            f"network_{name}": np.asarray(value)
-            for name, value in params["network"].items()
-        }
-    )
-    np.savez(
-        path,
-        **payload,
-        metadata=json.dumps(metadata),
-        coordinate_format="direct_density_mlp_v1",
-    )
+    payload = {"amplitude": np.asarray(params["amplitude"]), "residual_scale": np.asarray(residual_scale)}
+    payload.update({f"network_{name}": np.asarray(value) for name, value in params["network"].items()})
+    np.savez(path, **payload, metadata=json.dumps(metadata), coordinate_format="direct_density_mlp_v1")
 
 
 def load_direct_density_coordinate(path):
     with np.load(path) as source:
         params = {
             "amplitude": jnp.asarray(source["amplitude"]),
-            "network": {
-                name.removeprefix("network_"): jnp.asarray(source[name])
-                for name in source.files
-                if name.startswith("network_")
-            },
+            "network": {name.removeprefix("network_"): jnp.asarray(source[name]) for name in source.files if name.startswith("network_")},
         }
-        residual_scale = (
-            float(source["residual_scale"]) if "residual_scale" in source else 1.5
-        )
+        residual_scale = float(source["residual_scale"]) if "residual_scale" in source else 1.5
     return DirectDensityCoordinate(params, residual_scale)

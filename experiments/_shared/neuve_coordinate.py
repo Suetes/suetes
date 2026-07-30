@@ -14,11 +14,7 @@ from suetes.regional3d.boundaries import BenchmarkSponge
 from suetes.regional3d.euler import Euler3D
 from suetes.regional3d.geometry import RegionalGrid3D
 from suetes.regional3d.operators import CGridOperator3D
-from suetes.regional3d.steppers import (
-    FluxFormAdvector,
-    SplitExplicitStepper3D,
-    build_dynamical_core,
-)
+from suetes.regional3d.steppers import FluxFormAdvector, SplitExplicitStepper3D, build_dynamical_core
 from suetes.shared.transforms import NEUVECoordinate
 
 NX, NY, NZ = 32, 12, 16
@@ -34,15 +30,7 @@ TARGET_DEFAULTS = {
     "tracer_reversibility": {"dt": 2.0, "steps": 100},
     "mountain_flux": {"dt": MOUNTAIN_DT, "steps": MOUNTAIN_STEPS},
 }
-CONSTANTS = {
-    "g": 9.81,
-    "cp": 1004.0,
-    "cv": 717.0,
-    "Rd": 287.0,
-    "p0": 100000.0,
-    "kappa": 287.0 / 1004.0,
-    "cvd": 717.0,
-}
+CONSTANTS = {"g": 9.81, "cp": 1004.0, "cv": 717.0, "Rd": 287.0, "p0": 100000.0, "kappa": 287.0 / 1004.0, "cvd": 717.0}
 GENERATOR_VERSION = 2
 
 
@@ -62,10 +50,7 @@ def make_dataset(family, seeds, role, path=None, target="pgf_rest", steps=None):
         "seeds": [int(seed) for seed in seeds],
         "grid": {"nx": NX, "ny": NY, "nz": NZ, "dx": DX, "dy": DY, "dz": DZ},
         "integration": {"dt": TARGET_DEFAULTS[target]["dt"], "steps": int(steps)},
-        "atmosphere": {
-            "resting_n_bv_s-1": RESTING_N_BV,
-            "reference_n_bv_s-1": REFERENCE_N_BV,
-        },
+        "atmosphere": {"resting_n_bv_s-1": RESTING_N_BV, "reference_n_bv_s-1": REFERENCE_N_BV},
     }
     if not dataset["seeds"]:
         raise ValueError("A PGF dataset must contain at least one terrain seed")
@@ -127,9 +112,7 @@ def random_3d_terrain(seed):
             xr, yr = x - x0[peak], y - y0[peak]
             c, s = jnp.cos(angle[peak]), jnp.sin(angle[peak])
             xp, yp = c * xr + s * yr, -s * xr + c * yr
-            height += amplitude[peak] * jnp.exp(
-                -0.5 * ((xp / sx[peak]) ** 2 + (yp / sy[peak]) ** 2)
-            )
+            height += amplitude[peak] * jnp.exp(-0.5 * ((xp / sx[peak]) ** 2 + (yp / sy[peak]) ** 2))
         return 2800.0 * jnp.tanh(height / 2800.0)
 
     return terrain
@@ -139,80 +122,38 @@ def multiscale_3d_terrain(seed):
     """Terrain mixing broad massifs with independently located narrow peaks."""
     keys = jax.random.split(jax.random.PRNGKey(seed), 12)
     broad_count, narrow_count = 2, 4
-    broad_amplitude = jax.random.uniform(
-        keys[0], (broad_count,), minval=900.0, maxval=1800.0
-    )
+    broad_amplitude = jax.random.uniform(keys[0], (broad_count,), minval=900.0, maxval=1800.0)
     broad_x = jax.random.uniform(keys[1], (broad_count,), minval=-4500.0, maxval=4500.0)
     broad_y = jax.random.uniform(keys[2], (broad_count,), minval=-1400.0, maxval=1400.0)
     broad_sx = jax.random.uniform(keys[3], (broad_count,), minval=2500.0, maxval=4200.0)
     broad_sy = jax.random.uniform(keys[4], (broad_count,), minval=1700.0, maxval=3000.0)
-    broad_angle = jax.random.uniform(
-        keys[5], (broad_count,), minval=-jnp.pi, maxval=jnp.pi
-    )
-    narrow_amplitude = jax.random.uniform(
-        keys[6], (narrow_count,), minval=500.0, maxval=1300.0
-    )
-    narrow_x = jax.random.uniform(
-        keys[7], (narrow_count,), minval=-5500.0, maxval=5500.0
-    )
-    narrow_y = jax.random.uniform(
-        keys[8], (narrow_count,), minval=-1900.0, maxval=1900.0
-    )
+    broad_angle = jax.random.uniform(keys[5], (broad_count,), minval=-jnp.pi, maxval=jnp.pi)
+    narrow_amplitude = jax.random.uniform(keys[6], (narrow_count,), minval=500.0, maxval=1300.0)
+    narrow_x = jax.random.uniform(keys[7], (narrow_count,), minval=-5500.0, maxval=5500.0)
+    narrow_y = jax.random.uniform(keys[8], (narrow_count,), minval=-1900.0, maxval=1900.0)
     # Keep every feature resolved by at least roughly four horizontal cells.
-    narrow_sx = jax.random.uniform(
-        keys[9], (narrow_count,), minval=900.0, maxval=1500.0
-    )
-    narrow_sy = jax.random.uniform(
-        keys[10], (narrow_count,), minval=900.0, maxval=1500.0
-    )
-    narrow_angle = jax.random.uniform(
-        keys[11], (narrow_count,), minval=-jnp.pi, maxval=jnp.pi
-    )
+    narrow_sx = jax.random.uniform(keys[9], (narrow_count,), minval=900.0, maxval=1500.0)
+    narrow_sy = jax.random.uniform(keys[10], (narrow_count,), minval=900.0, maxval=1500.0)
+    narrow_angle = jax.random.uniform(keys[11], (narrow_count,), minval=-jnp.pi, maxval=jnp.pi)
 
     def add_features(height, x, y, amplitude, x0, y0, sx, sy, angle):
         for feature in range(amplitude.shape[0]):
             xr, yr = x - x0[feature], y - y0[feature]
             c, s = jnp.cos(angle[feature]), jnp.sin(angle[feature])
             xp, yp = c * xr + s * yr, -s * xr + c * yr
-            height += amplitude[feature] * jnp.exp(
-                -0.5 * ((xp / sx[feature]) ** 2 + (yp / sy[feature]) ** 2)
-            )
+            height += amplitude[feature] * jnp.exp(-0.5 * ((xp / sx[feature]) ** 2 + (yp / sy[feature]) ** 2))
         return height
 
     def terrain(x, y):
-        height = add_features(
-            jnp.zeros_like(x),
-            x,
-            y,
-            broad_amplitude,
-            broad_x,
-            broad_y,
-            broad_sx,
-            broad_sy,
-            broad_angle,
-        )
-        height = add_features(
-            height,
-            x,
-            y,
-            narrow_amplitude,
-            narrow_x,
-            narrow_y,
-            narrow_sx,
-            narrow_sy,
-            narrow_angle,
-        )
+        height = add_features(jnp.zeros_like(x), x, y, broad_amplitude, broad_x, broad_y, broad_sx, broad_sy, broad_angle)
+        height = add_features(height, x, y, narrow_amplitude, narrow_x, narrow_y, narrow_sx, narrow_sy, narrow_angle)
         return 2800.0 * jnp.tanh(height / 2800.0)
 
     return terrain
 
 
 def terrain_factory(family):
-    factory = {
-        "ridge": ridge_terrain,
-        "random3d": random_3d_terrain,
-        "multiscale3d": multiscale_3d_terrain,
-    }.get(family)
+    factory = {"ridge": ridge_terrain, "random3d": random_3d_terrain, "multiscale3d": multiscale_3d_terrain}.get(family)
     if factory is None:
         raise ValueError(f"Unknown terrain family: {family}")
     return factory
@@ -230,9 +171,7 @@ def physical_tke(state, grid, interior_width=4):
     energy = 0.5 * (u**2 + v**2 + w**2)
     volume = DX * DY * grid.dz_m_full / grid.m_factors["m"][..., None] ** 2
     mask = jnp.zeros((NX, NY), dtype=volume.dtype)
-    mask = mask.at[
-        interior_width : NX - interior_width, interior_width : NY - interior_width
-    ].set(1.0)
+    mask = mask.at[interior_width : NX - interior_width, interior_width : NY - interior_width].set(1.0)
     weight = volume * mask[..., None]
     return jnp.sum(weight * energy) / jnp.sum(weight)
 
@@ -248,19 +187,8 @@ def grid_diagnostics(grid):
     return jnp.min(grid.dz_m_full), slope2, curvature
 
 
-def build_case(transform, terrain, reference_n_bv=REFERENCE_N_BV):
-    grid = RegionalGrid3D(
-        NX,
-        NY,
-        NZ,
-        DX,
-        DY,
-        DZ,
-        lat_center=45.0,
-        lon_center=0.0,
-        h_func=terrain,
-        transform=transform,
-    )
+def build_case(transform, terrain, resting_n_bv=RESTING_N_BV, reference_n_bv=REFERENCE_N_BV):
+    grid = RegionalGrid3D(NX, NY, NZ, DX, DY, DZ, lat_center=45.0, lon_center=0.0, h_func=terrain, transform=transform)
     operators = CGridOperator3D(grid)
     # The default boundary padding detaches duplicated edge values from the
     # adjoint. That leaves the forward solution unchanged but is not the exact
@@ -274,18 +202,14 @@ def build_case(transform, terrain, reference_n_bv=REFERENCE_N_BV):
         operators,
         CONSTANTS,
         dt=DT,
-        N_bv=RESTING_N_BV,
+        N_bv=resting_n_bv,
         damp_height=12000.0,
         max_damp=0.3,
         nu_div_factor=0.0,
         nu_h_factor=0.0,
         physics_suite=suite,
     )
-    rho = (
-        physics.c["p0"]
-        / (physics.c["Rd"] * physics.theta_bg)
-        * physics.pi_bg ** (physics.c["cvd"] / physics.c["Rd"])
-    )
+    rho = physics.c["p0"] / (physics.c["Rd"] * physics.theta_bg) * physics.pi_bg ** (physics.c["cvd"] / physics.c["Rd"])
     state = {
         "u": jnp.zeros_like(grid.Z_u),
         "v": jnp.zeros_like(grid.Z_v),
@@ -301,13 +225,7 @@ def build_case(transform, terrain, reference_n_bv=REFERENCE_N_BV):
         del forcing
         return sponge.blend(
             current,
-            {
-                "u": jnp.zeros_like(grid.Z_u),
-                "v": jnp.zeros_like(grid.Z_v),
-                "pi": physics.pi_bg,
-                "rho": rho,
-                "th_v": physics.theta_bg,
-            },
+            {"u": jnp.zeros_like(grid.Z_u), "v": jnp.zeros_like(grid.Z_v), "pi": physics.pi_bg, "rho": rho, "th_v": physics.theta_bg},
         )
 
     reference_physics = Euler3D(
@@ -323,25 +241,16 @@ def build_case(transform, terrain, reference_n_bv=REFERENCE_N_BV):
         N_bv=reference_n_bv,
         physics_suite=suite,
     )
-    stepper = SplitExplicitStepper3D(
-        reference_physics,
-        dt=DT,
-        ns=20,
-        alpha=0.55,
-    )
+    stepper = SplitExplicitStepper3D(reference_physics, dt=DT, ns=20, alpha=0.55)
     return grid, state, stepper, boundary
 
 
-def run_case(transform, terrain, steps=DEFAULT_STEPS):
-    grid, state, stepper, boundary = build_case(transform, terrain)
+def run_case(transform, terrain, steps=DEFAULT_STEPS, resting_n_bv=RESTING_N_BV, reference_n_bv=REFERENCE_N_BV):
+    grid, state, stepper, boundary = build_case(transform, terrain, resting_n_bv=resting_n_bv, reference_n_bv=reference_n_bv)
 
     def scan(current, _):
         next_state = stepper.step(current, 0.0, None, boundary)
-        return next_state, (
-            physical_tke(next_state, grid),
-            jnp.max(jnp.abs(next_state["u"])),
-            jnp.max(jnp.abs(next_state["w"])),
-        )
+        return next_state, (physical_tke(next_state, grid), jnp.max(jnp.abs(next_state["u"])), jnp.max(jnp.abs(next_state["w"])))
 
     # Retaining all RK/acoustic intermediates for 500 steps requires more than
     # 30 GiB with current XLA releases. Rematerialize ten-step chunks instead
@@ -352,47 +261,21 @@ def run_case(transform, terrain, steps=DEFAULT_STEPS):
     complete_chunks, remainder = divmod(steps, chunk_steps)
 
     def run_chunk(current, start):
-        return jax.lax.scan(
-            scan,
-            current,
-            start + jnp.arange(chunk_steps),
-        )
+        return jax.lax.scan(scan, current, start + jnp.arange(chunk_steps))
 
     checkpointed_chunk = jax.checkpoint(run_chunk, prevent_cse=False)
-    final, blocked_series = jax.lax.scan(
-        checkpointed_chunk,
-        state,
-        jnp.arange(complete_chunks) * chunk_steps,
-    )
-    series = jax.tree.map(
-        lambda value: value.reshape((-1,) + value.shape[2:]),
-        blocked_series,
-    )
+    final, blocked_series = jax.lax.scan(checkpointed_chunk, state, jnp.arange(complete_chunks) * chunk_steps)
+    series = jax.tree.map(lambda value: value.reshape((-1,) + value.shape[2:]), blocked_series)
     if remainder:
         final, tail = jax.lax.scan(scan, final, jnp.arange(remainder))
-        series = jax.tree.map(
-            lambda head, end: jnp.concatenate((head, end), axis=0),
-            series,
-            tail,
-        )
+        series = jax.tree.map(lambda head, end: jnp.concatenate((head, end), axis=0), series, tail)
     minimum, slope2, curvature = grid_diagnostics(grid)
     return final, series, grid, (minimum, slope2, curvature)
 
 
 def build_mountain_wave_case(transform, terrain):
     """Construct a compact stratified mountain-wave experiment."""
-    grid = RegionalGrid3D(
-        NX,
-        NY,
-        NZ,
-        DX,
-        DY,
-        DZ,
-        lat_center=45.0,
-        lon_center=0.0,
-        h_func=terrain,
-        transform=transform,
-    )
+    grid = RegionalGrid3D(NX, NY, NZ, DX, DY, DZ, lat_center=45.0, lon_center=0.0, h_func=terrain, transform=transform)
     operators = CGridOperator3D(grid)
     suite = PhysicsSuite()
     wind = 10.0
@@ -409,11 +292,7 @@ def build_mountain_wave_case(transform, terrain):
         nu_h_factor=0.05,
         physics_suite=suite,
     )
-    rho = (
-        physics.c["p0"]
-        / (physics.c["Rd"] * physics.theta_bg)
-        * physics.pi_bg ** (physics.c["cvd"] / physics.c["Rd"])
-    )
+    rho = physics.c["p0"] / (physics.c["Rd"] * physics.theta_bg) * physics.pi_bg ** (physics.c["cvd"] / physics.c["Rd"])
     state = {
         "u": wind * jnp.ones_like(grid.Z_u),
         "v": jnp.zeros_like(grid.Z_v),
@@ -423,13 +302,7 @@ def build_mountain_wave_case(transform, terrain):
         "rho": rho,
         "th_v": physics.theta_bg,
     }
-    sponge = BenchmarkSponge(
-        NX,
-        NY,
-        sponge_depth=4,
-        axes=("x", "y"),
-        blend_vars=["u", "v", "th_v", "pi", "rho"],
-    )
+    sponge = BenchmarkSponge(NX, NY, sponge_depth=4, axes=("x", "y"), blend_vars=["u", "v", "th_v", "pi", "rho"])
     exterior = {
         "u": wind * jnp.ones_like(grid.Z_u),
         "v": jnp.zeros_like(grid.Z_v),
@@ -473,9 +346,7 @@ def mountain_flux_consistency(transform, terrain, steps=MOUNTAIN_STEPS):
     def momentum_flux_profile(current):
         u = 0.5 * (current["u"][:-1] + current["u"][1:])
         w = 0.5 * (current["w"][..., :-1] + current["w"][..., 1:])
-        return jnp.sum(
-            horizontal_area[..., None] * current["rho"] * (u - wind) * w, axis=(0, 1)
-        )[level_slice]
+        return jnp.sum(horizontal_area[..., None] * current["rho"] * (u - wind) * w, axis=(0, 1))[level_slice]
 
     def flux_transmission_metric(flux):
         # Levels 4--5 provide the incident lower-tropospheric flux; levels
@@ -500,9 +371,7 @@ def mountain_flux_consistency(transform, terrain, steps=MOUNTAIN_STEPS):
     del final
     spinup = steps // 2
     post_spinup_flux = flux_history[spinup:]
-    count = jnp.arange(1, post_spinup_flux.shape[0] + 1, dtype=post_spinup_flux.dtype)[
-        :, None
-    ]
+    count = jnp.arange(1, post_spinup_flux.shape[0] + 1, dtype=post_spinup_flux.dtype)[:, None]
     cumulative_mean_flux = jnp.cumsum(post_spinup_flux, axis=0) / count
     post_spinup_history = jax.vmap(flux_transmission_metric)(cumulative_mean_flux)
     history = jnp.full((steps,), jnp.nan, dtype=post_spinup_history.dtype)
@@ -516,18 +385,7 @@ def mountain_flux_consistency(transform, terrain, steps=MOUNTAIN_STEPS):
 
 def build_transport_case(transform, terrain, dt=2.0):
     """Construct a reversible, terrain-tangent prescribed transport problem."""
-    grid = RegionalGrid3D(
-        NX,
-        NY,
-        NZ,
-        DX,
-        DY,
-        DZ,
-        lat_center=45.0,
-        lon_center=0.0,
-        h_func=terrain,
-        transform=transform,
-    )
+    grid = RegionalGrid3D(NX, NY, NZ, DX, DY, DZ, lat_center=45.0, lon_center=0.0, h_func=terrain, transform=transform)
     advector = FluxFormAdvector(grid, dt)
     speed = 12.0
 
@@ -549,30 +407,15 @@ def build_transport_case(transform, terrain, dt=2.0):
 
     h_u = terrain(grid.x_c[:, None], grid.y_m[None, :])[..., None]
     a_u = lateral_envelope(grid.x_c)[:, None, None]
-    u = (
-        speed
-        * a_u
-        * (envelope(grid.Z_u) + (grid.Z_u - h_u) * envelope_derivative(grid.Z_u))
-    )
+    u = speed * a_u * (envelope(grid.Z_u) + (grid.Z_u - h_u) * envelope_derivative(grid.Z_u))
     h_m = terrain(grid.x_m[:, None], grid.y_m[None, :])
     h_plus = terrain((grid.x_m + DX)[:, None], grid.y_m[None, :])
     h_minus = terrain((grid.x_m - DX)[:, None], grid.y_m[None, :])
     dh_dx = (h_plus - h_minus) / (2.0 * DX)
     a_m = lateral_envelope(grid.x_m)[:, None, None]
     da_dx_m = lateral_envelope_derivative(grid.x_m)[:, None, None]
-    w = (
-        speed
-        * (a_m * dh_dx[..., None] - da_dx_m * (grid.Z_w - h_m[..., None]))
-        * envelope(grid.Z_w)
-    )
-    u_w = (
-        speed
-        * a_m
-        * (
-            envelope(grid.Z_w)
-            + (grid.Z_w - h_m[..., None]) * envelope_derivative(grid.Z_w)
-        )
-    )
+    w = speed * (a_m * dh_dx[..., None] - da_dx_m * (grid.Z_w - h_m[..., None])) * envelope(grid.Z_w)
+    u_w = speed * a_m * (envelope(grid.Z_w) + (grid.Z_w - h_m[..., None]) * envelope_derivative(grid.Z_w))
     eta_dot = (w - u_w * grid.z_xi_w) / grid.dz_w_full
     flow = {"u": u, "v": jnp.zeros_like(grid.Z_v), "eta_dot": eta_dot}
     reverse_flow = jax.tree.map(lambda value: -value, flow)
@@ -581,14 +424,8 @@ def build_transport_case(transform, terrain, dt=2.0):
     y = grid.y_m[None, :, None]
     z = grid.Z_m
     tracer = jnp.exp(
-        -0.5 * ((x + 1800.0) / 1100.0) ** 2
-        - 0.5 * ((y - 500.0) / 1200.0) ** 2
-        - 0.5 * ((z - 4500.0) / 1300.0) ** 2
-    ) + 0.65 * jnp.exp(
-        -0.5 * ((x - 2200.0) / 850.0) ** 2
-        - 0.5 * ((y + 700.0) / 1000.0) ** 2
-        - 0.5 * ((z - 8500.0) / 1500.0) ** 2
-    )
+        -0.5 * ((x + 1800.0) / 1100.0) ** 2 - 0.5 * ((y - 500.0) / 1200.0) ** 2 - 0.5 * ((z - 4500.0) / 1300.0) ** 2
+    ) + 0.65 * jnp.exp(-0.5 * ((x - 2200.0) / 850.0) ** 2 - 0.5 * ((y + 700.0) / 1000.0) ** 2 - 0.5 * ((z - 8500.0) / 1500.0) ** 2)
     rho = jnp.ones_like(tracer)
     background = {"dz_m_full": grid.dz_m_full}
     return grid, advector, flow, reverse_flow, background, rho, tracer
@@ -596,16 +433,11 @@ def build_transport_case(transform, terrain, dt=2.0):
 
 def transport_reversibility(transform, terrain, steps=100, dt=2.0):
     """Return round-trip tracer error and reverse-leg error history."""
-    (grid, advector, flow, reverse_flow, background, rho0, tracer0) = (
-        build_transport_case(transform, terrain, dt)
-    )
+    (grid, advector, flow, reverse_flow, background, rho0, tracer0) = build_transport_case(transform, terrain, dt)
 
     def advance(carry, velocity):
         rho, tracer_mass = carry
-        return (
-            advector.advect_3d_split(rho, velocity, background),
-            advector.advect_3d_split(tracer_mass, velocity, background),
-        )
+        return (advector.advect_3d_split(rho, velocity, background), advector.advect_3d_split(tracer_mass, velocity, background))
 
     def forward_step(carry, _):
         return advance(carry, flow), None
@@ -619,9 +451,7 @@ def transport_reversibility(transform, terrain, steps=100, dt=2.0):
         next_carry = advance(carry, reverse_flow)
         rho, tracer_mass = next_carry
         tracer = tracer_mass / (rho + 1.0e-15)
-        error = jnp.sqrt(
-            jnp.sum(volumes * rho0 * (tracer - tracer0) ** 2) / denominator
-        )
+        error = jnp.sqrt(jnp.sum(volumes * rho0 * (tracer - tracer0) ** 2) / denominator)
         return next_carry, error
 
     final, history = jax.lax.scan(reverse_step, transported, jnp.arange(steps))
@@ -634,9 +464,9 @@ def transport_reversibility(transform, terrain, steps=100, dt=2.0):
     return (history[-1], history, grid, (minimum, slope2, curvature, mass_drift))
 
 
-def run_target_case(target, transform, terrain, steps):
+def run_target_case(target, transform, terrain, steps, resting_n_bv=RESTING_N_BV, reference_n_bv=REFERENCE_N_BV):
     if target == "pgf_rest":
-        final, series, grid, diagnostics = run_case(transform, terrain, steps)
+        _, series, grid, diagnostics = run_case(transform, terrain, steps, resting_n_bv=resting_n_bv, reference_n_bv=reference_n_bv)
         return jnp.mean(series[0]), series[0], grid, diagnostics
     if target == "tracer_reversibility":
         return transport_reversibility(transform, terrain, steps)
@@ -646,13 +476,7 @@ def run_target_case(target, transform, terrain, steps):
 
 
 def neuve_template(params=None):
-    return NEUVECoordinate(
-        params=params,
-        hidden_dim=64,
-        key_seed=42,
-        condition_on_terrain=True,
-        legacy_behavior=True,
-    )
+    return NEUVECoordinate(params=params, hidden_dim=64, key_seed=42, condition_on_terrain=True, legacy_behavior=True)
 
 
 def save_neuve(path, params):
@@ -665,6 +489,4 @@ def load_neuve(path):
     data = np.load(path)
     arrays = [data[f"arr_{index}"] for index in range(len(data.files))]
     _, tree = jax.tree_util.tree_flatten(template.params)
-    return template.with_params(
-        jax.tree_util.tree_unflatten(tree, [jnp.asarray(value) for value in arrays])
-    )
+    return template.with_params(jax.tree_util.tree_unflatten(tree, [jnp.asarray(value) for value in arrays]))

@@ -29,11 +29,7 @@ from experiments._shared.neuve_coordinate import (
     terrain_factory,
     terrains_from_dataset,
 )
-from experiments._shared.neuve_learned_coordinate import (
-    DirectDensityCoordinate,
-    direct_density_params,
-    save_direct_density_coordinate,
-)
+from experiments._shared.neuve_learned_coordinate import DirectDensityCoordinate, direct_density_params, save_direct_density_coordinate
 from suetes.regional3d.geometry import RegionalGrid3D
 
 
@@ -42,25 +38,12 @@ def _copy_tree(tree):
 
 
 def _grid(coordinate, terrain):
-    return RegionalGrid3D(
-        32,
-        12,
-        16,
-        DX,
-        DY,
-        1000.0,
-        lat_center=45.0,
-        lon_center=0.0,
-        h_func=terrain,
-        transform=coordinate,
-    )
+    return RegionalGrid3D(32, 12, 16, DX, DY, 1000.0, lat_center=45.0, lon_center=0.0, h_func=terrain, transform=coordinate)
 
 
 def _initial_amplitude(terrains, hidden, seed, target_minimum, iterations=24):
     def minimum_layer(amplitude):
-        coordinate = DirectDensityCoordinate(
-            direct_density_params(amplitude, hidden, seed)
-        )
+        coordinate = DirectDensityCoordinate(direct_density_params(amplitude, hidden, seed))
         minima = []
         for terrain in terrains:
             try:
@@ -71,10 +54,7 @@ def _initial_amplitude(terrains, hidden, seed, target_minimum, iterations=24):
 
     low, high = 0.0, 6.0
     if minimum_layer(low) < target_minimum:
-        raise ValueError(
-            "The neutral coordinate already violates the initialization "
-            "minimum-layer target"
-        )
+        raise ValueError("The neutral coordinate already violates the initialization minimum-layer target")
     for _ in range(iterations):
         middle = 0.5 * (low + high)
         if minimum_layer(middle) >= target_minimum:
@@ -85,21 +65,10 @@ def _initial_amplitude(terrains, hidden, seed, target_minimum, iterations=24):
 
 
 def _optimizer(params, amplitude_lr, network_lr, epochs):
-    amplitude_schedule = optax.cosine_decay_schedule(
-        amplitude_lr, epochs, alpha=0.02
-    )
+    amplitude_schedule = optax.cosine_decay_schedule(amplitude_lr, epochs, alpha=0.02)
     network_schedule = optax.cosine_decay_schedule(network_lr, epochs, alpha=0.02)
-    labels = {
-        "amplitude": "amplitude",
-        "network": jax.tree.map(lambda _: "network", params["network"]),
-    }
-    updates = optax.multi_transform(
-        {
-            "amplitude": optax.adam(amplitude_schedule),
-            "network": optax.adam(network_schedule),
-        },
-        labels,
-    )
+    labels = {"amplitude": "amplitude", "network": jax.tree.map(lambda _: "network", params["network"])}
+    updates = optax.multi_transform({"amplitude": optax.adam(amplitude_schedule), "network": optax.adam(network_schedule)}, labels)
     return optax.chain(optax.clip_by_global_norm(1.0), updates)
 
 
@@ -113,12 +82,7 @@ def main():
     parser.add_argument("--network-lr", type=float, default=3.0e-3)
     parser.add_argument("--residual-scale", type=float, default=1.5)
     parser.add_argument("--minimum-layer-m", type=float, default=150.0)
-    parser.add_argument(
-        "--initial-minimum-layer-m",
-        type=float,
-        default=175.0,
-        help="Geometry-only initialization target",
-    )
+    parser.add_argument("--initial-minimum-layer-m", type=float, default=175.0, help="Geometry-only initialization target")
     parser.add_argument("--barrier-weight", type=float, default=100.0)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--no-render", action="store_true")
@@ -139,62 +103,38 @@ def main():
     steps = int(dataset["integration"]["steps"])
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
-    amplitude, initial_minimum = _initial_amplitude(
-        terrains,
-        args.hidden,
-        args.seed,
-        args.initial_minimum_layer_m,
-    )
+    amplitude, initial_minimum = _initial_amplitude(terrains, args.hidden, args.seed, args.initial_minimum_layer_m)
     params = direct_density_params(amplitude, args.hidden, args.seed)
     print(f"Geometry initialization: a={amplitude:.6f}, min_dz={initial_minimum:.2f} m")
 
     def objective(current_params, terrain_seed):
-        coordinate = DirectDensityCoordinate(
-            current_params,
-            residual_scale=args.residual_scale,
-        )
-        metric, _, grid, _ = run_target_case(
-            "pgf_rest", coordinate, generator(terrain_seed), steps
-        )
+        coordinate = DirectDensityCoordinate(current_params, residual_scale=args.residual_scale)
+        metric, _, grid, _ = run_target_case("pgf_rest", coordinate, generator(terrain_seed), steps)
         minimum = jnp.min(grid.dz_m_full)
         violation = jax.nn.relu((args.minimum_layer_m - minimum) / args.minimum_layer_m)
         total = metric + args.barrier_weight * violation**2
         return total, (metric, minimum)
 
     value_gradient = jax.jit(jax.value_and_grad(objective, has_aux=True))
-    optimizer = _optimizer(
-        params,
-        args.amplitude_lr,
-        args.network_lr,
-        args.epochs,
-    )
+    optimizer = _optimizer(params, args.amplitude_lr, args.network_lr, args.epochs)
     optimizer_state = optimizer.init(params)
     best_params = _copy_tree(params)
     best_metric = np.inf
     history = []
 
     parameter_count = sum(value.size for value in jax.tree.leaves(params))
-    print(
-        f"Direct-density NEUVE training on {len(seeds)} terrain sample(s) "
-        f"({parameter_count} parameters)"
-    )
+    print(f"Direct-density NEUVE training on {len(seeds)} terrain sample(s) ({parameter_count} parameters)")
     print("epoch mean_TKE objective min_dz[m] time[s]")
     for epoch in range(args.epochs + 1):
         start = time.time()
         gradient_sum = jax.tree.map(jnp.zeros_like, params)
         objectives, metrics, minima = [], [], []
         for terrain_seed in seeds:
-            (total, diagnostics), gradient = value_gradient(
-                params, jnp.asarray(terrain_seed)
-            )
+            (total, diagnostics), gradient = value_gradient(params, jnp.asarray(terrain_seed))
             objectives.append(float(total))
             metrics.append(float(diagnostics[0]))
             minima.append(float(diagnostics[1]))
-            gradient_sum = jax.tree.map(
-                lambda accumulated, value: accumulated + value,
-                gradient_sum,
-                gradient,
-            )
+            gradient_sum = jax.tree.map(lambda accumulated, value: accumulated + value, gradient_sum, gradient)
         mean_objective = float(np.mean(objectives))
         mean_metric = float(np.mean(metrics))
         minimum = float(np.min(minima))
@@ -212,15 +152,10 @@ def main():
             )
             marker = " checkpoint"
         if epoch % 5 == 0 or epoch == args.epochs:
-            print(
-                f"{epoch:5d} {mean_metric:.6e} {mean_objective:.6e} "
-                f"{minimum:.2f} {time.time() - start:.2f}{marker}"
-            )
+            print(f"{epoch:5d} {mean_metric:.6e} {mean_objective:.6e} {minimum:.2f} {time.time() - start:.2f}{marker}")
         if epoch < args.epochs:
             gradient = jax.tree.map(lambda value: value / len(seeds), gradient_sum)
-            updates, optimizer_state = optimizer.update(
-                gradient, optimizer_state, params
-            )
+            updates, optimizer_state = optimizer.update(gradient, optimizer_state, params)
             params = optax.apply_updates(params, updates)
 
     history_array = np.asarray(history)
@@ -250,10 +185,7 @@ def main():
     if not args.no_render:
         figure, axes = plt.subplots(1, 2, figsize=(8.5, 3.5))
         axes[0].plot(history_array[:, 0], history_array[:, 1])
-        axes[0].set(
-            xlabel="Epoch",
-            ylabel=r"Spurious TKE (m$^2$ s$^{-2}$)",
-        )
+        axes[0].set(xlabel="Epoch", ylabel=r"Spurious TKE (m$^2$ s$^{-2}$)")
         axes[1].plot(history_array[:, 0], history_array[:, 3])
         axes[1].axhline(args.minimum_layer_m, color="k", linestyle="--")
         axes[1].set(xlabel="Epoch", ylabel="Minimum layer thickness (m)")
@@ -263,10 +195,7 @@ def main():
         figure.savefig(args.output_dir / "training.png", dpi=250)
         plt.close(figure)
 
-    print(
-        f"Saved {args.output_dir / 'neuve_coordinate.npz'} "
-        f"(best mean TKE={best_metric:.6e})"
-    )
+    print(f"Saved {args.output_dir / 'neuve_coordinate.npz'} (best mean TKE={best_metric:.6e})")
 
 
 if __name__ == "__main__":

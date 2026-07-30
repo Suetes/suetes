@@ -21,9 +21,7 @@ import sys
 import time
 from pathlib import Path
 
-sys.path.insert(
-    0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../.."))
-)
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../..")))
 os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
 
 import jax
@@ -55,18 +53,7 @@ from suetes.shared.transforms import GalChenSigma, SleveSimple
 
 
 def _grid(transform, terrain):
-    return RegionalGrid3D(
-        32,
-        12,
-        16,
-        DX,
-        DY,
-        1000.0,
-        lat_center=45.0,
-        lon_center=0.0,
-        h_func=terrain,
-        transform=transform,
-    )
+    return RegionalGrid3D(32, 12, 16, DX, DY, 1000.0, lat_center=45.0, lon_center=0.0, h_func=terrain, transform=transform)
 
 
 def _copy_tree(tree):
@@ -119,31 +106,16 @@ def _fit_sleve_geometry(terrain, sleve, epochs, learning_rate, output_dir):
     save_neuve(output_dir / "stage1_mlp_sleve_fit.npz", best_params)
     fitted = template.with_params(best_params)
     fitted_grid = _grid(fitted, terrain)
-    geometry_relative_l2 = float(
-        jnp.linalg.norm(fitted_grid.Z_w - target_z) / jnp.linalg.norm(target_z)
-    )
+    geometry_relative_l2 = float(jnp.linalg.norm(fitted_grid.Z_w - target_z) / jnp.linalg.norm(target_z))
     return (
         fitted,
         history,
-        {
-            "fit_loss": best_loss,
-            "geometry_relative_l2": geometry_relative_l2,
-            "minimum_layer_m": float(jnp.min(fitted_grid.dz_m_full)),
-        },
+        {"fit_loss": best_loss, "geometry_relative_l2": geometry_relative_l2, "minimum_layer_m": float(jnp.min(fitted_grid.dz_m_full))},
     )
 
 
 def _train_direct(
-    initial_params,
-    terrain_generator,
-    terrain_seeds,
-    steps,
-    epochs,
-    learning_rate,
-    minimum_layer,
-    barrier_weight,
-    residual_scale,
-    label,
+    initial_params, terrain_generator, terrain_seeds, steps, epochs, learning_rate, minimum_layer, barrier_weight, residual_scale, label
 ):
     def objective(params, terrain_seed):
         transform = LearnedDensityCoordinate(params, residual_scale)
@@ -167,17 +139,11 @@ def _train_direct(
         gradient_sum = jax.tree.map(jnp.zeros_like, params)
         objectives, metrics, minima = [], [], []
         for terrain_seed in terrain_seeds:
-            (objective, diagnostics), gradient = function(
-                params, jnp.asarray(terrain_seed)
-            )
+            (objective, diagnostics), gradient = function(params, jnp.asarray(terrain_seed))
             objectives.append(float(objective))
             metrics.append(float(diagnostics[0]))
             minima.append(float(diagnostics[1]))
-            gradient_sum = jax.tree.map(
-                lambda total, value: total + value,
-                gradient_sum,
-                gradient,
-            )
+            gradient_sum = jax.tree.map(lambda total, value: total + value, gradient_sum, gradient)
         mean_objective = float(np.mean(objectives))
         mean_metric = float(np.mean(metrics))
         minimum = float(np.min(minima))
@@ -186,28 +152,19 @@ def _train_direct(
             best_objective = mean_objective
             best_params = _copy_tree(params)
         if epoch % 5 == 0 or epoch == epochs:
-            print(
-                f"{epoch:5d} {mean_metric:.6e} {mean_objective:.6e} "
-                f"{minimum:.2f} {time.time() - start:.2f}"
-            )
+            print(f"{epoch:5d} {mean_metric:.6e} {mean_objective:.6e} {minimum:.2f} {time.time() - start:.2f}")
         if epoch < epochs:
-            gradient = jax.tree.map(
-                lambda value: value / len(terrain_seeds), gradient_sum
-            )
+            gradient = jax.tree.map(lambda value: value / len(terrain_seeds), gradient_sum)
             updates, state = optimizer.update(gradient, state, params)
             params = optax.apply_updates(params, updates)
     return best_params, history
 
 
-def _maximum_feasible_amplitude(
-    terrains, basis_count, minimum_layer, margin=2.0, iterations=24
-):
+def _maximum_feasible_amplitude(terrains, basis_count, minimum_layer, margin=2.0, iterations=24):
     target = minimum_layer + margin
 
     def geometry_minimum(amplitude):
-        transform = LearnedDensityCoordinate(
-            {"global": jnp.linspace(amplitude, -amplitude, basis_count)}
-        )
+        transform = LearnedDensityCoordinate({"global": jnp.linspace(amplitude, -amplitude, basis_count)})
         minima = []
         for terrain in terrains:
             try:
@@ -218,9 +175,7 @@ def _maximum_feasible_amplitude(
 
     low, high = 0.0, 6.0
     if geometry_minimum(high) >= target:
-        raise RuntimeError(
-            "Aggressiveness search did not locate the feasibility boundary"
-        )
+        raise RuntimeError("Aggressiveness search did not locate the feasibility boundary")
     for _ in range(iterations):
         middle = 0.5 * (low + high)
         if geometry_minimum(middle) >= target:
@@ -230,24 +185,11 @@ def _maximum_feasible_amplitude(
     return low, geometry_minimum(low)
 
 
-def _train_scalar_amplitude(
-    terrain_generator,
-    terrain_seeds,
-    basis_count,
-    steps,
-    epochs,
-    learning_rate,
-    maximum_amplitude,
-):
+def _train_scalar_amplitude(terrain_generator, terrain_seeds, basis_count, steps, epochs, learning_rate, maximum_amplitude):
     def objective(amplitude, terrain_seed):
         params = {"global": jnp.linspace(amplitude, -amplitude, basis_count)}
         terrain = terrain_generator(terrain_seed)
-        metric, _, grid, _ = run_target_case(
-            "pgf_rest",
-            LearnedDensityCoordinate(params),
-            terrain,
-            steps,
-        )
+        metric, _, grid, _ = run_target_case("pgf_rest", LearnedDensityCoordinate(params), terrain, steps)
         return metric, jnp.min(grid.dz_m_full)
 
     function = jax.jit(jax.value_and_grad(objective, has_aux=True))
@@ -257,10 +199,7 @@ def _train_scalar_amplitude(
     best_amplitude = jnp.asarray(0.0)
     best_metric = np.inf
     history = []
-    print(
-        "\n[Stage 2: scalar aggressiveness / full horizon] "
-        f"steps={steps}, epochs={epochs}, samples={len(terrain_seeds)}"
-    )
+    print(f"\n[Stage 2: scalar aggressiveness / full horizon] steps={steps}, epochs={epochs}, samples={len(terrain_seeds)}")
     print(f"Geometric admissible range: 0 <= a <= {maximum_amplitude:.6f}")
     print("epoch metric amplitude min_dz[m] time[s]")
     for epoch in range(epochs + 1):
@@ -279,10 +218,7 @@ def _train_scalar_amplitude(
             best_metric = mean_metric
             best_amplitude = jnp.array(amplitude)
         if epoch % 5 == 0 or epoch == epochs:
-            print(
-                f"{epoch:5d} {mean_metric:.6e} {scalar:.6f} "
-                f"{minimum:.2f} {time.time() - start:.2f}"
-            )
+            print(f"{epoch:5d} {mean_metric:.6e} {scalar:.6f} {minimum:.2f} {time.time() - start:.2f}")
         if epoch < epochs:
             gradient = jnp.mean(jnp.stack(gradients))
             updates, state = optimizer.update(gradient, state, amplitude)
@@ -327,22 +263,13 @@ def _full_metrics(transforms, terrains, steps):
 def _plot(output_dir, terrain, sleve, stages, histories, metrics):
     figure, axes = plt.subplots(2, 2, figsize=(10.0, 7.2))
     for label, history in histories.items():
-        axes[0, 0].plot(
-            [row[0] for row in history],
-            [row[1] for row in history],
-            label=label,
-        )
+        axes[0, 0].plot([row[0] for row in history], [row[1] for row in history], label=label)
     axes[0, 0].set(xlabel="Epoch", ylabel=r"Spurious TKE (m$^2$ s$^{-2}$)")
     if histories:
         axes[0, 0].legend(frameon=False)
     else:
         axes[0, 0].text(
-            0.5,
-            0.5,
-            "Training histories unavailable\nin reporting-only process",
-            ha="center",
-            va="center",
-            transform=axes[0, 0].transAxes,
+            0.5, 0.5, "Training histories unavailable\nin reporting-only process", ha="center", va="center", transform=axes[0, 0].transAxes
         )
 
     eta = jnp.linspace(0.0, 1.0, 200)
@@ -368,22 +295,13 @@ def _plot(output_dir, terrain, sleve, stages, histories, metrics):
         z = np.asarray(grid.Z_w[:, grid.ny // 2, :]) / 1000.0
         for level in range(0, z.shape[-1], 2):
             axes[1, 0].plot(
-                x,
-                z[:, level],
-                color=colors[coordinate_index % len(colors)],
-                linewidth=0.6,
-                alpha=0.75,
-                label=name if level == 0 else None,
+                x, z[:, level], color=colors[coordinate_index % len(colors)], linewidth=0.6, alpha=0.75, label=name if level == 0 else None
             )
     axes[1, 0].set(xlabel="x (km)", ylabel="Height (km)")
     axes[1, 0].legend(frameon=False, fontsize=8)
 
     names = list(metrics)
-    axes[1, 1].bar(
-        np.arange(len(names)),
-        [metrics[name]["mean_tke"] for name in names],
-        yerr=[metrics[name]["std_tke"] for name in names],
-    )
+    axes[1, 1].bar(np.arange(len(names)), [metrics[name]["mean_tke"] for name in names], yerr=[metrics[name]["std_tke"] for name in names])
     axes[1, 1].set_xticks(np.arange(len(names)), names, rotation=25, ha="right")
     axes[1, 1].set_ylabel(r"Spurious TKE (m$^2$ s$^{-2}$)")
     for axis in axes.flat:
@@ -412,18 +330,8 @@ def main():
     parser.add_argument("--conditioned-lr", type=float, default=3.0e-3)
     parser.add_argument("--residual-scale", type=float, default=1.5)
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument(
-        "--start-stage",
-        type=int,
-        choices=(1, 2, 3, 4),
-        default=1,
-        help="Resume from a saved stage in output-dir",
-    )
-    parser.add_argument(
-        "--report-only",
-        action="store_true",
-        help="Regenerate final metrics and plots from saved stage checkpoints",
-    )
+    parser.add_argument("--start-stage", type=int, choices=(1, 2, 3, 4), default=1, help="Resume from a saved stage in output-dir")
+    parser.add_argument("--report-only", action="store_true", help="Regenerate final metrics and plots from saved stage checkpoints")
     args = parser.parse_args()
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
@@ -436,11 +344,7 @@ def main():
     full_steps = int(dataset["integration"]["steps"])
     with open(args.sleve_config) as stream:
         sleve_config = json.load(stream)
-    sleve = SleveSimple(
-        scale_s=float(sleve_config["scale_s"]),
-        scale_l=15000.0,
-        n=float(sleve_config["n"]),
-    )
+    sleve = SleveSimple(scale_s=float(sleve_config["scale_s"]), scale_l=15000.0, n=float(sleve_config["n"]))
 
     audit, audit_history = {}, []
     history2, history3, history4 = [], [], []
@@ -471,30 +375,15 @@ def main():
         }
         with open(args.output_dir / "summary.json", "w") as stream:
             json.dump(summary, stream, indent=2)
-        _plot(
-            args.output_dir,
-            terrains[0],
-            sleve,
-            {"Stage 2": stage2, "Stage 3": stage3, "Stage 4": stage4},
-            {},
-            metrics,
-        )
+        _plot(args.output_dir, terrains[0], sleve, {"Stage 2": stage2, "Stage 3": stage3, "Stage 4": stage4}, {}, metrics)
         print(json.dumps(metrics, indent=2))
         print(f"Regenerated reports in {args.output_dir}")
         return
 
     if args.start_stage <= 1:
         print("[Stage 1] Existing-MLP capacity audit against tuned SLEVE")
-        fitted, audit_history, audit = _fit_sleve_geometry(
-            terrains[0],
-            sleve,
-            args.audit_epochs,
-            args.audit_lr,
-            args.output_dir,
-        )
-        audit_metric, _, audit_grid, _ = run_target_case(
-            "pgf_rest", fitted, terrains[0], full_steps
-        )
+        fitted, audit_history, audit = _fit_sleve_geometry(terrains[0], sleve, args.audit_epochs, args.audit_lr, args.output_dir)
+        audit_metric, _, audit_grid, _ = run_target_case("pgf_rest", fitted, terrains[0], full_steps)
         audit["full_horizon_tke"] = float(audit_metric)
         audit["minimum_layer_m"] = float(jnp.min(audit_grid.dz_m_full))
         print(json.dumps(audit, indent=2))
@@ -508,30 +397,13 @@ def main():
 
     stage2_path = args.output_dir / "stage2_scalar_full.npz"
     if args.start_stage <= 2:
-        maximum_amplitude, boundary_minimum = _maximum_feasible_amplitude(
-            terrains,
-            args.basis_count,
-            args.minimum_layer_m,
-        )
-        print(
-            "Strongest geometrically admissible scalar profile: "
-            f"a={maximum_amplitude:.6f}, min_dz={boundary_minimum:.2f} m"
-        )
+        maximum_amplitude, boundary_minimum = _maximum_feasible_amplitude(terrains, args.basis_count, args.minimum_layer_m)
+        print(f"Strongest geometrically admissible scalar profile: a={maximum_amplitude:.6f}, min_dz={boundary_minimum:.2f} m")
         stage2, history2, scalar_amplitude, scalar_metric = _train_scalar_amplitude(
-            terrain_generator,
-            terrain_seeds,
-            args.basis_count,
-            full_steps,
-            args.scalar_epochs,
-            args.scalar_lr,
-            maximum_amplitude,
+            terrain_generator, terrain_seeds, args.basis_count, full_steps, args.scalar_epochs, args.scalar_lr, maximum_amplitude
         )
         save_learned_coordinate(
-            stage2_path,
-            stage2,
-            amplitude=scalar_amplitude,
-            objective=scalar_metric,
-            maximum_amplitude=maximum_amplitude,
+            stage2_path, stage2, amplitude=scalar_amplitude, objective=scalar_metric, maximum_amplitude=maximum_amplitude
         )
         with open(progress_path, "w") as stream:
             json.dump({"capacity_audit": audit, "completed_stage": 2}, stream, indent=2)
@@ -560,9 +432,7 @@ def main():
     else:
         stage3 = _load_tree(stage3_path)
 
-    conditioned_initial = _conditioned_params(
-        stage3, args.basis_count, args.conditioner_hidden, args.seed
-    )
+    conditioned_initial = _conditioned_params(stage3, args.basis_count, args.conditioner_hidden, args.seed)
     stage4, history4 = _train_direct(
         conditioned_initial,
         terrain_generator,
@@ -576,11 +446,7 @@ def main():
         "Stage 4: terrain-conditioned residual",
     )
     save_learned_coordinate(
-        args.output_dir / "stage4_conditioned.npz",
-        stage4,
-        residual_scale=args.residual_scale,
-        stage=4,
-        target="pgf_rest",
+        args.output_dir / "stage4_conditioned.npz", stage4, residual_scale=args.residual_scale, stage=4, target="pgf_rest"
     )
     with open(progress_path, "w") as stream:
         json.dump({"capacity_audit": audit, "completed_stage": 4}, stream, indent=2)

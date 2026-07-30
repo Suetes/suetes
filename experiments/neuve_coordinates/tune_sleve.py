@@ -48,9 +48,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--dataset", required=True, help="NEUVE training_dataset.json")
     parser.add_argument(
-        "--scale-values",
-        default="2000,2500,3000,3500,4000,4500,5000,5750,6500,7500",
-        help="Comma-separated SLEVE decay scales in metres",
+        "--scale-values", default="2000,2500,3000,3500,4000,4500,5000,5750,6500,7500", help="Comma-separated SLEVE decay scales in metres"
     )
     parser.add_argument("--n-min", type=float, default=0.5)
     parser.add_argument("--n-max", type=float, default=4.0)
@@ -62,10 +60,7 @@ def main():
         help=("Number of exponents evaluated from n-min to the geometric boundary at each scale for non-PGF targets"),
     )
     parser.add_argument(
-        "--geometry-margin-m",
-        type=float,
-        default=2.0,
-        help="Keep this margin above the dynamical minimum-layer constraint",
+        "--geometry-margin-m", type=float, default=2.0, help="Keep this margin above the dynamical minimum-layer constraint"
     )
     parser.add_argument("--minimum-layer-m", type=float, default=100.0)
     parser.add_argument("--steps", type=int)
@@ -127,12 +122,7 @@ def main():
             except (ValueError, FloatingPointError):
                 feasible = False
                 break
-        feasible = (
-            feasible
-            and len(losses) == len(terrains)
-            and np.all(np.isfinite(losses))
-            and min(minimum_layers) >= args.minimum_layer_m
-        )
+        feasible = feasible and len(losses) == len(terrains) and np.all(np.isfinite(losses)) and min(minimum_layers) >= args.minimum_layer_m
         return {
             "scale_s": scale,
             "n": exponent,
@@ -152,10 +142,7 @@ def main():
 
     target_layer = args.minimum_layer_m + args.geometry_margin_m
     boundary_candidates = []
-    print(
-        "Geometry screening: locating the strongest feasible exponent for "
-        f"each scale (target min_dz={target_layer:.1f} m)"
-    )
+    print(f"Geometry screening: locating the strongest feasible exponent for each scale (target min_dz={target_layer:.1f} m)")
     for scale in values(args.scale_values):
         low, high = args.n_min, args.n_max
         if geometry_minimum(scale, low) < target_layer:
@@ -223,11 +210,7 @@ def main():
             if key in existing:
                 row = existing[key]
                 rows.append(row)
-                print(
-                    f"  resumed mean={row['mean_metric']:.6e}, "
-                    f"min_dz={row['minimum_layer_m']:.2f}, "
-                    f"feasible={row['feasible']}"
-                )
+                print(f"  resumed mean={row['mean_metric']:.6e}, min_dz={row['minimum_layer_m']:.2f}, feasible={row['feasible']}")
                 continue
             result_path = os.path.join(worker_dir, f"candidate_{candidate}.json")
             command = [
@@ -285,9 +268,7 @@ def main():
                 cmap="viridis",
                 s=45,
             )
-            axis.scatter(
-                best["scale_s"] / 1000.0, best["n"], marker="*", s=180, facecolor="none", edgecolor="red", linewidth=1.5
-            )
+            axis.scatter(best["scale_s"] / 1000.0, best["n"], marker="*", s=180, facecolor="none", edgecolor="red", linewidth=1.5)
             axis.set(xlabel=r"SLEVE scale $s$ (km)", ylabel=r"SLEVE exponent $n$")
             fig.colorbar(
                 points,
@@ -299,18 +280,8 @@ def main():
                 ),
             )
         else:
-            axis.plot(
-                [row["scale_s"] / 1000.0 for row in feasible_rows], [row["mean_metric"] for row in feasible_rows], "o-"
-            )
-            axis.scatter(
-                best["scale_s"] / 1000.0,
-                best["mean_metric"],
-                marker="*",
-                s=160,
-                facecolor="none",
-                edgecolor="red",
-                linewidth=1.5,
-            )
+            axis.plot([row["scale_s"] / 1000.0 for row in feasible_rows], [row["mean_metric"] for row in feasible_rows], "o-")
+            axis.scatter(best["scale_s"] / 1000.0, best["mean_metric"], marker="*", s=160, facecolor="none", edgecolor="red", linewidth=1.5)
             axis.set(xlabel=r"SLEVE scale $s$ (km)", ylabel=r"Mean spurious TKE (m$^2$ s$^{-2}$)")
         axis.grid(True, alpha=0.3)
         fig.tight_layout()

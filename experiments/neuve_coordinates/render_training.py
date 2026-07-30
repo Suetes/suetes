@@ -59,23 +59,9 @@ def render(source: Path, output_dir: Path | None = None) -> list[Path]:
         epoch = history["epoch"]
         axes[0].semilogy(epoch, history["mean_tke"], label="Current metric", color="C0", linewidth=2)
         if "best_objective" in history:
-            axes[0].semilogy(
-                epoch,
-                history["best_objective"],
-                "--",
-                label="Best feasible objective",
-                color="C1",
-                linewidth=2,
-            )
+            axes[0].semilogy(epoch, history["best_objective"], "--", label="Best feasible objective", color="C1", linewidth=2)
         elif "objective" in history:
-            axes[0].semilogy(
-                epoch,
-                history["objective"],
-                "--",
-                label="Penalized objective",
-                color="C1",
-                linewidth=2,
-            )
+            axes[0].semilogy(epoch, history["objective"], "--", label="Penalized objective", color="C1", linewidth=2)
         axes[0].set(xlabel="Epoch", ylabel="Objective (Mean TKE)")
         axes[0].grid(True, which="both", ls="--", alpha=0.4)
 

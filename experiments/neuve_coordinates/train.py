@@ -60,11 +60,7 @@ def main():
         parser.error("--discovery-epochs must be positive")
     args.output_dir = str(
         resolve_data_dir(
-            kind="experiments",
-            case="neuve_coordinates",
-            execution=args.name,
-            output_root=args.output_root,
-            output_dir=args.output_dir,
+            kind="experiments", case="neuve_coordinates", execution=args.name, output_root=args.output_root, output_dir=args.output_dir
         )
     )
     figure_dir = figure_dir_for(Path(args.output_dir) / "artifact.nc")
@@ -125,11 +121,7 @@ def main():
         "best_objective": [best_loss],
         "minimum_layer_m": [initial_minimum],
     }
-    metric_label = {
-        "pgf_rest": "mean_TKE",
-        "tracer_reversibility": "roundtrip_L2",
-        "mountain_flux": "flux_nonuniformity",
-    }[target]
+    metric_label = {"pgf_rest": "mean_TKE", "tracer_reversibility": "roundtrip_L2", "mountain_flux": "flux_nonuniformity"}[target]
     print(f"NEUVE {target} tuning on {len(terrains)} terrain sample(s)")
     print(f"epoch {metric_label} current_objective best_objective min_dz[m] time[s]")
     print(f"{0:5d} {initial_tke:.6e} {best_loss:.6e} {best_loss:.6e} {initial_minimum:.2f}")
@@ -152,11 +144,7 @@ def main():
         finite = True
         for value_grad, _ in functions:
             (loss, diagnostics), gradient = value_grad(params)
-            finite = (
-                finite
-                and bool(jnp.isfinite(loss))
-                and all(bool(jnp.all(jnp.isfinite(leaf))) for leaf in jax.tree.leaves(gradient))
-            )
+            finite = finite and bool(jnp.isfinite(loss)) and all(bool(jnp.all(jnp.isfinite(leaf))) for leaf in jax.tree.leaves(gradient))
             if not finite:
                 break
             pre_losses.append(float(diagnostics[0]))
@@ -193,10 +181,7 @@ def main():
         history["current_objective"].append(current_objective)
         history["best_objective"].append(best_loss)
         history["minimum_layer_m"].append(minimum)
-        print(
-            f"{epoch:5d} {mean_tke:.6e} {current_objective:.6e} "
-            f"{best_loss:.6e} {minimum:.2f} {time.time() - start:.2f}{marker}"
-        )
+        print(f"{epoch:5d} {mean_tke:.6e} {current_objective:.6e} {best_loss:.6e} {minimum:.2f} {time.time() - start:.2f}{marker}")
 
     np.savez(
         os.path.join(args.output_dir, "neuve_training_history.npz"),
@@ -209,9 +194,7 @@ def main():
         target=target,
         steps=steps,
     )
-    with open(
-        os.path.join(args.output_dir, "training_complete.json"), "w"
-    ) as stream:
+    with open(os.path.join(args.output_dir, "training_complete.json"), "w") as stream:
         json.dump(
             {
                 "generator_version": GENERATOR_VERSION,

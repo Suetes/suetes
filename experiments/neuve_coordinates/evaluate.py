@@ -42,17 +42,9 @@ from suetes.shared.transforms import GalChenSigma, SleveSimple
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--target",
-        choices=["pgf_rest", "tracer_reversibility", "mountain_flux"],
-        default="pgf_rest",
-    )
+    parser.add_argument("--target", choices=["pgf_rest", "tracer_reversibility", "mountain_flux"], default="pgf_rest")
     parser.add_argument("--dataset")
-    parser.add_argument(
-        "--terrain-family",
-        choices=["ridge", "random3d", "multiscale3d"],
-        default="ridge",
-    )
+    parser.add_argument("--terrain-family", choices=["ridge", "random3d", "multiscale3d"], default="ridge")
     parser.add_argument("--seeds", default="999")
     parser.add_argument("--neuve-weights")
     parser.add_argument("--sleve-config")
@@ -60,18 +52,11 @@ def main():
     parser.add_argument("--bootstrap-samples", type=int, default=10000)
     parser.add_argument("--bootstrap-seed", type=int, default=20260722)
     parser.add_argument("--plot-samples", type=int, default=3)
-    parser.add_argument(
-        "--include-untrained",
-        action="store_true",
-        help="Include the untrained NEUVE initialization as an ablation",
-    )
+    parser.add_argument("--include-untrained", action="store_true", help="Include the untrained NEUVE initialization as an ablation")
     parser.add_argument(
         "--disable-neuve-conditioner",
         action="store_true",
-        help=(
-            "Evaluate only the globally shared density profile stored in a "
-            "learned-density checkpoint"
-        ),
+        help=("Evaluate only the globally shared density profile stored in a learned-density checkpoint"),
     )
     parser.add_argument("--output-root", default="output")
     parser.add_argument("--name", default="default", help="Execution label")
@@ -80,30 +65,16 @@ def main():
     args = parser.parse_args()
     args.output_dir = str(
         resolve_data_dir(
-            kind="experiments",
-            case="neuve_coordinates",
-            execution=args.name,
-            output_root=args.output_root,
-            output_dir=args.output_dir,
+            kind="experiments", case="neuve_coordinates", execution=args.name, output_root=args.output_root, output_dir=args.output_dir
         )
     )
-    args.neuve_weights = args.neuve_weights or os.path.join(
-        args.output_dir, "neuve_coordinate.npz"
-    )
-    args.sleve_config = args.sleve_config or os.path.join(
-        args.output_dir, "best_sleve.json"
-    )
+    args.neuve_weights = args.neuve_weights or os.path.join(args.output_dir, "neuve_coordinate.npz")
+    args.sleve_config = args.sleve_config or os.path.join(args.output_dir, "best_sleve.json")
     default_steps = TARGET_DEFAULTS[args.target]["steps"]
     dataset = (
         load_dataset(args.dataset)
         if args.dataset
-        else make_dataset(
-            args.terrain_family,
-            parse_seeds(args.seeds),
-            "testing",
-            target=args.target,
-            steps=args.steps or default_steps,
-        )
+        else make_dataset(args.terrain_family, parse_seeds(args.seeds), "testing", target=args.target, steps=args.steps or default_steps)
     )
     target = dataset_target(dataset)
     if args.dataset and target != args.target:
@@ -124,31 +95,19 @@ def main():
         parser.error("SLEVE configuration and evaluation targets differ")
     coordinates = {
         "Gal-Chen": GalChenSigma(),
-        "Tuned SLEVE": SleveSimple(
-            scale_s=float(sleve["scale_s"]), scale_l=15000.0, n=float(sleve["n"])
-        ),
+        "Tuned SLEVE": SleveSimple(scale_s=float(sleve["scale_s"]), scale_l=15000.0, n=float(sleve["n"])),
     }
     if target == "tracer_reversibility" and args.include_untrained:
         coordinates["Untrained NEUVE"] = neuve_template()
     with np.load(args.neuve_weights) as weights:
-        coordinate_format = (
-            str(weights["coordinate_format"])
-            if "coordinate_format" in weights
-            else "legacy_mlp"
-        )
+        coordinate_format = str(weights["coordinate_format"]) if "coordinate_format" in weights else "legacy_mlp"
     neuve_name = "Global-only NEUVE" if args.disable_neuve_conditioner else "NEUVE"
     if args.disable_neuve_conditioner:
         if coordinate_format != "learned_density_v1":
-            parser.error(
-                "--disable-neuve-conditioner requires a learned_density_v1 checkpoint"
-            )
+            parser.error("--disable-neuve-conditioner requires a learned_density_v1 checkpoint")
         learned_params, residual_scale = load_learned_params(args.neuve_weights)
         learned_params.pop("conditioner", None)
-        coordinates[neuve_name] = LearnedDensityCoordinate(
-            learned_params,
-            residual_scale,
-            basis=load_learned_basis(args.neuve_weights),
-        )
+        coordinates[neuve_name] = LearnedDensityCoordinate(learned_params, residual_scale, basis=load_learned_basis(args.neuve_weights))
     else:
         if coordinate_format == "learned_density_v1":
             coordinates[neuve_name] = load_learned_coordinate(args.neuve_weights)
@@ -163,9 +122,7 @@ def main():
     for sample_index, (seed, terrain) in enumerate(zip(dataset["seeds"], terrains)):
         print(f"Terrain {sample_index + 1}/{len(terrains)}: seed={seed}")
         for name, transform in coordinates.items():
-            metric, series, grid, diagnostics = run_target_case(
-                target, transform, terrain, steps
-            )
+            metric, series, grid, diagnostics = run_target_case(target, transform, terrain, steps)
             if first_grid is None:
                 first_grid = grid
             row = {
@@ -187,9 +144,7 @@ def main():
             if sample_index < gallery_count:
                 gallery.setdefault(sample_index, {})[name] = (np.asarray(series), grid)
 
-    with open(
-        os.path.join(args.output_dir, "testing_metrics.csv"), "w", newline=""
-    ) as stream:
+    with open(os.path.join(args.output_dir, "testing_metrics.csv"), "w", newline="") as stream:
         writer = csv.DictWriter(stream, fieldnames=list(rows[0]))
         writer.writeheader()
         writer.writerows(rows)
@@ -204,28 +159,16 @@ def main():
             "std_metric": float(np.std(values, ddof=1)) if len(values) > 1 else 0.0,
             "minimum_layer_m": min(row["minimum_layer_m"] for row in selected),
         }
-        print(
-            f"{name:<12}: {summary[name]['mean_metric']:.6e} +/- {summary[name]['std_metric']:.2e}"
-        )
-    arrays = {
-        name: np.asarray([row["metric"] for row in rows if row["coordinate"] == name])
-        for name in coordinates
-    }
-    gal, slv, neu = (
-        arrays["Gal-Chen"],
-        arrays["Tuned SLEVE"],
-        arrays[neuve_name],
-    )
+        print(f"{name:<12}: {summary[name]['mean_metric']:.6e} +/- {summary[name]['std_metric']:.2e}")
+    arrays = {name: np.asarray([row["metric"] for row in rows if row["coordinate"] == name]) for name in coordinates}
+    gal, slv, neu = (arrays["Gal-Chen"], arrays["Tuned SLEVE"], arrays[neuve_name])
 
     def paired_interval(values):
         if len(values) == 1:
             return [float(values[0]), float(values[0])]
         rng = np.random.default_rng(args.bootstrap_seed)
         index = rng.integers(0, len(values), size=(args.bootstrap_samples, len(values)))
-        return [
-            float(value)
-            for value in np.percentile(np.mean(values[index], axis=1), [2.5, 97.5])
-        ]
+        return [float(value) for value in np.percentile(np.mean(values[index], axis=1), [2.5, 97.5])]
 
     reduction_gal = 100.0 * (1.0 - neu / gal)
     reduction_sleve = 100.0 * (1.0 - neu / slv)
@@ -244,28 +187,11 @@ def main():
 
     names = list(coordinates)
     sample_count = len(terrains)
-    series_data = np.stack(
-        [
-            np.stack([artifact_series[(sample, name)] for name in names])
-            for sample in range(sample_count)
-        ]
-    )
-    z_data = np.stack(
-        [
-            np.stack([artifact_z[(sample, name)] for name in names])
-            for sample in range(sample_count)
-        ]
-    )
+    series_data = np.stack([np.stack([artifact_series[(sample, name)] for name in names]) for sample in range(sample_count)])
+    z_data = np.stack([np.stack([artifact_z[(sample, name)] for name in names]) for sample in range(sample_count)])
     metric_data = np.asarray(
         [
-            [
-                next(
-                    row["metric"]
-                    for row in rows
-                    if row["sample"] == sample and row["coordinate"] == name
-                )
-                for name in names
-            ]
+            [next(row["metric"] for row in rows if row["sample"] == sample and row["coordinate"] == name) for name in names]
             for sample in range(sample_count)
         ]
     )
@@ -287,19 +213,14 @@ def main():
         attrs={
             "target": target,
             "terrain_family": dataset["terrain_family"],
-            "diagnostic_description": (
-                "instantaneous volume-weighted TKE" if target == "pgf_rest" else target
-            ),
+            "diagnostic_description": ("instantaneous volume-weighted TKE" if target == "pgf_rest" else target),
         },
     )
     artifact_path = save_plot_dataset(
         plot_dataset,
         os.path.join(args.output_dir, "coordinate_evaluation.nc"),
         experiment=f"neuve_{target}_evaluation",
-        metadata={
-            "neuve_weights": os.path.abspath(args.neuve_weights),
-            "sleve_config": os.path.abspath(args.sleve_config),
-        },
+        metadata={"neuve_weights": os.path.abspath(args.neuve_weights), "sleve_config": os.path.abspath(args.sleve_config)},
     )
     print(f"Saved plot-ready evaluation artifact to {artifact_path}")
     figure_dir = figure_dir_for(artifact_path)
@@ -307,12 +228,7 @@ def main():
 
     if gallery_count and not args.no_render:
         fig, axes = plt.subplots(
-            gallery_count,
-            len(names),
-            figsize=(3.7 * len(names), 3.0 * gallery_count),
-            sharex=True,
-            sharey=True,
-            squeeze=False,
+            gallery_count, len(names), figsize=(3.7 * len(names), 3.0 * gallery_count), sharex=True, sharey=True, squeeze=False
         )
         pgf_ratio_limits = None
         if target == "pgf_rest":
@@ -329,10 +245,7 @@ def main():
             visible_ratios = np.concatenate(visible_ratios)
             span = float(np.nanmax(visible_ratios) - np.nanmin(visible_ratios))
             padding = max(0.02, 0.08 * span)
-            pgf_ratio_limits = (
-                max(0.0, float(np.nanmin(visible_ratios)) - padding),
-                max(1.02, float(np.nanmax(visible_ratios)) + padding),
-            )
+            pgf_ratio_limits = (max(0.0, float(np.nanmin(visible_ratios)) - padding), max(1.02, float(np.nanmax(visible_ratios)) + padding))
         for sample in range(gallery_count):
             for column, name in enumerate(names):
                 axis = axes[sample, column]
@@ -354,24 +267,13 @@ def main():
 
         dt = float(dataset["integration"]["dt"])
         time = (np.arange(steps) + 1) * dt
-        fig, axes = plt.subplots(
-            1,
-            gallery_count,
-            figsize=(4.0 * gallery_count, 3.5),
-            sharex=True,
-            sharey=True,
-            squeeze=False,
-        )
+        fig, axes = plt.subplots(1, gallery_count, figsize=(4.0 * gallery_count, 3.5), sharex=True, sharey=True, squeeze=False)
         for sample in range(gallery_count):
             axis = axes[0, sample]
             plotted = {}
             for name in names:
                 series, _ = gallery[sample][name]
-                plotted[name] = (
-                    np.cumsum(series) / np.arange(1, len(series) + 1)
-                    if target == "pgf_rest"
-                    else series
-                )
+                plotted[name] = np.cumsum(series) / np.arange(1, len(series) + 1) if target == "pgf_rest" else series
             if target == "mountain_flux":
                 for name in names:
                     axis.plot(time, plotted[name], label=name)
@@ -383,13 +285,7 @@ def main():
                     ratio[valid] = plotted[name][valid] / reference[valid]
                     axis.plot(time, ratio, label=name)
                 galchen_ratio = plotted["Gal-Chen"][-1] / reference[-1]
-                axis.text(
-                    0.04,
-                    0.06,
-                    f"Gal–Chen: {galchen_ratio:.1f}× SLEVE",
-                    transform=axis.transAxes,
-                    fontsize=8,
-                )
+                axis.text(0.04, 0.06, f"Gal–Chen: {galchen_ratio:.1f}× SLEVE", transform=axis.transAxes, fontsize=8)
                 axis.set_ylim(*pgf_ratio_limits)
                 axis.axhline(1.0, color="0.25", linestyle="--", linewidth=0.8)
             else:
@@ -406,11 +302,7 @@ def main():
         axes[0, 0].set_ylabel(
             "TKE / SLEVE"
             if target == "pgf_rest"
-            else (
-                "Tracer return error / tuned SLEVE"
-                if target == "tracer_reversibility"
-                else "Momentum-flux transmission error"
-            )
+            else ("Tracer return error / tuned SLEVE" if target == "tracer_reversibility" else "Momentum-flux transmission error")
         )
         axes[0, -1].legend()
         fig.tight_layout()
