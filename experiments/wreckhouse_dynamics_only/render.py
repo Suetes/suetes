@@ -17,21 +17,35 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("artifact", type=Path)
     parser.add_argument("--output", type=Path)
+    parser.add_argument(
+        "--full-timeseries",
+        action="store_true",
+        help="Plot the full time series from beginning to end.",
+    )
     args = parser.parse_args()
 
     if not args.artifact.is_file():
         parser.error(f"artifact does not exist: {args.artifact}")
-    output = args.output or args.artifact.with_name(
-        args.artifact.stem.replace("_plot_data", "_dashboard") + ".png"
+    default_suffix = (
+        "_full_timeseries.png" if args.full_timeseries else ".png"
     )
+    if args.output:
+        output = args.output
+    else:
+        output = args.artifact.with_name(
+            args.artifact.stem.replace("_plot_data", "_dashboard") + default_suffix
+        )
+    cmd = [
+        sys.executable,
+        str(SHARED_RENDERER),
+        str(args.artifact),
+        "--output",
+        str(output),
+    ]
+    if args.full_timeseries:
+        cmd.append("--full-timeseries")
     subprocess.run(
-        [
-            sys.executable,
-            str(SHARED_RENDERER),
-            str(args.artifact),
-            "--output",
-            str(output),
-        ],
+        cmd,
         check=True,
     )
 

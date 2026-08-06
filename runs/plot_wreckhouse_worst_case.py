@@ -14,6 +14,11 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("artifact")
     parser.add_argument("--output")
+    parser.add_argument(
+        "--full-timeseries",
+        action="store_true",
+        help="Plot the full time series from beginning to end instead of zooming in on the target window.",
+    )
     args = parser.parse_args()
     artifact = Path(args.artifact)
     if not artifact.exists():
@@ -44,13 +49,21 @@ def main():
               label="Adjoint-directed run")
     axis.axvline(control_hour, color=".35", linestyle=":", linewidth=1.4)
     axis.axvline(target_hour, color=".35", linestyle="--", linewidth=1.4)
-    axis.set_xlim(control_hour, end_hour)
-    visible = (hours >= control_hour) & (hours <= end_hour)
-    margin = 1.5
-    axis.set_ylim(
-        min(baseline[visible].min(), adverse[visible].min()) - margin,
-        max(baseline[visible].max(), adverse[visible].max()) + margin,
-    )
+    if args.full_timeseries:
+        axis.set_xlim(hours[0], hours[-1])
+        margin = 5.0
+        axis.set_ylim(
+            min(baseline.min(), adverse.min()) - margin,
+            max(baseline.max(), adverse.max()) + margin,
+        )
+    else:
+        axis.set_xlim(control_hour, end_hour)
+        visible = (hours >= control_hour) & (hours <= end_hour)
+        margin = 1.5
+        axis.set_ylim(
+            min(baseline[visible].min(), adverse[visible].min()) - margin,
+            max(baseline[visible].max(), adverse[visible].max()) + margin,
+        )
     axis.set(title="Target-footprint wind response",
              xlabel="Simulation time [hours]", ylabel="Wind speed [km/h]")
     axis.grid(True, linestyle="--", alpha=.6)
