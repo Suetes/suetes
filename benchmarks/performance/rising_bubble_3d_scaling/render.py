@@ -17,17 +17,17 @@ from suetes.shared.experiment import ExperimentLayout
 
 plt.rcParams.update(
     {
-        "font.size": 16,
-        "axes.labelsize": 18,
-        "xtick.labelsize": 16,
-        "ytick.labelsize": 16,
+        "font.size": 10,
+        "axes.labelsize": 10,
+        "xtick.labelsize": 9,
+        "ytick.labelsize": 9,
         "figure.dpi": 300,
         "savefig.dpi": 300,
-        "axes.linewidth": 1.5,
-        "xtick.major.width": 1.5,
-        "ytick.major.width": 1.5,
-        "xtick.major.size": 6,
-        "ytick.major.size": 6,
+        "axes.linewidth": 0.8,
+        "xtick.major.width": 0.8,
+        "ytick.major.width": 0.8,
+        "xtick.major.size": 3.5,
+        "ytick.major.size": 3.5,
         "font.family": "sans-serif",
     }
 )
@@ -100,15 +100,15 @@ def main():
         print("Warning: repeated device/configuration measurements found; using the newest values")
 
     curves = [
-        ("split-explicit", 1.0, "Split-explicit (CFL-scaled $\\Delta t$)", "o", "#e41a1c"),
-        ("sisl", 1.0, "SISL (same $\\Delta t$)", "d", "#4daf4a"),
-        ("sisl", 10.0, "SISL ($10\\times\\Delta t$)", "s", "#377eb8"),
+        ("split-explicit", 1.0, r"Split-Explicit ($\Delta t=\Delta t_{\mathrm{CFL}}$)", "o", "#e41a1c"),
+        ("sisl", 1.0, r"SISL ($\Delta t=\Delta t_{\mathrm{CFL}}$)", "d", "#4daf4a"),
+        ("sisl", 10.0, r"SISL ($\Delta t=10\Delta t_{\mathrm{CFL}}$)", "s", "#377eb8"),
     ]
 
-    fig, axes = plt.subplots(1, 3, figsize=(18, 5.5))
-    marker_size = 8
-    line_width = 2.2
-    grid_style = {"ls": "--", "alpha": 0.5, "which": "both"}
+    fig, axes = plt.subplots(1, 3, figsize=(18, 6.05))
+    marker_size = 4
+    line_width = 1.2
+    grid_style = {"ls": "--", "lw": 0.6, "alpha": 0.4, "which": "both"}
     devices = list(dict.fromkeys(data["device"].astype(str)))
     line_styles = ["-", "--", "-.", ":"]
 
@@ -142,7 +142,7 @@ def main():
                 color=color,
                 lw=line_width,
                 ms=marker_size,
-                capsize=3,
+                capsize=2,
                 label=plot_label,
             )
             axes[2].loglog(
@@ -169,30 +169,17 @@ def main():
     if len(split_reference) > 1:
         n_reference = split_reference["N"].to_numpy(dtype=float)
         latency_reference = float(split_reference["ms_per_step"].iloc[-1]) * (n_reference / n_reference[-1]) ** 3
-        axes[1].plot(n_reference, latency_reference, "k--", lw=1.6, alpha=0.75, label=r"Ideal $\mathcal{O}(N^3)$")
+        axes[1].plot(n_reference, latency_reference, "k--", lw=1.0, alpha=0.75, label=r"Ideal $\mathcal{O}(N^3)$")
 
-    props = dict(boxstyle="square,pad=0.3", facecolor="white", alpha=0.9, edgecolor="none")
-    axes[0].text(
-        0.05,
-        0.95,
-        "(a) Kernel throughput",
-        transform=axes[0].transAxes,
-        fontsize=16,
-        verticalalignment="top",
-        bbox=props,
-    )
+    for axis, label in zip(axes, ("a)", "b)", "c)")):
+        axis.text(-0.05, 1.01, label, transform=axis.transAxes, fontsize=10, ha="right", va="bottom")
+
     axes[0].set_ylabel("Kernel throughput (SYPD)")
 
-    axes[1].text(
-        0.05, 0.95, "(b) Step latency", transform=axes[1].transAxes, fontsize=16, verticalalignment="top", bbox=props
-    )
     axes[1].set_ylabel("Median execution time (ms/step)")
     axes[1].set_xscale("log")
     axes[1].set_yscale("log")
 
-    axes[2].text(
-        0.05, 0.95, "(c) Peak VRAM", transform=axes[2].transAxes, fontsize=16, verticalalignment="top", bbox=props
-    )
     axes[2].set_ylabel("Peak allocation above baseline (MiB)")
 
     ticks = sorted(data["N"].unique())
@@ -204,12 +191,23 @@ def main():
         axis.grid(True, **grid_style)
 
     handles, labels = axes[1].get_legend_handles_labels()
-    fig.legend(handles, labels, loc="lower center", bbox_to_anchor=(0.5, 0.0), ncol=4)
+    curve_entries = [(handle, label) for handle, label in zip(handles, labels) if not label.startswith("Ideal")]
+    reference_entries = [(handle, label) for handle, label in zip(handles, labels) if label.startswith("Ideal")]
+    handles, labels = zip(*(curve_entries + reference_entries))
+    fig.legend(
+        handles,
+        labels,
+        loc="lower center",
+        bbox_to_anchor=(0.5, 0.02),
+        ncol=4,
+        fontsize=9,
+        frameon=False,
+    )
 
     output_dir = args.output_dir or layout.figures
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / "suetes_scaling_metrics.png"
-    fig.tight_layout(rect=[0, 0.15, 1, 1])
+    fig.tight_layout(rect=[0, 0.13, 1, 1])
     fig.savefig(output_path, dpi=300)
     plt.close(fig)
     print(f"Figure saved to {output_path}")

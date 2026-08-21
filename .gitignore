@@ -12,6 +12,7 @@ env/
 data/
 inputs/
 output/
+Paper/
 results/
 suetes.egg-info/
 weights/
