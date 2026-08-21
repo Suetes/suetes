@@ -59,13 +59,27 @@ def render(summary_path: Path, output_dir: Path | None = None) -> list[Path]:
         )
         axes = axes[0]
         reference_order = 1 if case == "tracer" else 2
+        if case == "tracer":
+            # Both cores call the same FFSL transport implementation and their
+            # stored error curves coincide, so show the shared method once.
+            shared_result = next(iter(core_results.values()))
+            plot_results = [
+                (
+                    shared_result,
+                    {"label": "Shared FFSL", "marker": "o", "color": "#0072B2"},
+                )
+            ]
+        else:
+            plot_results = [
+                (result, CORE_STYLE[core])
+                for core, result in core_results.items()
+            ]
         for axis, field in zip(axes, fields):
             first_values = None
             first_x = None
-            for core, result in core_results.items():
+            for result, style in plot_results:
                 dt = np.asarray(result["dt_s"][:-1], dtype=float)
                 errors = np.asarray(result["self_errors"][field], dtype=float)
-                style = CORE_STYLE[core]
                 axis.loglog(
                     dt, errors, linewidth=2, markersize=7,
                     label=style["label"], marker=style["marker"],
