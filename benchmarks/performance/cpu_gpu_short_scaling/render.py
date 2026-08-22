@@ -17,10 +17,10 @@ DEFAULT_OUTPUT = REPO_ROOT / "output" / "benchmarks" / "cpu_gpu_short_scaling"
 
 plt.rcParams.update(
     {
-        "font.size": 10,
-        "axes.labelsize": 10,
-        "xtick.labelsize": 9,
-        "ytick.labelsize": 9,
+        "font.size": 15,
+        "axes.labelsize": 15,
+        "xtick.labelsize": 13,
+        "ytick.labelsize": 13,
         "figure.dpi": 300,
         "savefig.dpi": 300,
         "axes.linewidth": 0.8,
@@ -48,17 +48,18 @@ def render(results: list[dict], output_path: Path):
     if not cores:
         raise ValueError("CSV contains no split-explicit or SISL results")
 
-    fig, axes = plt.subplots(len(cores), 2, figsize=(7.2, 2.9 * len(cores)), sharex=True, squeeze=False)
+    fig, axes = plt.subplots(1, 2 * len(cores), figsize=(14.4, 3.6), sharex=True, squeeze=False)
     device_labels = {"cpu": "CPU", "gpu": "GPU"}
     colors = {"cpu": "#377eb8", "gpu": "#e41a1c"}
-    core_labels = {"split-explicit": "Split-explicit", "sisl": "SISL"}
-    workload_labels = {"forward": "forward", "value_and_gradient": "value and gradient"}
+    core_labels = {"split-explicit": "Split-Explicit", "sisl": "SISL"}
+    workload_labels = {"forward": "forward", "value_and_gradient": "value + grad."}
     panel_letters = iter("abcd")
     grid_style = {"ls": "--", "lw": 0.6, "alpha": 0.4, "which": "both"}
 
     for row_index, core in enumerate(cores):
         for column_index, workload in enumerate(("forward", "value_and_gradient")):
-            axis = axes[row_index, column_index]
+            panel_index = 2 * row_index + column_index
+            axis = axes[0, panel_index]
             for platform in ("cpu", "gpu"):
                 selected = sorted(
                     (
@@ -87,17 +88,18 @@ def render(results: list[dict], output_path: Path):
                 transform=axis.transAxes,
                 ha="left",
                 va="top",
+                fontsize=13,
                 bbox={"boxstyle": "round", "facecolor": "white", "alpha": 0.85, "edgecolor": "none"},
             )
             axis.set_xscale("log")
             axis.set_yscale("log")
             axis.grid(True, **grid_style)
-            axis.set_xlabel("Three-dimensional grid cells")
-        axes[row_index, 0].set_ylabel("Median execution time (ms)")
+            axis.set_xlabel(r"Grid cells $N^3$")
+    axes[0, 0].set_ylabel("Execution time (ms)")
 
     handles, labels = axes[0, 0].get_legend_handles_labels()
-    fig.legend(handles, labels, loc="lower center", bbox_to_anchor=(0.5, 0.005), ncol=2, frameon=False)
-    fig.tight_layout(rect=(0, 0.06, 1, 1))
+    fig.legend(handles, labels, loc="lower center", bbox_to_anchor=(0.5, 0.01), ncol=2, frameon=False)
+    fig.subplots_adjust(left=0.06, right=0.995, top=0.97, bottom=0.27, wspace=0.22)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(output_path, bbox_inches="tight")
     plt.close(fig)
