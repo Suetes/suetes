@@ -47,7 +47,7 @@ vertical coordinates, and an adjoint-directed Wreckhouse wind scenario.
 Clone the repository and create an isolated environment:
 
 ```bash
-git clone <repository-url> suetes
+git clone https://github.com/Suetes/suetes.git
 cd suetes
 python3 -m venv .venv
 .venv/bin/python3 -m pip install --upgrade pip

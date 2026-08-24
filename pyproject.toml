@@ -53,10 +53,10 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/abihlo/suetes"
-Documentation = "https://abihlo.github.io/suetes/"
-Repository = "https://github.com/abihlo/suetes.git"
-Issues = "https://github.com/abihlo/suetes/issues"
+Homepage = "https://github.com/Suetes/suetes"
+Documentation = "https://suetes.github.io/suetes/"
+Repository = "https://github.com/Suetes/suetes.git"
+Issues = "https://github.com/Suetes/suetes/issues"
 
 [tool.setuptools.packages.find]
 include = ["suetes*"]

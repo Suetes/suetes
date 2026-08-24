@@ -1,5 +1,8 @@
 site_name: Suêtes Documentation
 site_description: Scientific and user documentation for the differentiable Suêtes atmospheric model
+site_url: https://suetes.github.io/suetes/
+repo_url: https://github.com/Suetes/suetes
+repo_name: Suetes/suetes
 theme:
   name: material
 

@@ -7,7 +7,7 @@ and documentation.
 ## Development setup
 
 ```bash
-git clone https://github.com/abihlo/suetes.git
+git clone https://github.com/Suetes/suetes.git
 cd suetes
 python3 -m venv .venv
 .venv/bin/python -m pip install --upgrade pip

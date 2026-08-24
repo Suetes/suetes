@@ -9,7 +9,7 @@ for the machine first, following the
 and then install this repository.
 
 ```bash
-git clone <repository-url> suetes
+git clone https://github.com/Suetes/suetes.git
 cd suetes
 python3 -m venv .venv
 .venv/bin/python -m pip install --upgrade pip
