@@ -16,11 +16,16 @@ def build_dynamical_core(core_type, grid, operators, constants, initial_state,
     Safely handles default stability parameters while accepting user overrides.
 
     Args:
-        core_type (str): 'sisl' or 'split-explicit'
-        grid, operators, constants: Geometry and operator objects
-        initial_state (dict): Initial atmospheric conditions
-        physics_suite, interior_mask: Physical subgrid configurations
-        **kwargs: Parameter overrides (e.g., dt, damp_height, nu_h_factor)
+        core_type (str): Integration architecture: `sisl` or `split-explicit`.
+        grid (RegionalGrid3D): Model grid and terrain metrics.
+        operators (CGridOperator3D): Stagger-aware spatial operators.
+        constants (dict): Physical and numerical constants.
+        initial_state (dict): Initial atmospheric state.
+        physics_suite (PhysicsSuite, optional): Registered parameterizations.
+        interior_mask (dict, optional): Per-field masks that disable physics in
+            the lateral relaxation zone.
+        **kwargs (Any): Stepper and core overrides such as `dt`, `damp_height`,
+            and `nu_h_factor`.
     
     Returns:
         tuple: (stepper_instance, large_time_step_dt)

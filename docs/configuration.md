@@ -75,3 +75,6 @@ ERA5 download names encode geographic domain, date, buffer, and pressure preset,
 allowing numerical grids with different resolution to reuse a raw subset.
 Processed-store names additionally encode model domain, resolution, number of
 states, and vertical-coordinate tag.
+
+See the generated [configuration API](api/shared.md#suetes.shared.config) for
+the current dataclasses and helper signatures.

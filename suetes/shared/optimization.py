@@ -11,10 +11,21 @@ class OptaxSolver:
         self.grad_fn = jax.jit(jax.value_and_grad(objective_fn, has_aux=has_aux))
         
     def fit(self, init_params, total_steps, bounds_fn=None, patience=None, metric_name="Loss", maximize=False):
-        """
+        """Optimize parameters and retain loss, parameter, and auxiliary histories.
+
         Args:
-            bounds_fn: A function to clip/constrain parameters after each update.
-            patience: Integer. Halts optimization if loss doesn't improve for this many steps.
+            init_params (Any): Initial parameter pytree.
+            total_steps (int): Maximum number of optimization updates.
+            bounds_fn (callable, optional): Function that constrains parameters
+                after each update.
+            patience (int, optional): Stop after this many updates without an
+                improvement.
+            metric_name (str): Label used in progress output.
+            maximize (bool): Whether larger objective values are improvements.
+
+        Returns:
+            tuple: Final parameter pytree and an optimization-history dictionary
+            containing losses, parameter pytrees, and auxiliary values.
         """
         opt_state = self.optimizer.init(init_params)
         params = init_params

@@ -19,4 +19,5 @@ Physical schemes can contain thresholds, clipping, or adjustment logic. Review
 the selected scheme before assuming an objective is smoothly differentiable;
 see [Differentiability and adjoints](differentiability.md).
 
-Source: `suetes/physics/`.
+See the generated [physics API](api/physics.md) for current schemes and
+signatures. Source: `suetes/physics/`.

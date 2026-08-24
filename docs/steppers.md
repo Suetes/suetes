@@ -66,4 +66,5 @@ linear-solve adjoint. The split-explicit path differentiates through its RK and
 acoustic updates when all selected physics remain traceable. See
 [Differentiability and adjoints](differentiability.md) for the resulting scope.
 
-Source: `suetes/regional3d/steppers.py`.
+See the generated [stepper API](api/regional3d.md#suetes.regional3d.steppers)
+for current constructors and methods. Source: `suetes/regional3d/steppers.py`.

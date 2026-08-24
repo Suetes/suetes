@@ -15,5 +15,6 @@ transport. Boundary behavior is part of each operator and should be checked
 when adding a new variable or stagger; interior order alone does not determine
 the full-domain discretization.
 
-Source: `suetes/regional3d/operators.py`. Consistency tests are described in
-[Verification and evidence](verification.md).
+See the generated [operator API](api/regional3d.md#suetes.regional3d.operators)
+for current signatures. Source: `suetes/regional3d/operators.py`. Consistency
+tests are described in [Verification and evidence](verification.md).

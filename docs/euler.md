@@ -18,4 +18,6 @@ operate on perturbations relative to the hydrostatic background. See
 [Scientific formulation](scientific-formulation.md) for equations and
 [Model state and grid](model-state.md) for field locations.
 
-Source: `suetes/regional3d/euler.py`.
+See the generated [`Euler3D` API](api/regional3d.md#suetes.regional3d.euler.Euler3D)
+for current signatures, parameters, and methods. Source:
+`suetes/regional3d/euler.py`.

@@ -74,7 +74,7 @@ class McFarlaneGWD:
             operators (CGridOperator3D): finite-difference operators.
             constants (dict): physical constants; must contain 'g', 'p0',
                 'cp', 'Rd'.
-            h_variance: 2D array on mass points of subgrid orography variance
+            h_variance (array-like, optional): 2D array on mass points of subgrid orography variance
                 [m^2], or None. If None, returns zero tendencies.
             F_c (float): saturation Froude factor. McFarlane: 0.7.
             mu (float): effective inverse horizontal wavelength of the

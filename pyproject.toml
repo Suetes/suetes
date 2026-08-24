@@ -33,11 +33,13 @@ test = [
 docs = [
     "mkdocs",
     "mkdocs-material",
+    "mkdocstrings-python",
 ]
 dev = [
     "pytest",
     "mkdocs",
     "mkdocs-material",
+    "mkdocstrings-python",
 ]
 
 [tool.setuptools]

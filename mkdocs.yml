@@ -8,6 +8,21 @@ extra_css:
 
 plugins:
   - search
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: ["."]
+          options:
+            docstring_style: google
+            docstring_options:
+              returns_multiple_items: false
+              returns_named_value: false
+            filters:
+              - "!^_"
+            members_order: source
+            merge_init_into_class: true
+            show_root_heading: true
+            show_source: true
 
 markdown_extensions:
   - admonition
@@ -52,4 +67,11 @@ nav:
     - Manuscript experiment suite: paper_suite.md
     - NEUVE reachability diagnostic: neuve_reachability.md
   - Visualization: visualizer.md
-  - Module reference: api-reference.md
+  - API reference:
+    - Overview: api-reference.md
+    - Regional 3D: api/regional3d.md
+    - Two-dimensional slice: api/slice2d.md
+    - Physics: api/physics.md
+    - Shared infrastructure: api/shared.md
+    - Preprocessing: api/preprocessing.md
+    - Visualization: api/visualization.md

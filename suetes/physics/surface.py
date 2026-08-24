@@ -31,7 +31,8 @@ class McFarlaneSurfaceDrag:
             epsilon (float): stability cutoff parameter. McFarlane: 0.3 over
                 open water, 0.0 over land/ice.
             k_vk (float): von Karman constant.
-            theta_surf: optional fallback if state['theta_surf'] is missing.
+            theta_surf (array-like, optional): Fallback used when
+                `state['theta_surf']` is missing.
         """
         self.grid = grid
         self.op = operators

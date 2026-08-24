@@ -35,4 +35,7 @@ layer thicknesses, terrain slopes, map-factor derivatives, and projection
 quantities at every required stagger. See [Model state and grid](model-state.md)
 for the location convention.
 
-Source: `suetes/regional3d/geometry.py` and `suetes/shared/transforms.py`.
+See the generated [regional geometry API](api/regional3d.md#suetes.regional3d.geometry)
+and [transform API](api/shared.md#suetes.shared.transforms) for current
+signatures. Source: `suetes/regional3d/geometry.py` and
+`suetes/shared/transforms.py`.

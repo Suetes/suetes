@@ -188,7 +188,7 @@ class McFarlaneVerticalDiffusion:
             operators (CGridOperator3D): finite-difference operators.
             constants (dict): physical constants; must contain 'g'.
             lambda_mix (float): asymptotic mixing length [m]. McFarlane: 100 m.
-            epsilon: stability cutoff parameter. McFarlane uses 0.3 over open
+            epsilon (float or array-like): Stability cutoff parameter. McFarlane uses 0.3 over open
                 water and 0.0 over land/ice. Can be a scalar (uniform) or a
                 2D (nx, ny) array for per-cell values from a land-sea mask.
                 A 2D array is promoted internally to (nx, ny, 1) so it

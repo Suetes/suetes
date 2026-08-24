@@ -1,7 +1,17 @@
 # Module reference
 
-This source-oriented index describes module responsibilities. Source signatures
-remain authoritative for low-level calling details.
+This source-oriented index describes module responsibilities. The generated
+pages expose current signatures and source docstrings directly from the code:
+
+- [Regional three-dimensional API](api/regional3d.md)
+- [Two-dimensional slice API](api/slice2d.md)
+- [Physics API](api/physics.md)
+- [Shared infrastructure API](api/shared.md)
+- [Preprocessing API](api/preprocessing.md)
+- [Visualization API](api/visualization.md)
+
+Scientific rationale remains in the narrative chapters so API contracts and
+scientific explanation can evolve at their appropriate levels.
 
 ## Regional three-dimensional model
 
