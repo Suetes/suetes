@@ -58,4 +58,12 @@ $$ \Phi^{t+\Delta t} = \Phi^t + \Delta t \mathcal{S}(\Phi^{**}) $$.
 
 To maintain computational efficiency without triggering acoustic CFL violations, high-frequency acoustic perturbation terms ($\text{Acoustic}(\Phi'', \Delta \tau)$) are advanced inside each RK3 stage using a significantly smaller, sub-cycled acoustic time step $\Delta \tau$. Vertical components are integrated implicitly within this sub-loop to bypass tight vertical grid constraints.
 
-::: suetes.regional3d.steppers
+## Differentiation considerations
+
+The SISL stepper stops gradients through diagnosed departure indices and can
+checkpoint tendencies and interpolation. The matrix-free implicit solve uses a
+linear-solve adjoint. The split-explicit path differentiates through its RK and
+acoustic updates when all selected physics remain traceable. See
+[Differentiability and adjoints](differentiability.md) for the resulting scope.
+
+Source: `suetes/regional3d/steppers.py`.

@@ -1,5 +1,21 @@
-# Dynamical Core
+# Dynamical core tendencies
 
-This module evaluates the non-hydrostatic, fully compressible 3D regional Euler equations, separating the fast acoustic modes from the explicit advection physics.
+`Euler3D` builds the hydrostatic background and evaluates the spatial right-hand
+side for velocity, Exner pressure, virtual potential temperature, and registered
+physics fields. It is not itself a complete integrator.
 
-::: suetes.regional3d.euler
+The tendency evaluator has a linear mode used inside the SISL GMRES operator
+and an explicit mode that includes nonlinear terms, buoyancy, dissipation, and
+physics. Keeping the implicit operator strictly linear is required both by the
+Krylov solve and its transpose solve in reverse mode.
+
+The background precomputation maps density and virtual potential temperature
+onto velocity faces and caches layer thicknesses and compressibility factors.
+This avoids rebuilding static quantities during repeated operator applications.
+
+The physical state contains total `pi` and `th_v`, while the tendency routines
+operate on perturbations relative to the hydrostatic background. See
+[Scientific formulation](scientific-formulation.md) for equations and
+[Model state and grid](model-state.md) for field locations.
+
+Source: `suetes/regional3d/euler.py`.

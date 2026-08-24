@@ -1,35 +1,54 @@
-# Suetes Documentation
+# Suêtes documentation
 
-Welcome to the **Suetes** documentation. 
+Suêtes is a differentiable, fully compressible, nonhydrostatic limited-area
+atmospheric model implemented in JAX. It provides two three-dimensional
+dynamical cores over the same terrain-following Arakawa C grid:
 
-**Suetes** is a high-performance, differentiable, non-hydrostatic atmospheric fluid dynamics solver written in **JAX**.
+- a semi-implicit semi-Lagrangian (SISL) core with a matrix-free GMRES solve;
+- a split-explicit Eulerian RK3 core with acoustic substepping.
 
-## Key Features
+The repository supports idealized verification, ERA5-driven regional
+simulations, adjoint sensitivity analysis, inverse problems, and learned
+vertical coordinates. It is research software rather than an operational
+forecasting system.
 
-*   **Differentiable Dynamical Core**: Built entirely in JAX, allowing for end-to-end differentiability.
-*   **High Performance**: Fully fused by XLA for CPU, GPU, and TPU.
-*   **Advanced Numerics**: Semi-Implicit Semi-Lagrangian (SISL) time integration and Arakawa C-grid spatial discretization.
-*   **Terrain-Following Coordinates**: Supports SLEVE, Hybrid Sigma-Z, and Gal-Chen coordinates.
-*   **ERA5 & GEBCO Integration**: Automated preprocessing pipeline for real-world data.
+## Where to begin
 
-## Contents
+- New users should start with [Installation and quick start](getting-started.md).
+- Model developers should read [Architecture and data flow](architecture.md)
+  and [Model state and grid](model-state.md).
+- Readers interested in the mathematics should continue to
+  [Scientific formulation](scientific-formulation.md) and the two core guides.
+- Differentiation users should read [Differentiability and adjoints](differentiability.md)
+  before selecting controls or objectives.
+- Paper readers can use [Reproducing the manuscript experiments](paper_suite.md)
+  and [Verification and evidence](verification.md).
 
-*   **Preprocessing**:
-    *   [ERA5 Downloader](era5downloader.md): Downloads ERA5 data from the Copernicus Climate Data Store.
-    *   [Data Processor](processor.md): Stitches single-level surface data with pressure-level upper-air data.
-    *   [Topography](topography.md): Merges high-resolution internal topography (GEBCO) with external boundary topography (ERA5).
-    *   [ERA2Suetes Bridge](era2suetes.md): The data transformation pipeline, handling regridding, vector rotation, and hydrostatic reconstruction.
-*   **Vertical 2D Model**:
-    * [Geometry](geometry2d.md): Detailed information about the 2D vertical grid construction.
-    * [Operators](operators2d.md): Detailed information about the finite difference stencils and interpolators.
-    * [Euler](euler2d.md): Detailed information about the dynamical core for the 2D vertical slice model.
-    * [Steppers](steppers2d.md): Detailed information about the time integration and advection.
-*   **Regional 3D Model**:
-    * [Geometry](geometry.md): Detailed information about the 3D regional grid construction and map projections.
-    * [Operators](operators.md): Detailed information about the finite difference stencils and interpolators.
-    * [Euler](euler.md): Detailed information about the dynamical core for the 3D regional model.
-    * [Steppers](steppers.md): Detailed information about the time integration and advection.
-    * [Diffusion](diffusion.md): Detailed information about the spatial filters and turbulence models.
-    * [Boundaries](boundaries.md): Detailed information about the relaxation zones and external forcing.
-*   **Visualization**:
-    *   [Visualizer](visualizer.md): Detailed information about the visualization tools.
+## Scope of this documentation
+
+The documentation distinguishes three kinds of statements:
+
+1. **Implemented formulation** describes behavior visible in the current code.
+2. **Verification evidence** describes checks that are executable in this repository.
+3. **Scientific context** explains why a method is used without claiming that a
+   test establishes more than it measures.
+
+This distinction is important for a differentiable model: a forward simulation
+can be stable while a selected gradient is inaccurate, and a valid local Taylor
+test does not by itself establish long-horizon forecast skill.
+
+## Repository map
+
+| Location | Responsibility |
+|---|---|
+| `suetes/regional3d/` | Three-dimensional grid, operators, dynamics, boundaries, diffusion, and steppers |
+| `suetes/slice2d/` | Two-dimensional vertical-slice model |
+| `suetes/physics/` | Physical parameterizations and their orchestration |
+| `suetes/preprocessing/` | ERA5 download, remapping, topography, and boundary stores |
+| `suetes/shared/` | Configuration, drivers, transforms, artifacts, output, and optimization |
+| `benchmarks/` | Reusable physical and performance reference cases |
+| `verification/` | Consistency, convergence, and adjoint checks |
+| `experiments/` | Scientific questions, inversions, sensitivities, and learned methods |
+| `runs/` | Configuration-driven real-data workflows |
+
+The [module reference](api-reference.md) provides a source-oriented index.

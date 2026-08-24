@@ -1,5 +1,7 @@
-# Dynamical Core
+# Two-dimensional dynamical core
 
-This module evaluates the non-hydrostatic, fully compressible 2D vertical slice Euler equations, separating the fast acoustic modes from the explicit advection physics.
+`Euler2D` evaluates fully compressible nonhydrostatic slice-model tendencies.
+It uses the same hydrostatic background/perturbation idea as `Euler3D`, with
+the transverse momentum and map-projection terms omitted.
 
-::: suetes.slice2d.euler
+Source: `suetes/slice2d/euler.py`.

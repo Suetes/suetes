@@ -1,5 +1,7 @@
-# Discrete Operators
+# Two-dimensional discrete operators
 
-Contains the Arakawa C-grid finite difference stencils and Semi-Lagrangian interpolators.
+`CGridOperator` implements interpolation and differencing between mass,
+horizontal-velocity, and vertical-velocity locations in a terrain-following
+slice. As in three dimensions, callers specify source and destination staggers.
 
-::: suetes.slice2d.operators
+Source: `suetes/slice2d/operators.py`.

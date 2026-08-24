@@ -1,4 +1,5 @@
-site_name: Suetes Documentation
+site_name: Suêtes Documentation
+site_description: Scientific and user documentation for the differentiable Suêtes atmospheric model
 theme:
   name: material
 
@@ -7,41 +8,48 @@ extra_css:
 
 plugins:
   - search
-  - mkdocstrings:
-      handlers:
-        python:
-          paths: ["."]
-          options:
-            filters: []
 
 markdown_extensions:
+  - admonition
   - pymdownx.arithmatex:
       generic: true
+  - pymdownx.superfences
+  - tables
 
 extra_javascript:
   - https://polyfill.io/v3/polyfill.min.js?features=es6
   - https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js
 
-# NEW: Define the sidebar navigation structure
 nav:
   - Home: index.md
-  - Vertical 2D Model:
-    - Geometry & Grid: geometry2d.md
-    - Spatial Operators: operators2d.md
-    - Steppers & Advection: steppers2d.md
-    - Dynamical Core (Euler): euler2d.md
-  - Regional 3D Model:
-    - Geometry & Grid: geometry.md
-    - Spatial Operators: operators.md
-    - Steppers & Advection: steppers.md
-    - Dynamical Core (Euler): euler.md
-    - Lateral Boundaries: boundaries.md
-    - Physics & Parameterizations: physics.md
-    - Diffusion: diffusion.md
-  - Data & Preprocessing:
-    - ERA5 Downloader: era5downloader.md
-    - Data Processor: processor.md
-    - Topography Blending: topography.md
-    - ERA5 to Suetes (Bridge): era2suetes.md
-  - Visualization:
-    - Visualizer: visualizer.md
+  - Getting started:
+    - Installation and quick start: getting-started.md
+    - Architecture and data flow: architecture.md
+    - Configuration reference: configuration.md
+  - Scientific formulation:
+    - Governing system: scientific-formulation.md
+    - Model state and grid: model-state.md
+    - Differentiability and adjoints: differentiability.md
+    - Vertical coordinates and geometry: geometry.md
+    - Discrete operators: operators.md
+    - Dynamical core: euler.md
+    - Time integration and advection: steppers.md
+    - Lateral boundaries: boundaries.md
+    - Diffusion and damping: diffusion.md
+    - Physics and parameterizations: physics.md
+  - Two-dimensional slice:
+    - Geometry and grid: geometry2d.md
+    - Discrete operators: operators2d.md
+    - Dynamical core: euler2d.md
+    - Time integration and advection: steppers2d.md
+  - Data and preprocessing:
+    - Workflow overview: era2suetes.md
+    - ERA5 downloader: era5downloader.md
+    - Data processor: processor.md
+    - Topography blending: topography.md
+  - Reproducibility:
+    - Verification and evidence: verification.md
+    - Manuscript experiment suite: paper_suite.md
+    - NEUVE reachability diagnostic: neuve_reachability.md
+  - Visualization: visualizer.md
+  - Module reference: api-reference.md
