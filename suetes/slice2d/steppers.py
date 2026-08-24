@@ -350,7 +350,7 @@ class SemiLagrangianAdvector:
         return vmap_tensor_interp_2d(field, coords, periodic_x=self.grid.periodic_x, true_nx=self.grid.nx)
 
 class SemiImplicitSolver:
-    """
+    r"""
     Wraps the JAX GMRES solver to resolve the implicit acoustic and gravity wave equations.
     
     Solves the linear system:
@@ -359,7 +359,7 @@ class SemiImplicitSolver:
     is the explicit right-hand side advected to the arrival points.
     """
     def __init__(self, grid, physics, dt, solver_tol=1e-4, solver_maxiter=10, solver_restart=10):
-        """
+        r"""
         Parameters:
             grid (StaggeredGrid): The 2D grid object.
             physics (VerticalSlice): The spatial physics operator.
@@ -398,7 +398,7 @@ class SemiImplicitSolver:
         return bg
 
     def solve(self, rhs_prime, bg_precomputed, beta=0.65, preconditioner=None, x0=None):
-        """
+        r"""
         Executes the GMRES solve. State variables are scaled to an $O(1)$ magnitude 
         to ensure stable and well-conditioned matrix operations inside the Krylov subspace.
         
@@ -470,7 +470,7 @@ class SemiImplicitSolver:
         }
 
 class SISLStepper:
-    """
+    r"""
     The orchestrator for the 2-time-level Semi-Implicit Semi-Lagrangian (SISL) scheme.
     
     Evaluates the continuous governing equations:
@@ -483,7 +483,7 @@ class SISLStepper:
     and subscripts $(a, d)$ denote the arrival and departure points respectively.
     """
     def __init__(self, physics, dt, nu_ratio=0.0, use_mass_fixer=False, tracer_keys=None, solver_tol=1e-4, solver_maxiter=10, solver_restart=10): 
-        """
+        r"""
         Parameters:
             physics (VerticalSlice): Spatial operators and constants.
             dt (float): Time step $\Delta t$ in seconds.
