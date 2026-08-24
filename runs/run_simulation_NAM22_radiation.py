@@ -14,7 +14,7 @@ tendency alongside the standard McFarlane surface drag + Newtonian relaxation.
 Configuration: --config configs/nam22_config.yaml (see suetes/shared/config.py).
 Env vars override individual knobs (resolve_params): SIM_HOURS, KAPPA, START_DAY,
 DT, CORE_TYPE, RH_CRIT, RAD_COARSE, NO_RAD/NO_NUDGE/NO_MICRO/NO_CONV, X64,
-RAD_REDUCED, RAD_SCAN, RAD_EVERY, NU_H, NS, ALPHA, AFGL, TAG, DIAG_RAD.
+RAD_REDUCED, RAD_SCAN, RAD_EVERY_H, NU_H, NS, ALPHA, AFGL, TAG, DIAG_RAD.
 """
 import os
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
@@ -188,9 +188,8 @@ def main():
                               tile_nx=int(os.environ.get('RAD_TILE_NX', 16)),
                               tile_ny=int(os.environ.get('RAD_TILE_NY', 16)),
                               afgl=afgl, use_state_condensate=use_micro)
-        # Radiation is SUB-CYCLED: the expensive RRTMGP call runs every RAD_EVERY
-        # steps in the run loop; this cheap scheme applies the cached heating each step
-        # (the SISL stepper forwards state['rad_th_tend'] into the tendency phase).
+        # Radiation is sub-cycled at the configured hourly cadence in the run
+        # loop; this cheap scheme applies cached heating each model step.
         suite.add_tendency_scheme(CachedRadiation())
         initial_state['rad_th_tend'] = jnp.zeros_like(initial_state['th_v'])
         initial_state['sw_sfc'] = jnp.zeros_like(initial_state['th_v'][:, :, 0])
@@ -262,11 +261,6 @@ def main():
     print(f"[CORE] {core_type} | dt={dt:g}s | {core_info}")
 
     chunk_steps = int(round(3600.0 / dt))
-    # Radiation cadence from config physics.rad_every_h (env RAD_EVERY = steps overrides).
-    RAD_EVERY = int(os.environ.get('RAD_EVERY', max(1, round(p.rad_every_h * 3600.0 / dt))))
-    if use_rad:
-        print(f"[RAD] sub-cycling: full RRTMGP every {RAD_EVERY} steps "
-              f"({RAD_EVERY*dt/60:.0f} min), cached heating applied each step")
     _SAVE = ('u', 'v', 'w', 'th_v', 'pi', 'q', 'q_c', 'q_r', 'sw_sfc', 'rain_acc', 'conv_acc')
     # Diagnostic cloud fields are derived per hour and saved alongside the
     # prognostics: cloud_fraction (3D, cloud at each model level) + total cloud
@@ -348,59 +342,15 @@ def main():
     else:
         _save_with_clouds({k: np.asarray(v) for k, v in initial_state.items() if k in _SAVE_RUN})
 
-    def save_snap(sub):
-        _save_with_clouds({k: np.asarray(v) for k, v in sub.items()})
-
-    def step_fn(curr_state, step_idx):
-        t_curr = step_idx * dt
-        bc = time_manager.get_forcing(t_curr)
-        dyn_theta_surf = land_fraction * jnp.asarray(bc['theta_skt'], float) + (1.0 - land_fraction) * jnp.asarray(bc['th_v'][:, :, 0], float)
-        curr_state['theta_surf'] = dyn_theta_surf
-        curr_state['target_th_v'] = jnp.asarray(bc['th_v'], float)
-
-        def bc_fn(s_next, _):
-            return sponge.blend(s_next, bc)
-
-        # SUB-CYCLED radiation: recompute the (expensive) RRTMGP heating only every
-        # RAD_EVERY steps; otherwise reuse the cached tendency. CachedRadiation in the
-        # suite applies curr_state['rad_th_tend'] every step.
-        if use_rad:
-            do_rad = (step_idx % RAD_EVERY) == 0
-            curr_state['rad_th_tend'], curr_state['sw_sfc'] = jax.lax.cond(
-                do_rad,
-                lambda s: rad.tend_and_sw(s, ml_params={'t_curr': t_curr}),
-                lambda s: (s['rad_th_tend'], s['sw_sfc']),
-                curr_state)
-
-        next_state = stepper.step(curr_state, t_curr, forcing=None, bc_fn=bc_fn, ml_params={'t_curr': t_curr})
-        next_state['theta_surf'] = dyn_theta_surf
-        next_state['target_th_v'] = jnp.asarray(bc['th_v'], float)
-        if use_rad:
-            next_state['rad_th_tend'] = curr_state['rad_th_tend']   # carry cached heating forward
-            next_state['sw_sfc'] = curr_state['sw_sfc']             # carry hourly surface SW
-        if use_micro:
-            # Kessler returns this step's surface precip [mm]; accumulate it here
-            # (the SISL stepper strips non-prognostic keys, so the accumulator
-            # must live in the scan carry, like rad_th_tend/sw_sfc).
-            precip = next_state.get('precip_step', jnp.zeros_like(curr_state['rain_acc']))
-            next_state['precip_step'] = precip
-            next_state['rain_acc'] = curr_state['rain_acc'] + precip
-        if use_conv:
-            pconv = next_state.get('precip_conv_step', jnp.zeros_like(curr_state['conv_acc']))
-            next_state['precip_conv_step'] = pconv
-            next_state['conv_acc'] = curr_state['conv_acc'] + pconv
-
-        is_hourly = ((step_idx + 1) % chunk_steps) == 0
-        sub = {k: next_state[k] for k in _SAVE_RUN if k in next_state}
-        jax.lax.cond(is_hourly, lambda: jax.debug.callback(save_snap, sub, ordered=True), lambda: None)
-        return next_state, jnp.max(jnp.abs(next_state['w']))
-
     # ---- per-CHUNK forcing: fetch the bounding ERA5 pair ONCE per hour (host) and
     #      interpolate on-device every step. Removes the per-step pure_callback that
     #      capped GPU utilization; radiation + hourly save are also hoisted out of the
-    #      jitted scan (the old per-step step_fn above is unused). ----
+    #      jitted scan. ----
     import functools as _ft
     rad_every_h = max(1, int(round(p.rad_every_h)))   # hours between full RRTMGP calls
+    if use_rad:
+        print(f"[RAD] sub-cycling: full RRTMGP every {rad_every_h} h; "
+              "cached heating applied each model step")
 
     @_ft.partial(jax.jit, static_argnames=["n_steps"])
     def run_hour(st_in, start_step, n_steps, bc0, bc1, ta, tb):

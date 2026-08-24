@@ -41,7 +41,6 @@ scientific explanation can evolve at their appropriate levels.
 | `suetes.shared.driver` | Chunked and differentiable integration |
 | `suetes.shared.transforms` | Analytical, SLEVE, stretched, learned mappings |
 | `suetes.shared.experiment` | Execution paths and provenance |
-| `suetes.shared.artifacts` | Compatibility artifact imports |
 | `suetes.shared.output` | Model NetCDF output |
 | `suetes.shared.latlon_output` | Geographic remapped output |
 | `suetes.shared.optimization` | JAX/Optax optimization support |

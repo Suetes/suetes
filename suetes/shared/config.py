@@ -187,15 +187,6 @@ def build_constants(cfg: SuetesConfig) -> dict:
     return c
 
 
-def build_transform(cfg: SuetesConfig):
-    """Vertical coordinate transform (Stretched if kappa>1, else plain SLEVE)."""
-    from suetes.shared.transforms import SleveSimple, StretchedSleveSimple
-    v = cfg.vertical
-    if v.kappa > 1.0:
-        return StretchedSleveSimple(stretch_kappa=v.kappa, scale_s=v.scale_s, n=v.n)
-    return SleveSimple(scale_s=v.scale_s, n=v.n)
-
-
 def coord_tag(cfg: SuetesConfig) -> str:
     """Cache-key suffix encoding the vertical coordinate (matches the runner)."""
     return f"_k{cfg.vertical.kappa:g}" if cfg.vertical.kappa > 1.0 else ""
