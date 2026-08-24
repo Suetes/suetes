@@ -20,6 +20,9 @@ gradient checkpointing to trade computation for memory.
 > Suêtes is research software. The repository contains validation cases and
 > real-data demonstrations, but it is not an operational forecasting system.
 
+See the [scope and limitations](docs/limitations.md) before interpreting model
+or gradient results.
+
 ## What is included
 
 - Dry, fully compressible nonhydrostatic dynamics in two-dimensional slices
@@ -226,3 +229,16 @@ coordinate discovery.
 For exact equations, numerical choices, experiment configurations, and
 literature citations, consult the manuscript and the case-specific source and
 documentation in `benchmarks/`, `experiments/`, and `verification/`.
+
+## Authors
+
+Suêtes is authored by Alex Bihlo, Elsa Cardoso-Bihlo, Alejandro Di Luca,
+Seth Taylor, and Tim Whittaker.
+
+## License
+
+Suêtes is licensed under the [Apache License 2.0](LICENSE). You may use,
+modify, and distribute the software, including for commercial purposes, under
+the conditions of that license. Please cite the associated scientific work
+when using Suêtes in research; citation information will be added when the
+manuscript record is available.

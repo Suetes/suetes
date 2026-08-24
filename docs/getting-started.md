@@ -47,11 +47,14 @@ toolchain is needed.
 ## Check the installation
 
 ```bash
+.venv/bin/python examples/quickstart.py
 .venv/bin/python -m pytest -q
 .venv/bin/python -m mkdocs build --strict
 ```
 
-Long numerical convergence studies are intentionally outside pytest; see
+The quick start is a two-step CPU smoke simulation intended to confirm package
+imports, JAX compilation, and a complete model update. Long numerical
+convergence studies are intentionally outside pytest; see
 [Verification and evidence](verification.md).
 
 ## Run an idealized case

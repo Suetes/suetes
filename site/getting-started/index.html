@@ -457,6 +457,34 @@
 
               
             
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../limitations/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Scope and limitations
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
           </ul>
         </nav>
       
@@ -1261,6 +1289,34 @@
 
               
             
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../releasing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Releasing and archiving
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
           </ul>
         </nav>
       
@@ -1675,10 +1731,13 @@ toolchain:</p>
 <p>The narrower <code>.[test]</code> and <code>.[docs]</code> extras are also available when only one
 toolchain is needed.</p>
 <h2 id="check-the-installation">Check the installation</h2>
-<div class="highlight"><pre><span></span><code>.venv/bin/python<span class="w"> </span>-m<span class="w"> </span>pytest<span class="w"> </span>-q
+<div class="highlight"><pre><span></span><code>.venv/bin/python<span class="w"> </span>examples/quickstart.py
+.venv/bin/python<span class="w"> </span>-m<span class="w"> </span>pytest<span class="w"> </span>-q
 .venv/bin/python<span class="w"> </span>-m<span class="w"> </span>mkdocs<span class="w"> </span>build<span class="w"> </span>--strict
 </code></pre></div>
-<p>Long numerical convergence studies are intentionally outside pytest; see
+<p>The quick start is a two-step CPU smoke simulation intended to confirm package
+imports, JAX compilation, and a complete model update. Long numerical
+convergence studies are intentionally outside pytest; see
 <a href="../verification/">Verification and evidence</a>.</p>
 <h2 id="run-an-idealized-case">Run an idealized case</h2>
 <div class="highlight"><pre><span></span><code>.venv/bin/python<span class="w"> </span>benchmarks/physical/rising_bubble_3d/run.py<span class="w"> </span><span class="se">\</span>

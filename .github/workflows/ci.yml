@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test-and-document:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install development environment
+        run: python -m pip install --upgrade pip && python -m pip install -e ".[dev]"
+      - name: Run CPU quick start
+        run: python examples/quickstart.py
+      - name: Run regression tests
+        run: python -m pytest -q
+      - name: Build documentation strictly
+        run: python -m mkdocs build --strict
+      - name: Build wheel
+        run: python -m build --wheel
+      - name: Verify installed wheel outside the source tree
+        shell: bash
+        run: |
+          python -m pip install --no-deps --target "$RUNNER_TEMP/suetes-wheel" dist/*.whl
+          cd "$RUNNER_TEMP"
+          PYTHONPATH="$RUNNER_TEMP/suetes-wheel" python - <<'PY'
+          import os
+          import pathlib
+          import suetes.physics.microphysics
+          import suetes.preprocessing.era2suetes
+          import suetes.regional3d.euler
+          import suetes.shared.driver
+          import suetes.slice2d.steppers
+          import suetes.vis
+
+          package = pathlib.Path(suetes.regional3d.euler.__file__).resolve()
+          target = pathlib.Path(os.environ["RUNNER_TEMP"], "suetes-wheel").resolve()
+          assert str(package).startswith(str(target))
+          print(f"Wheel import smoke test passed from {package}")
+          PY

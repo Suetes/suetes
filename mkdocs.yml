@@ -40,6 +40,7 @@ nav:
     - Installation and quick start: getting-started.md
     - Architecture and data flow: architecture.md
     - Configuration reference: configuration.md
+    - Scope and limitations: limitations.md
   - Scientific formulation:
     - Governing system: scientific-formulation.md
     - Model state and grid: model-state.md
@@ -65,6 +66,7 @@ nav:
     - Verification and evidence: verification.md
     - Manuscript experiment suite: paper_suite.md
     - NEUVE reachability diagnostic: neuve_reachability.md
+    - Releasing and archiving: releasing.md
   - Visualization: visualizer.md
   - API reference:
     - Overview: api-reference.md

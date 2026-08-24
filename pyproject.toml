@@ -6,6 +6,15 @@ build-backend = "setuptools.build_meta"
 name = "suetes"
 version = "0.9.0"
 description = "Suetes is a Differentiable Regional Weather Model (JAX)"
+readme = "README.md"
+license = "Apache-2.0"
+authors = [
+    { name = "Alex Bihlo" },
+    { name = "Elsa Cardoso-Bihlo" },
+    { name = "Alejandro Di Luca" },
+    { name = "Seth Taylor" },
+    { name = "Tim Whittaker" },
+]
 requires-python = ">=3.10"
 dependencies = [
     "numpy",
@@ -36,14 +45,22 @@ docs = [
     "mkdocstrings-python",
 ]
 dev = [
+    "build",
     "pytest",
     "mkdocs",
     "mkdocs-material",
     "mkdocstrings-python",
 ]
 
-[tool.setuptools]
-packages = ["suetes"]
+[project.urls]
+Homepage = "https://github.com/abihlo/suetes"
+Documentation = "https://abihlo.github.io/suetes/"
+Repository = "https://github.com/abihlo/suetes.git"
+Issues = "https://github.com/abihlo/suetes/issues"
+
+[tool.setuptools.packages.find]
+include = ["suetes*"]
+namespaces = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
