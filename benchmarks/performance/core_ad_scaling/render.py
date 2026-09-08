@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Render reverse-mode scaling diagnostics from the benchmark CSV."""
+"""Render reverse-mode scaling diagnostics as separate label-free panels."""
 
 from __future__ import annotations
 
@@ -11,8 +11,9 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import pandas as pd
+from matplotlib.lines import Line2D
 
-from suetes.shared.experiment import figure_dir_for
+from suetes.shared.experiment import ExperimentLayout, artifact_from_bundle, figure_dir_for
 
 plt.rcParams.update(
     {
@@ -31,76 +32,153 @@ plt.rcParams.update(
     }
 )
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+CSV_NAME = "single_gpu_domain_scaling.csv"
+DEFAULT_OUTPUT_DIR = SCRIPT_DIR / "figures"
 
-def render(source: Path, output_dir: Path | None = None) -> Path:
-    csv_path = source / "data" / "single_gpu_domain_scaling.csv" if source.is_dir() else source
-    output_dir = output_dir or figure_dir_for(csv_path)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    data = pd.read_csv(csv_path)
-    required = {
-        "mode",
-        "grid_cells",
-        "forward_time_ms",
-        "estimated_adjoint_time_ms",
-        "value_and_grad_time_ms",
-        "adjoint_to_forward_ratio",
-        "forward_peak_mib",
-        "value_and_grad_peak_mib",
-        "peak_difference_mib",
-    }
-    missing = required.difference(data.columns)
-    if missing:
-        raise ValueError(f"CSV is missing columns: {sorted(missing)}")
+# Every panel shares one canvas and one set of margins, so the axes land on
+# identical pixels and a plain north append in make_fig.sh keeps them level.
+# Do not -trim the outputs; that padding is what makes the rows line up.
+PANEL_W_IN = 6.0
+PANEL_H_IN = 6.0
+MARGINS = dict(left=0.20, right=0.97, bottom=0.13, top=0.95)
 
-    fig, axes = plt.subplots(1, 4, figsize=(24, 6.0))
-    line_styles = ["-", "--", "-.", ":"]
-    for mode_idx, (mode, group) in enumerate(data.groupby("mode", sort=False)):
-        ls = line_styles[mode_idx % len(line_styles)]
-        group = group.sort_values("grid_cells")
-        x = group["grid_cells"]
-        axes[0].plot(x, group["value_and_grad_time_ms"], marker="o", ls=ls, linewidth=2.0, ms=8, label=mode)
-        axes[0].plot(
-            x, group["forward_time_ms"], marker="", ls=":", color="grey", alpha=0.65, label=f"Forward ({mode})"
-        )
-        axes[1].plot(x, group["adjoint_to_forward_ratio"], marker="o", ls=ls, linewidth=2.0, ms=8, label=mode)
-        axes[2].plot(x, group["value_and_grad_peak_mib"], marker="o", ls=ls, linewidth=2.0, ms=8, label=mode)
-        axes[2].plot(
-            x, group["forward_peak_mib"], marker="", ls=":", color="grey", alpha=0.65, label=f"Forward ({mode})"
-        )
-        axes[3].plot(x, group["peak_difference_mib"], marker="o", ls=ls, linewidth=2.0, ms=8, label=mode)
-    labels = (
-        ("Execution time", "Time (ms)"),
-        ("Adjoint-to-forward cost", "Ratio"),
-        ("Absolute peak allocation", "MiB"),
-        ("Peak-allocation difference", "MiB"),
-    )
-    props = dict(boxstyle="square,pad=0.3", facecolor="white", alpha=0.9, edgecolor="none")
-    for i, (axis, (title, ylabel)) in enumerate(zip(axes, labels)):
-        axis.set(xlabel="Grid cells", ylabel=ylabel)
-        axis.text(
-            0.05,
-            0.95,
-            f"({chr(97 + i)}) {title}",
-            transform=axis.transAxes,
-            fontsize=16,
-            verticalalignment="top",
-            bbox=props,
-        )
-        axis.grid(True, ls="--", alpha=0.4)
+# Mode is carried by colour and marker shape. Pass type is carried by
+# linestyle and marker fill. Neither channel is reused by the other, so the
+# forward curves stay separable and the figure survives grayscale printing.
+MARKERS = ["o", "s", "^", "D"]
+GRAD_KW = dict(ls="-", linewidth=2.0, ms=8)
+FWD_KW = dict(ls=":", linewidth=2.0, ms=8, markerfacecolor="none", markeredgewidth=1.5, alpha=0.8)
 
-    handles, legend_labels = axes[0].get_legend_handles_labels()
-    fig.legend(handles, legend_labels, loc="lower center", bbox_to_anchor=(0.5, 0.0), ncol=len(legend_labels))
+PANELS = (
+    ("single_gpu_time", "value_and_grad_time_ms", "Time (ms)"),
+    ("single_gpu_ratio", "adjoint_to_forward_ratio", "Ratio"),
+    ("single_gpu_peak", "value_and_grad_peak_mib", "MiB"),
+    ("single_gpu_peak_diff", "peak_difference_mib", "MiB"),
+)
 
-    output = output_dir / "single_gpu_domain_scaling.png"
-    fig.tight_layout(rect=[0, 0.15, 1, 1])
-    fig.savefig(output, dpi=300)
+FORWARD_OVERLAY = {
+    "single_gpu_time": "forward_time_ms",
+    "single_gpu_peak": "forward_peak_mib",
+}
+
+REQUIRED = {
+    "mode",
+    "grid_cells",
+    "forward_time_ms",
+    "estimated_adjoint_time_ms",
+    "value_and_grad_time_ms",
+    "adjoint_to_forward_ratio",
+    "forward_peak_mib",
+    "value_and_grad_peak_mib",
+    "peak_difference_mib",
+}
+
+
+def _default_source() -> Path:
+    """Return the CSV beside the script, else the conventional bundle CSV."""
+    beside_script = SCRIPT_DIR / CSV_NAME
+    if beside_script.exists():
+        return beside_script
+    layout = ExperimentLayout(kind="benchmarks", case="core_ad_scaling")
+    if layout.data.is_dir():
+        return artifact_from_bundle(layout.root, CSV_NAME)
+    return layout.data / CSV_NAME
+
+
+def _new_panel():
+    fig = plt.figure(figsize=(PANEL_W_IN, PANEL_H_IN))
+    axis = fig.add_subplot(111)
+    fig.subplots_adjust(**MARGINS)
+    return fig, axis
+
+
+def _write_legend(groups, output_dir: Path) -> Path:
+    handles = [
+        Line2D([], [], color=f"C{i}", marker=MARKERS[i % len(MARKERS)], **GRAD_KW)
+        for i in range(len(groups))
+    ]
+    labels = [str(mode) for mode, _ in groups]
+
+    handles += [
+        Line2D([], [], color="black", marker="", ls="-", linewidth=2.0),
+        Line2D([], [], color="black", marker="", ls=":", linewidth=2.0),
+    ]
+    labels += ["Value-and-gradient", "Forward only"]
+
+    fig = plt.figure(figsize=(PANEL_W_IN * 2, 1.5))
+    legend = fig.legend(handles, labels, loc="center", ncol=3, frameon=False)
+    fig.canvas.draw()
+    bbox = legend.get_window_extent().transformed(fig.dpi_scale_trans.inverted())
+
+    output = output_dir / "single_gpu_legend.png"
+    fig.savefig(output, bbox_inches=bbox.expanded(1.05, 1.3), facecolor="white")
     plt.close(fig)
     return output
 
 
-if __name__ == "__main__":
+def render(source: Path | None = None, output_dir: Path | None = None) -> list[Path]:
+    # A bare call writes its panels beside the script; an explicit source
+    # keeps the conventional figure directory of its bundle.
+    fallback_output_dir = DEFAULT_OUTPUT_DIR if source is None else None
+    source = Path(source) if source is not None else _default_source()
+    csv_path = source / "data" / CSV_NAME if source.is_dir() else source
+    if not csv_path.exists():
+        raise FileNotFoundError(f"No benchmark CSV at {csv_path}")
+
+    output_dir = output_dir or fallback_output_dir or figure_dir_for(csv_path)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    data = pd.read_csv(csv_path)
+    missing = REQUIRED.difference(data.columns)
+    if missing:
+        raise ValueError(f"CSV is missing columns: {sorted(missing)}")
+    if data.empty:
+        raise ValueError(f"No rows in {csv_path}")
+
+    # Materialise once so mode order, colour and marker stay locked across
+    # all four panels and the legend.
+    groups = [(mode, group.sort_values("grid_cells")) for mode, group in data.groupby("mode", sort=False)]
+
+    written: list[Path] = []
+    for stem, column, ylabel in PANELS:
+        fig, axis = _new_panel()
+        forward_column = FORWARD_OVERLAY.get(stem)
+
+        for idx, (mode, group) in enumerate(groups):
+            x = group["grid_cells"]
+            colour = f"C{idx}"
+            marker = MARKERS[idx % len(MARKERS)]
+            axis.plot(x, group[column], color=colour, marker=marker, **GRAD_KW)
+            if forward_column:
+                axis.plot(x, group[forward_column], color=colour, marker=marker, **FWD_KW)
+
+        axis.set(xlabel="Grid cells", ylabel=ylabel)
+        axis.grid(True, ls="--", alpha=0.4)
+
+        output = output_dir / f"{stem}_main.png"
+        fig.savefig(output, facecolor="white")
+        plt.close(fig)
+        written.append(output)
+
+    written.append(_write_legend(groups, output_dir))
+    return written
+
+
+def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("source", type=Path)
-    parser.add_argument("--output-dir", type=Path)
+    parser.add_argument(
+        "source",
+        nargs="?",
+        type=Path,
+        default=None,
+        help="Benchmark CSV or the bundle holding it (default: CSV beside this script, else the output bundle)",
+    )
+    parser.add_argument("--output-dir", type=Path, default=None)
     args = parser.parse_args()
-    print(f"Saved {render(args.source, args.output_dir)}")
+    for path in render(args.source, args.output_dir):
+        print(f"Saved {path}")
+
+
+if __name__ == "__main__":
+    main()
