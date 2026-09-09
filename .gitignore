@@ -20,7 +20,7 @@ output/
 Paper/
 results/
 weights/
-site/
+/site/
 
 
 # OS specific
