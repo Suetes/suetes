@@ -79,6 +79,90 @@ def main():
     fig.savefig(output / "coordinate_sample_gallery.png", dpi=300)
     plt.close(fig)
 
+    # Focused comparison of the two optimized coordinates. Their absolute
+    # interface geometries are deliberately similar, so pair a lower-domain
+    # overlay with their signed displacement to expose the learned adjustment.
+    comparison_count = min(3, count)
+    displacement_limit = 200.0
+    fig = plt.figure(figsize=(5.0 * comparison_count, 7.8), layout="constrained")
+    comparison_grid = fig.add_gridspec(
+        3, comparison_count, height_ratios=(1.0, 1.05, 0.08), hspace=0.08
+    )
+    axes = np.empty((2, comparison_count), dtype=object)
+    for sample in range(comparison_count):
+        axes[0, sample] = fig.add_subplot(comparison_grid[0, sample])
+        axes[1, sample] = fig.add_subplot(
+            comparison_grid[1, sample], sharex=axes[0, sample]
+        )
+    colorbar_axis = fig.add_subplot(comparison_grid[2, :])
+    residual_images = []
+    for sample in range(comparison_count):
+        galchen = data.z_interface.sel(
+            sample=sample, coordinate="Gal-Chen"
+        ).values
+        sleve = data.z_interface.sel(
+            sample=sample, coordinate="Tuned SLEVE"
+        ).values
+        neuve = data.z_interface.sel(sample=sample, coordinate="NEUVE").values
+        terrain = data.terrain.sel(sample=sample).values / 1000.0
+
+        upper = axes[0, sample]
+        upper.fill_between(x, 0.0, terrain, color="0.55", alpha=0.7)
+        for level in range(galchen.shape[-1]):
+            if np.nanmin(galchen[:, level]) <= 6500.0:
+                upper.plot(
+                    x, galchen[:, level] / 1000.0,
+                    color="C0", linestyle=":", linewidth=1.05,
+                    label="Gal-Chen" if level == 0 else None,
+                )
+        for level in range(sleve.shape[-1]):
+            if min(np.nanmin(sleve[:, level]), np.nanmin(neuve[:, level])) <= 6500.0:
+                upper.plot(
+                    x, sleve[:, level] / 1000.0,
+                    color="C1", linestyle="--", linewidth=1.15,
+                    label="Tuned SLEVE" if level == 0 else None,
+                )
+                upper.plot(
+                    x, neuve[:, level] / 1000.0,
+                    color="C2", linewidth=0.9,
+                    label="NEUVE" if level == 0 else None,
+                )
+        upper.set_ylim(0.0, 6.0)
+        upper.set_title(f"Terrain {sample + 1}")
+        upper.grid(True, alpha=0.2)
+        if sample == 0:
+            upper.set_ylabel("Height (km)")
+
+        lower = axes[1, sample]
+        midpoint = 0.5 * (sleve + neuve) / 1000.0
+        displacement = neuve - sleve
+        x_mesh = np.broadcast_to(x[:, None], midpoint.shape)
+        residual_images.append(
+            lower.contourf(
+                x_mesh,
+                midpoint,
+                displacement,
+                levels=np.linspace(-displacement_limit, displacement_limit, 21),
+                cmap="RdBu_r",
+                extend="neither",
+            )
+        )
+        lower.fill_between(x, 0.0, terrain, color="0.55", alpha=0.7)
+        lower.set_ylim(0.0, 6.0)
+        lower.set_xlabel("x (km)")
+        if sample == 0:
+            lower.set_ylabel("Height (km)")
+
+    handles, labels = axes[0, 0].get_legend_handles_labels()
+    fig.legend(handles, labels, loc="outside upper center", ncol=3, frameon=True)
+    colorbar = fig.colorbar(
+        residual_images[0], cax=colorbar_axis, orientation="horizontal",
+    )
+    colorbar.set_label(r"Interface displacement $z_{\mathrm{NEUVE}}-z_{\mathrm{SLEVE}}$ (m)")
+    fig.savefig(output / "coordinate_sleve_neuve_comparison.pdf", dpi=300)
+    fig.savefig(output / "coordinate_sleve_neuve_comparison.png", dpi=300)
+    plt.close(fig)
+
     target = data.attrs["target"]
     time = data.time.values
     line_styles = ["-", "--", "-.", ":"] * 3
