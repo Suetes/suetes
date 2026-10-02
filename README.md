@@ -235,6 +235,11 @@ documentation in `benchmarks/`, `experiments/`, and `verification/`.
 Suêtes is authored by Alex Bihlo, Elsa Cardoso-Bihlo, Alejandro Di Luca,
 Seth Taylor, and Tim Whittaker.
 
+## How to cite
+
+If you are using Suêtes in your research then please cite:
+T Whittaker, S Taylor, E Cardoso-Bihlo, A Di Luca, A Bihlo, 2026. Suêtes: An end-to-end differentiable non-hydrostatic limited-area dynamical core. arXiv:2609.36381
+
 ## License
 
 Suêtes is licensed under the [Apache License 2.0](LICENSE). You may use,
