@@ -238,7 +238,7 @@ Seth Taylor, and Tim Whittaker.
 ## How to cite
 
 If you are using Suêtes in your research then please cite:
-T Whittaker, S Taylor, E Cardoso-Bihlo, A Di Luca, A Bihlo, 2026. Suêtes: An end-to-end differentiable non-hydrostatic limited-area dynamical core. arXiv:2609.36381
+T. Whittaker, S. Taylor, E. Cardoso-Bihlo, A. Di Luca and A. Bihlo, 2026. Suêtes: An end-to-end differentiable non-hydrostatic limited-area dynamical core. [arXiv:2609.36381](https://arxiv.org/pdf/2609.36381)
 
 ## License
 
